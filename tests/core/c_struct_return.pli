@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Rule (34)/(127): an external ENTRY whose RETURNS names a structure returns
+   through the caller's hidden sret buffer (ptr first argument), exactly like
+   a character-valued external entry. The callee is a separately compiled unit. */
+ cstruct: procedure options(main);
+   dcl 1 s,
+          2 a fixed bin(31),
+          2 b fixed bin(31);
+   dcl 1 t,
+          2 a fixed bin(31),
+          2 b fixed bin(31);
+   dcl e entry returns(s) external;
+
+   t = e();
+   if t.a ^= 10 then do;
+      put skip list('FAIL c_struct_return: a');
+      stop;
+   end;
+   if t.b ^= 20 then do;
+      put skip list('FAIL c_struct_return: b');
+      stop;
+   end;
+
+   put skip list('PASS c_struct_return');
+ end cstruct;

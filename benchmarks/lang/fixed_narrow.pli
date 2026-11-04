@@ -1,0 +1,27 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Narrow FIXED BINARY arithmetic (D1, ADR-365): every hot variable is
+    a FIXED BINARY(15) item whose values stay inside the declared
+    precision, so with the SIZE checks on the declared range is an
+    invariant of each load. The pair (--size-checks vs
+    --size-checks --no-range-facts) prices the range fact itself; the
+    check-free pair is the D1 ratio for a narrow p. */
+ fixed_narrow: procedure options(main);
+   declare a(1000) fixed bin(15);
+   declare (i, j, x, y) fixed bin(15);
+   declare s fixed bin(63);
+
+   do i = 1 to 1000;
+      a(i) = i * 7 - 3;
+   end;
+
+   s = 0;
+   do i = 1 to 50000000;
+      j = mod(i, 1000) + 1;
+      x = a(j);
+      y = x * 3 + 1;
+      s = s + y;
+   end;
+
+   put skip list(s);
+ end fixed_narrow;

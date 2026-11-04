@@ -7,10 +7,32 @@
 // ENTRY/FILE/LABEL variables are M2-M4 (see IMPLEMENTATION-PLAN). AREA/OFFSET
 // (rules (20),(22)) serve automatic regions and their locators (ADR-170).
 #pragma once
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+// IBM's base-conversion factor is 3.32 = 83/25. These keep the FIXEDBIN/
+// FIXEDDEC precision tables (rule (123)) and mixed-base arithmetic exact.
+inline int ceilMulDiv(int n, int mul, int div) { return (n * mul + div - 1) / div; }
+// FIXED DEC(p,q) -> FIXED BIN(r,s), adding one integer digit for the base
+// change (IBM Appendix 1).
+inline int decToBinDigits(int p) { return std::min(63, 1 + ceilMulDiv(p, 83, 25)); }
+inline int decToBinScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(q < 0 ? -q : q, 83, 25);
+  return q > 0 ? s : -s;
+}
+// FIXED BIN(p,q) -> FIXED DEC(r,s), again adding one integer digit.
+inline int binToDecDigits(int p) { return std::min(31, 1 + ceilMulDiv(p, 25, 83)); }
+inline int binToDecScale(int q) {
+  if (q == 0)
+    return 0;
+  int s = ceilMulDiv(q < 0 ? -q : q, 25, 83);
+  return q > 0 ? s : -s;
+}
 
 enum class TK {
   FixedBin, // FIXED BINARY(p,q)
@@ -80,6 +102,10 @@ struct Type {
   // unless they carry an explicit ALIGNED. Part of type equivalence because a
   // packed and an aligned structure with the same members have different layout.
   bool unaligned = false;
+  // IMAGINARY (IBM Enterprise PL/I extension, ADR-364): a COMPLEX-typed variable
+  // whose real part is always zero; a real value assigned to it is stored as
+  // (0, value). Deliberately not part of type equivalence.
+  bool imaginary = false;
   // Union overlay (ADR-202, Subset-G extension): all members start at offset 0,
   // sharing storage. Part of layout but not type equivalence — a union and a
   // non-union struct with the same members have different layout.
@@ -231,6 +257,7 @@ struct Type {
   bool isLocator() const { return k == TK::Pointer || k == TK::Offset || k == TK::Area; }
   bool isVoid() const { return k == TK::Void; }
   bool isComplex() const { return k == TK::Complex; }
+  bool isImaginary() const { return k == TK::Complex && imaginary; }
   bool isTask() const { return k == TK::Task; }
   bool isEvent() const { return k == TK::Event; }
   bool isLabel() const { return k == TK::Label; }
@@ -317,6 +344,7 @@ inline Type& Type::operator=(const Type& o) {
   starLen = o.starLen;
   controlled = o.controlled;
   unaligned = o.unaligned;
+  imaginary = o.imaginary; // IMAGINARY flag (ADR-364)
   isUnion = o.isUnion; // Union overlay layout (ADR-202)
   picture = o.picture;
   dims = o.dims;

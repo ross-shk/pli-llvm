@@ -1,0 +1,49 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (82),(83),(91)-(94): a subtask inherits its attacher's ON units
+   except FINISH, as if the first block were called synchronously
+   (GC33-0009-3 ch. 17, deferred-work A11). MAIN arms ON condition(evt);
+   a child that arms nothing signals evt, so MAIN's unit must run. A
+   nested child spawns a grandchild that signals, and MAIN's unit still
+   runs (each spawn snapshots the current stack). FINISH is never
+   inherited (covered by tests/core/on_finish.pli). */
+task_on_inherit: procedure options(main);
+   declare evt condition;
+   declare ev event;
+   declare ge event;
+   declare main_hit fixed bin(31);
+   main_hit = 0;
+   on condition(evt) main_hit = main_hit + 1;
+   /* direct inheritance: the child arms nothing and signals */
+   call child event(ev);
+   wait(ev);
+   if main_hit ^= 1 then do;
+      put skip list('FAIL task_on_inherit: direct', main_hit);
+      stop;
+   end;
+   /* nested inheritance: the child spawns a grandchild that signals */
+   call child2 event(ge);
+   wait(ge);
+   if main_hit ^= 2 then do;
+      put skip list('FAIL task_on_inherit: nested', main_hit);
+      stop;
+   end;
+   put skip list('PASS task_on_inherit');
+end task_on_inherit;
+
+child: procedure;
+   declare evt condition;
+   signal condition(evt);
+end child;
+
+child2: procedure;
+   declare evt condition;
+   declare ge event;
+   call grandchild event(ge);
+   wait(ge);
+end child2;
+
+grandchild: procedure;
+   declare evt condition;
+   signal condition(evt);
+end grandchild;

@@ -62,6 +62,11 @@ struct rt_worker *rt_sched_current_worker(void);
  * fiber; under the legacy model it is the thread's copy. */
 pli_task_local *rt_task_local(void);
 
+/* A11: copy the attacher's ON units (every key except FINISH) into `dst`,
+ * the new task's per-task state. Called at spawn; rt_cur must be the
+ * attacher so rt_task_local() is the source. */
+void pli_on_inherit(pli_task_local *dst);
+
 /* 1 when the fiber model is active, 0 for the legacy OS-thread model. */
 int rt_sched_fiber_mode(void);
 

@@ -68,6 +68,9 @@ public:
   // The library-call remark (ADR-254): every built-in that hands a
   // conversion to the library routine reports it.
   void setRemarkLibraryCalls(bool on) { remarkLibraryCalls_ = on; }
+  // D1 (ADR-365): the differential oracle for the range fact — the same
+  // program with the fact suppressed, so a pair prices what it is worth.
+  void setNoRangeFacts(bool on) { noRangeFacts_ = on; }
   void setPublishedEffects(std::map<std::string, pli::PublishedEffect> e) {
     published_ = std::move(e);
   }
@@ -118,7 +121,7 @@ private:
   std::unordered_map<Symbol*, llvm::GlobalVariable*> fileMarkers_;
   // P6.1b (ADR-215): every internal-procedure parameter decided by-value
   // (read-only scalar, address never taken) maps to true; absent or false
-  // keeps the by-reference address form. Filled by computeByValueParams.
+  // keeps the by-reference address form. Filled by computeWholeProgramFacts.
   std::unordered_map<Symbol*, char> byValParam_;
   // P2 alias facts (LICM/LAA): one domain per emitted function; each plain
   // AUTOMATIC local owns a scope in it. Scalar loads/stores stamp
@@ -130,11 +133,12 @@ private:
   // Stamp !alias.scope/!noalias on one memory instruction for symbol s;
   // silently skips symbols without a scope (shared/aliased storage).
   void annotateAlias(llvm::Instruction* inst, Symbol* s);
-  // Stamp !range from a FIXED BINARY(p) declared precision on a load (P3b).
-  // Sound only when sizeChecks() is off — at -O2/-O3 the optimizer already
-  // assumes no signed overflow, and the range makes that explicit so LLVM
-  // can narrow the value and fold downstream overflow guards.
-  void stampFixedBinRange(llvm::LoadInst* load, const Type& ty);
+  // Stamp !range from a FIXED BINARY(p) declared precision on a load (D1,
+  // ADR-365). The fact is emitted only where the SIZE check enforces the
+  // declared range at every write and no other declaration shares the storage;
+  // `memberPath` names the UNION levels when the load is a member leaf.
+  void stampFixedBinRange(llvm::LoadInst* load, const Type& ty, Symbol* root = nullptr,
+                          const std::vector<unsigned>* memberPath = nullptr);
   // P3.3 loop metadata state (set in emitDoIter preheader, used on backedge).
   llvm::MDNode* loopID_ = nullptr;
   llvm::SmallVector<llvm::Metadata*, 4> loopMDs_;
@@ -202,6 +206,13 @@ private:
   // The library-call remark (ADR-254): --remark-library-calls makes every
   // library-path built-in report the conversion it hands to the routine.
   bool remarkLibraryCalls_ = false;
+  // D1 (ADR-365): --no-range-facts suppresses the declared-precision !range,
+  // the oracle that lets a benchmark price the fact itself.
+  bool noRangeFacts_ = false;
+  // D1 (ADR-365): storage the range fact may not describe — an overlay base, an
+  // address that escapes to a callee or ADDR, a raw READ INTO / UNSPEC store,
+  // and any target written under a (NOSIZE) prefix.
+  std::unordered_set<const Symbol*> rangeUnsafe_;
   // WS-K8 (ADR-257): the compiler's slot for a CONTROLLED variable's current
   // generation — the ALLOCATE fills it, so a reference is a load.
   std::map<Symbol*, llvm::Value*> ctlAnchor_;
@@ -469,7 +480,7 @@ private:
   // P6.1b (ADR-215): read-only scalar parameters of eligible internal
   // procedures ride by value. Decided once per program before declareProc;
   // consulted by declareProc, emitPlainProc, and every call site.
-  void computeByValueParams(const HProgram& prog);
+  void computeWholeProgramFacts(const HProgram& prog);
   bool isByValueParam(Symbol* s) const {
     auto it = byValParam_.find(s);
     return it != byValParam_.end() && it->second;
@@ -1024,6 +1035,11 @@ private:
   std::map<std::string, std::vector<int>> labelBeginChain_;
   int nextOnScope_ = 0;
   llvm::Value* onExitDepth(const std::string& label);
+  // B4: snapshot of each establishing procedure's label->block map, taken
+  // before emitOnHandlers clears labelBlocks_ for handler emission. Keyed by
+  // HProc so emitEscapeGotoBlock can look up the right procedure's labels
+  // (curProc_ is the establishing procedure during escape-block emission).
+  std::map<HProc*, std::map<std::string, llvm::BasicBlock*>> procLabelBlocks_;
   // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):
   // labels with the break (end) and continue (re-entry) blocks, innermost last.
   struct LoopTargets {
@@ -1110,6 +1126,39 @@ private:
   // True while filling an ON-unit handler: calls needing static links are
   // diagnosed (the handler has no establishing frame).
   bool inHandler_ = false;
+  // B4: true if any ON-unit in the current procedure contains a GO TO
+  // statement. Used to avoid creating goto escape blocks (and their CFG
+  // edges to label blocks) in procedures that don't need them, which would
+  // otherwise break SSA dominance.
+  bool hasHandlerGoto_ = false;
+  // Scan the procedure body for ON-units that contain a GO TO statement.
+  static bool hasHandlerGotoStmt(HStmt* s);
+  // B4: ON-unit RETURN(value)/GO TO non-local exit escape slots. The handler
+  // stores escape info in these module-level globals and returns void; the
+  // trap/signal dispatch reads the code after the handler returns and branches
+  // to the return-with-value or goto-label target in the establishing
+  // procedure.
+  llvm::GlobalVariable* escapeCodeGlobal();   // @onEscapeCode (i32): 0=none,1=return,2=goto
+  llvm::GlobalVariable* escapeRetKindGlobal(); // @onEscapeRetKind (i32): 0=i64,1=double,2=struct,3=char
+  llvm::GlobalVariable* escapeRetI64Global(); // @onEscapeRetI64 (i64)
+  llvm::GlobalVariable* escapeRetF64Global(); // @onEscapeRetF64 (double)
+  llvm::GlobalVariable* escapeRetBufGlobal(); // @onEscapeRetBuf ([4096 x i8])
+  llvm::GlobalVariable* escapeRetSizeGlobal(); // @onEscapeRetSize (i64)
+  llvm::GlobalVariable* escapeLabelIdxGlobal(); // @onEscapeLabelIdx (i32)
+  // Emit escape code inside a handler unit: RETURN(value) stores the converted
+  // value in the escape globals and returns void from the handler.
+  void emitEscapeReturn(Val v);
+  // GO TO stores the label index and returns void from the handler.
+  void emitEscapeGoto(HStmt* s);
+  // After a handler returns at a trap or signal site, check the escape code:
+  // branch to resumeBB when zero, otherwise to the return/goto escape block.
+  void emitEscapeCheck(llvm::BasicBlock* resumeBB);
+  // Fill the return-with-value escape block: finish, reset, ctl epilogue,
+  // then return the stored value.
+  void emitEscapeReturnBlock();
+  // Fill the goto-label escape block: reset depth, then indirect-br to the
+  // target label block.
+  void emitEscapeGotoBlock();
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;

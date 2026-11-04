@@ -1,7 +1,7 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* FLOAT(char) (rule (123)): parse the decimal point and fractional
-    digits, not just the integer prefix. */
+ /* FLOAT(char) (rule (123)): parse the decimal point, fraction digits,
+    and an optional exponent, not just the integer prefix. */
  float_char: procedure options(main);
     declare f float dec(6);
 
@@ -38,6 +38,33 @@
     f = float('-0.125');
     if abs(f - -0.125) > 1e-9 then do;
        put skip list('FAIL float(-0.125)', f);
+       stop;
+    end;
+
+    /* Exponent text: e/E, an optional sign, and a mantissa. */
+    f = float('1e3');
+    if abs(f - 1000.0) > 1e-6 then do;
+       put skip list('FAIL float(1e3)', f);
+       stop;
+    end;
+    f = float('1.5e-2');
+    if abs(f - 0.015) > 1e-12 then do;
+       put skip list('FAIL float(1.5e-2)', f);
+       stop;
+    end;
+    f = float('-2E+2');
+    if abs(f - -200.0) > 1e-6 then do;
+       put skip list('FAIL float(-2E+2)', f);
+       stop;
+    end;
+    f = float('.5e1');
+    if abs(f - 5.0) > 1e-9 then do;
+       put skip list('FAIL float(.5e1)', f);
+       stop;
+    end;
+    f = float('0e-999');
+    if abs(f) > 1e-12 then do;
+       put skip list('FAIL float(0e-999)', f);
        stop;
     end;
 

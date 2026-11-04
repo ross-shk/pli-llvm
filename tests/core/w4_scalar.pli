@@ -9,6 +9,8 @@
     declare x fixed bin(31);
     declare s char(24);
     declare v char(24) varying;
+    declare d fixed dec(5,2);
+    declare w fixed dec(31,0);
 
 
     /* --- MOD (float): result takes sign of divisor --- */
@@ -76,6 +78,49 @@
     x = fixed('  -42abc');
     if x ^= -42 then do;
        put skip list('FAIL fixed(-42abc) =', x);
+       stop;
+    end;
+
+    /* --- FIXED(char) exponent text --- */
+    x = fixed('1e3');
+    if x ^= 1000 then do;
+       put skip list('FAIL fixed(1e3) =', x);
+       stop;
+    end;
+    x = fixed('2.5e2');
+    if x ^= 250 then do;
+       put skip list('FAIL fixed(2.5e2) =', x);
+       stop;
+    end;
+    x = fixed('-1.25e1');
+    if x ^= -12 then do;
+       put skip list('FAIL fixed(-1.25e1) =', x);
+       stop;
+    end;
+    x = fixed('1.5e-1');
+    if x ^= 0 then do;
+       put skip list('FAIL fixed(1.5e-1) =', x);
+       stop;
+    end;
+    d = fixeddec('1.25e2', 5, 2);
+    if d ^= 125.00 then do;
+       put skip list('FAIL fixeddec(1.25e2) =', d);
+       stop;
+    end;
+    x = fixed('0e999');
+    if x ^= 0 then do;
+       put skip list('FAIL fixed(0e999) =', x);
+       stop;
+    end;
+    x = fixed('0e-999');
+    if x ^= 0 then do;
+       put skip list('FAIL fixed(0e-999) =', x);
+       stop;
+    end;
+    /* A wide mantissa with a positive exponent exercises i512. */
+    w = fixeddec('12345678901234567890e2', 31, 0);
+    if w ^= 1234567890123456789000 then do;
+       put skip list('FAIL fixeddec(wide exponent) =', w);
        stop;
     end;
 

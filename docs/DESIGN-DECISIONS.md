@@ -13589,3 +13589,198 @@ FLOAT fast path already gives the right value at the direct assignment, and the
 general converter remains the D1 tail). Truncate every FIXED/FIXED division to
 an integer (the old behaviour, and the source of the wrong answers).
 
+---
+
+## ADR-362 — Mixed-base FIXED division converts DECIMAL to BINARY
+
+**Context.** ADR-361 gave same-base FIXED division its RULES(IBM) precision and
+scale. A mixed pair (`BIN(31,0) / DEC(5,0)`) stayed on the old path: two scale-0
+operands were divided with `sdiv` (`f = 7 / b` printed `3` instead of `3.5`),
+and any scaled pair widened to FLOAT. IBM's rule is explicit: "If the bases of
+the two operands differ, the decimal operand is converted to its binary
+equivalent," so mixed FIXED division is a binary operation and its scale formula
+uses the converted operand's precision and scale. This was the last B11 division
+tail.
+
+**Decision.** `divResultType` treats every FIXED/FIXED division as fixed:
+same-base DECIMAL keeps `DECIMAL(31,q)`; every other pair is `BINARY(63,q)`. For
+a mixed pair each DECIMAL operand is viewed as `BIN(decToBinDigits(p),
+min(62, decToBinScale(q)))` (IBM Appendix 1: 3.32 = 83/25 bits per digit, plus
+one integer bit), and the dividend view supplies `p1`/`q1` in the scale formula
+`q = 63 - p1 + q1 - q2`. The lowering converts the DECIMAL operand through the
+existing cross-base `convert` (exact wide rescaling, ADR-289), then divides the
+converted raw integers exactly as ADR-361 does. A value outside the converted
+binary precision raises SIZE (a DECIMAL(31) magnitude can exceed 63 bits); the
+binary scale is capped at `M-1 = 62` because that is the widest representable
+scale. ZERODIVIDE and the FIXEDOVERFLOW/SIZE resume rules are unchanged. The
+FLOAT-target fast path stays same-base only: a binary fixed quotient converts to
+FLOAT through an exact power-of-two scale, so it needs no double-division path.
+
+**Consequences.** `fixed_division.pli` adds mixed `7/2`, `7.0/7`, negative, and
+scaled `14.00/7`, `10.00/7`, `/10.00` cases. `mod_index.pli` now writes
+`trunc(i / 3)` in its MOD identity: with fractional FIXED division the
+untruncated identity is false for a non-zero remainder, and `trunc` keeps the
+test's MOD intent. `GC` (16)/(17) and (115)-(122) cite this ADR.
+
+**Rejected.** Keep mixed scale-0 division as integer `sdiv` (the silent wrong
+answer). Widen mixed division to FLOAT (IBM says fixed, and the result then has
+only six significant digits). Use the DECIMAL operand's own p/q in the binary
+formula without converting first (the units do not match: digits vs bits).
+
+---
+
+## ADR-363 — Character exponent text in FIXED and FLOAT conversions
+
+**Context.** ADR-346/347 served fractional character text for `FIXED`/
+`FIXEDBIN`/`FIXEDDEC`/`FLOAT`, but the shared parser stopped at the mantissa and
+rejected an `e`/`E` suffix with CONVERSION (and the runtime
+`pli_fixed_char_parts` did the same). That was the last numeric-text tail in
+B11: `fixed('1e3')` and `float('1.5e-2')` are ordinary PL/I numeric text.
+
+**Decision.** The LLVM parser (`emitFixedCharPartsLLVM`) and the runtime parser
+(`pli_fixed_char_parts`) accept an optional exponent after the mantissa: `e` or
+`E`, an optional sign, and at least one digit. The exponent folds into the
+fraction count as `eff = frac - exp`, so a positive exponent makes `eff`
+negative; the callers then move the point the other way. The effective count is
+limited to `+/-76`, the same bound as the fractional-digit and literal caps; a
+zero mantissa is exempt (`0e999` is 0). Malformed text (no exponent digits, or
+an out-of-range effective count) keeps the CONVERSION path.
+`emitFixedFromChar` now rescales in i512 instead of i256: a 38-digit mantissa, a
+76-place shift, and a 38-digit target scale can reach 152 decimal digits. Values
+outside the target still take the existing SIZE paths. `emitFloatFromChar`
+scales the mantissa by `10^|eff|` in double; its i256-to-double conversion is
+built from four native 64-bit limbs because the runtime link has no compiler-rt
+`__floattidf`, which also makes `FLOAT(char)` link in the runtime lowering mode.
+
+**Consequences.** `tests/core/w4_scalar.pli` pins exponent text for binary and
+decimal fixed targets, including a wide mantissa and `0e999`;
+`tests/builtins/float_char.pli` pins `FLOAT`; `tests/core/on_conversion.pli`
+pins malformed text; the `experimental_lowering` witness checks fixed and float
+parity in auto/runtime/llvm. `GC` (123) cites this ADR.
+
+**Rejected.** Keep rejecting exponent text (the old limitation). Parse with
+`strtod` (platform libc, breaking the self-contained runtime). Keep i256 for the
+fixed rescale (it overflows at the largest legal mantissa and shift).
+
+
+## ADR-364 — IMAGINARY data attribute (IBM Enterprise PL/I extension)
+
+**Context.** B11 (Numeric data remainder) leaves the `IMAGINARY` data attribute
+unimplemented. `IMAGINARY` is an IBM Enterprise PL/I attribute: it declares an
+arithmetic variable stored as COMPLEX whose real part is always zero. Assigning
+a real value to an IMAGINARY variable stores `(0, value)`; `REAL`/`IMAG` extract
+the parts and arithmetic rides the existing COMPLEX lowering. It is not part of
+TR 25.084, so it is tracked as an extension in `GRAMMAR-COVERAGE.md`, never as
+spec scope.
+
+**Decision.** The parser recognises `IMAGINARY` (and `IMAG` is not a synonym) as
+a data attribute in the same attribute loop as `COMPLEX`. It combines with the
+FIXED/FLOAT and BINARY/DECIMAL base attributes but not with string, POINTER or
+FILE, and conflicts with `COMPLEX`; each conflict cites rule (15). The type is
+`TK::Complex` carrying a non-equivalence `imaginary` flag (like `varyingz`),
+flowing through `Type::operator=`. sema permits real -> IMAGINARY conversion
+through the existing complex-conversion path; irgen lowers real -> IMAGINARY as
+`{0.0, value}` instead of `{value, 0.0}`. IMAGINARY -> real takes the real part
+(0 for a pure imaginary value), and IMAGINARY <-> COMPLEX pass through the
+{double,double} layout. `CONJG`, `REAL`, `IMAG`, `CHAR` and `FIXED` of an
+IMAGINARY value use the ordinary COMPLEX paths.
+
+**Consequences.** `tests/builtins/imaginary.pli` pins real->IMAGINARY assignment
+(`imag(x)` returns the value, `real(x)` returns 0), IMAGINARY -> COMPLEX, and
+COMPLEX -> IMAGINARY. `GRAMMAR-COVERAGE.md` gains an "Extensions (not in TR
+25.084)" row for IMAGINARY and notes it under rules (14),(15).
+
+**Rejected.** Make IMAGINARY a distinct `TK::Imaginary` kind (it would duplicate
+the COMPLEX layout and every arithmetic/built-in path). Treat IMAGINARY as an
+error everywhere (the feature is IBM Enterprise and B11 lists it as remaining
+work). Infer the imaginary part from usage without the attribute (there is no
+surface syntax for that in PL/I).
+
+## ADR-365 — The declared-precision range fact is emitted only where SIZE enforces it
+
+**Context.** `DEFERRED-WORK.md` D1 is the range-fact step ADR-252 ordered after
+the declared-precision check: once `SIZE` enforces `FIXED BINARY(p)`'s range
+`[-2^p, 2^p-1]` at every conversion (ADR-282, row A2), a load may promise that
+range so LLVM can fold the storage-width overflow checks that remain. The tree
+had a `stampFixedBinRange` from the P3b work, and it was not sound:
+
+* it stamped a **p-bit signed** range, `[-2^(p-1), 2^(p-1)-1]` — one bit
+  narrower than the range ADR-282 defines, so a legal `FIXED BINARY(31)` value
+  of `2147483647` was described as `< 2^30`;
+* it stamped only with the SIZE checks **off**, which is the mode where a
+  `(NOSIZE)` store may leave the declared precision and make the range false;
+* it stamped any load of a `FIXED BINARY(p)` symbol, including a parameter, an
+  overlay base, a UNION member, and storage an escaped address lets another
+  declaration write.
+
+The consequence was a live silent wrong answer at the default `-O2` (which
+implies `--no-size-checks`, ADR-111): a `FIXED BINARY(31)` array element holding
+`2147483647` and compared with `> 1073741824` printed `0`, because the load
+carried `!range [-2^30, 2^30)`.
+
+**Decision.**
+
+1. **The fact states ADR-282's range.** `[-2^p, 2^p-1]`, half-open above, so
+   the emitted metadata is `[i32 -32768, i32 32768)` for `FIXED BINARY(15)`.
+   When `p+1` fills the slot (`p = 31` in i32, `p = 63` in i64) the fact says
+   nothing and is not emitted.
+2. **The fact is emitted only where the range is an invariant.** The predicate
+   moves into the decision layer (`RangeSite`/`fixedBinRangeFact`,
+   `src/irgen_decisions.cpp`, the plan's C2), and it requires: the SIZE check is
+   on at the load (`sizeChecks()`, so a `(NOSIZE)` build or `--no-size-checks`
+   emits none), the storage is owned by the declaration (`aliasClass` is
+   `Disjoint`), and the storage is on none of the unsafe lists the module walk
+   collects:
+   * an **address that escapes**: `ADDR`/`BYADDR`, or an actual of a user call
+     (the callee — or foreign code — can write it with no check for this type);
+   * a **raw byte store**: `READ ... INTO`, `UNSPEC(x) = …`, `SUBSTR(x, …) = …`;
+   * a **(NOSIZE) write**: an effective `(NOSIZE)` prefix covers its subtree
+     (`CHECK(SIZE)` clears it), and a `(NOSIZE)` assignment, `GET`, `INITIAL`
+     or DO-control store may leave the declared precision;
+   * a **UNION member**, whose sibling shares the storage, and a **DEFINED
+     base**, which an overlay writes through its own type.
+3. **`INITIAL` item lists run the ADR-282 check.** An array or structure
+   `INITIAL` element stored an out-of-range constant without the precision
+   check, which would have made a fact on it false; `initValue` now routes a
+   `FIXED BINARY` initial through `fixedBinPrecTrap`.
+4. **`--no-range-facts` is the differential oracle.** It emits the same program
+   without the metadata, so the benchmark pair prices the fact itself.
+
+**Measurements** (arm64 macOS, LLVM 23.1.3, median of five):
+
+| Pair | A (ms) | B (ms) | B/A |
+|---|---|---|---|
+| `fixed_narrow`, check-free vs `--size-checks` | 76.51 | 139.44 | 1.82x |
+| `fixed_narrow`, facts vs `--no-range-facts` (both `--size-checks`) | 139.26 | 156.10 | **1.12x** |
+| `checks_on`, check-free vs `--size-checks` | 85.98 | 158.48 | 1.84x |
+
+The fact is worth **12%** on the narrow workload: with the fact, LLVM folds the
+storage-width checks that the precision check leaves behind on `x * 3 + 1`.
+`checks_on` is unchanged at 1.84x, exactly as ADR-282 predicted:
+its hot items are `FIXED BINARY(31)`/`(63)`, whose declared range fills the slot,
+so there is no narrower fact to emit. The fact therefore cannot move the
+checks-on ratio toward 1.5x; it is worth what D1's text says it is worth, and
+only for a `p` narrower than its slot.
+
+**Consequences.** The fact no longer exists in a checks-off build (the default
+`-O2`), where it was the source of the wrong answer; it exists to let LLVM fold
+the checks that survive with SIZE on. `tests/driver/range_facts.sh` pins seventeen
+cases — the top of a narrow range, a full-slot value at the default `-O2`, a
+`(NOSIZE)` write, a callee writing the caller's storage by reference, a
+parameter, a UNION sibling and an `ADDR`-exposed variable — each in a checked
+and a default build, plus the `--no-range-facts` oracle.
+`tests/ir/range_fixedbin.pli` pins the emitted `[-32768, 32768)` and
+`tests/ir/range_fixedbin_guard.pli` pins the absence of a fact for the unsafe
+storage. The previous `tests/ir/range_fixedbin.flags` (`--no-size-checks -O2`)
+was removed: that mode no longer emits a fact, which is the point.
+
+**Rejected.** *Emit the fact with the checks off* — a `(NOSIZE)` store leaves
+the declared precision, so the p+1 range would be a lie; the old test pinned it
+and the old code miscompiled. *Keep the p-bit range* — it is one bit narrower
+than the declared type, so a legal value alone is enough to fold a comparison
+wrongly. *Trust `aliasClass` alone* — it classifies the declaration's storage
+kind, not whether the address escaped; a plain AUTOMATIC passed by reference is
+still `Disjoint`. *Wrap `(NOSIZE)` stores to `p+1` bits and keep the fact in
+every mode* — a larger semantic change (ADR-282's gate pins the wide-slot value
+standing), and the fact's purpose is to fold checks, which only exist with
+SIZE on.

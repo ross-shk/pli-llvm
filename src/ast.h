@@ -162,6 +162,9 @@ struct DeclItem {
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
    bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
    Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+   std::string returnsStructName; // rule 127: a bare structure name naming the
+                                  // structure whose shape this entry returns;
+                                  // resolved to a deep copy in sema
    std::string extName;           // EXTERNAL('name') case-sensitive C symbol
    bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
    bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
@@ -177,6 +180,7 @@ struct DeclItem {
    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
    bool labelAttr = false;        // LABEL (rule (21)): label variable
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+   bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
 };
 
 // Rule (65) initial-label: an element of a label array named by a statement

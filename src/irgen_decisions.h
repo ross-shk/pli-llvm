@@ -79,6 +79,30 @@ bool prefersLLVMLowering(const std::string& op);
 // returns a verdict; it emits no IR.
 InlineDecision decideInline(const std::string& op, const CallSite& site);
 
+// --- D1: the declared-precision range fact (ADR-365) ------------------------
+//
+// LLVM's `!range` on a load is a promise about the value. A FIXED BINARY(p)
+// item promises [-2^p, 2^p-1] (ADR-282) only while every write to its storage
+// goes through the precision check, so the fact is a call-site predicate like
+// the lowering decision above: the same type carries it at one site and not at
+// another.
+struct RangeSite {
+  unsigned storageBits = 32;     // the integer type the value is loaded from
+  bool precisionChecked = false; // SIZE enforces the range at every store
+  bool privateStorage = true;    // no other declaration can write the storage
+  bool unionMember = false;      // a UNION sibling shares the storage
+};
+
+// The fact, or `emit == false` when no honest fact exists. `lo`/`hi` are the
+// half-open interval LLVM takes: the value is in [lo, hi).
+struct RangeFact {
+  bool emit = false;
+  long long lo = 0;
+  long long hi = 0;
+};
+
+RangeFact fixedBinRangeFact(int prec, const RangeSite& site);
+
 // The compiler's fact store: filled while lowering, printed by --print-facts.
 // A fact is a decision the compiler already made, not a new decision — the
 // decisions themselves stay where the plan put them.

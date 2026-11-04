@@ -148,6 +148,7 @@ private:
     bool pointer = false;
     bool picture = false;    // PICTURE('...') (rules (19),(146)-(148), ADR-290)
     bool complex = false;    // COMPLEX (QR2.2/CM5): a real+imaginary pair
+    bool imaginary = false;  // IMAGINARY (IBM Enterprise PL/I extension, ADR-364)
     bool file = false;       // FILE (rules 39,40): a named file variable
     bool controlled = false; // CONTROLLED (rule (15), ADR-140): generation-stack storage
     bool area = false;       // AREA (rule (20)): a region for BASED allocation

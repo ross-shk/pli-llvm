@@ -1,8 +1,9 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (121); ADR-361: FIXED division keeps the RULES(IBM) result
+ /* rule (121); ADR-361/362: FIXED division keeps the RULES(IBM) result
     precision (31 decimal digits, 63 binary bits) and scale
-    q = maxp - p1 + q1 - q2 instead of falling back to FLOAT. */
+    q = maxp - p1 + q1 - q2 instead of falling back to FLOAT; a mixed
+    decimal/binary pair converts the decimal operand to binary first. */
  fixed_division: procedure options(main);
     declare d10a fixed dec(10,2);
     declare d10b fixed dec(10,2);
@@ -85,6 +86,52 @@
        stop;
     end;
 
+    /* Mixed bases (ADR-362): IBM converts the DECIMAL operand to BINARY
+       first, so BIN(31,0)/DEC(5,0) is BIN(63,32) = 3.5. */
+    b31 = 7;
+    f = b31 / 2;
+    if f ^= 3.5 then do;
+       put skip list('FAIL fixed_division: mixed bin/dec', f);
+       stop;
+    end;
+    i = b31 / 2;
+    if i ^= 3 then do;
+       put skip list('FAIL fixed_division: mixed bin/dec fixed', i);
+       stop;
+    end;
+    f = 7.0 / b31;
+    if f ^= 1.0 then do;
+       put skip list('FAIL fixed_division: mixed dec/bin', f);
+       stop;
+    end;
+    b31 = -7;
+    f = b31 / 2;
+    if f ^= -3.5 then do;
+       put skip list('FAIL fixed_division: mixed negative', f);
+       stop;
+    end;
+    b31 = 7;
+
+    /* A scaled decimal operand converts by IBM's 3.32 bit/digit factor:
+       14.00/7 is exactly 2, 10.00/7 keeps 63 - 35 + 7 = 35 bits. */
+    d10a = 14.00;
+    f = d10a / b31;
+    if f ^= 2.0 then do;
+       put skip list('FAIL fixed_division: mixed scaled exact', f);
+       stop;
+    end;
+    d10a = 10.00;
+    f = d10a / b31;
+    if abs(f - 1.4285714285714286) > 1e-9 then do;
+       put skip list('FAIL fixed_division: mixed scaled', f);
+       stop;
+    end;
+    f = b31 / d10a;
+    if abs(f - 0.7) > 1e-6 then do;
+       put skip list('FAIL fixed_division: mixed divisor scale', f);
+       stop;
+    end;
+
     /* Binary negative q: BIN(63,0)/BIN(63,62) has q = -62, so the
        raw quotient 1 becomes 2^62 at scale 0. A value outside
        BIN(63) takes the SIZE path. */
@@ -124,6 +171,19 @@
        stop;
     end;
     revert fixedoverflow;
+
+    /* A DECIMAL operand wider than BIN(63) raises SIZE when the mixed
+       division converts it to binary (ADR-362). */
+    nsz = 0;
+    on size nsz = nsz + 1;
+    big = 100000000000000000000;
+    b31 = 2;
+    f = big / b31;
+    if nsz ^= 1 then do;
+       put skip list('FAIL fixed_division: mixed size', nsz);
+       stop;
+    end;
+    revert size;
 
     /* ZERODIVIDE still traps and resumes with 0 (rule 94). */
     on zerodivide nzd = nzd + 1;

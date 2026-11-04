@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* D1 (ADR-365): FIXED BINARY(31) fills its i32 slot, so its declared
+    range is the storage range and a `!range` would say nothing. No
+    fact is emitted (ADR-282 defines the range as [-2^p, 2^p-1]). */
+ test: procedure options(main);
+   declare a(100) fixed bin(31);
+   declare i fixed bin(31);
+   do i = 1 to 100;
+     a(i) = i;
+   end;
+   put skip list(a(50));
+ end test;

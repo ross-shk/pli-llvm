@@ -8,9 +8,11 @@ mod_index: procedure options(main);
    /* DO i = 1 TO n: the index is non-negative, so MOD(i, k) with positive k
       is just i rem k. Verify a few known values: MOD(3,3)=0, MOD(4,3)=1,
       MOD(6,3)=0, MOD(7,3)=1. */
+   /* FIXED division is fractional (ADR-361/362), so the MOD identity
+      uses TRUNC(i / 3) rather than truncating division. */
    do i = 1 to 100;
      s = s + mod(i, 3);
-     if mod(i, 3) ^= i - 3 * (i / 3) then do;
+     if mod(i, 3) ^= i - 3 * trunc(i / 3) then do;
         put skip list('FAIL mod_index: check at line 15 failed');
         stop;
      end;

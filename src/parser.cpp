@@ -2005,10 +2005,19 @@ void Parser::parseDeclTail(DeclItem& item) {
         advance();
         if (expect(Tok::LParen, "(34)")) {
           item.entryIsFunction = true;
-          parseDescriptorType(item.entryRetTy);
-          if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
-            d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
-            item.entryRetTy = Type::chr(1);
+          // A lone non-scalar-type word names a structure template whose shape
+          // the entry returns (rule 127), resolved in sema; otherwise parse a
+          // descriptor type.
+          if (cur().kind == Tok::Word && peek().kind == Tok::RParen &&
+              !isScalarTypeWord(cur().text)) {
+            item.returnsStructName = cur().text;
+            advance();
+          } else {
+            parseDescriptorType(item.entryRetTy);
+            if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
+              d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
+              item.entryRetTy = Type::chr(1);
+            }
           }
           expect(Tok::RParen, "(34)");
         }
@@ -2262,6 +2271,14 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.complex = true;
         continue;
       }
+      if (w == "IMAGINARY") {
+        // IMAGINARY (IBM Enterprise PL/I extension, ADR-364): arithmetic data
+        // stored as COMPLEX with a zero real part; a real value assigned to it
+        // becomes (0, value).
+        advance();
+        bag.imaginary = true;
+        continue;
+      }
       if (w == "CONTROLLED" || w == "CTL") {
         // controlled-attribute (rule (15), ADR-140): storage managed by an
         // explicit generation stack; consumed like the other storage classes.
@@ -2446,6 +2463,10 @@ void Parser::parseDeclTail(DeclItem& item) {
   // remain incompatible.
   if (bag.complex && (bag.character || bag.bit || bag.pointer || bag.file))
     d_.error(item.loc, "COMPLEX cannot be combined with a non-arithmetic data attribute", "(15)");
+  if (bag.imaginary && (bag.character || bag.bit || bag.pointer || bag.file))
+    d_.error(item.loc, "IMAGINARY cannot be combined with a non-arithmetic data attribute", "(15)");
+  if (bag.complex && bag.imaginary)
+    d_.error(item.loc, "COMPLEX and IMAGINARY are conflicting attributes", "(15)");
   if ((bag.task || bag.event) &&
       (bag.character || bag.bit || bag.fixed || bag.floating || bag.binary || bag.decimal ||
        bag.pointer || bag.complex || bag.file || bag.varying))
@@ -2487,6 +2508,11 @@ void Parser::parseDeclTail(DeclItem& item) {
     item.ty = Type::ptr();
   } else if (bag.complex) {
     item.ty = Type::complexTy();
+  } else if (bag.imaginary) {
+    // IMAGINARY is COMPLEX storage with a zero real part (ADR-364).
+    item.ty = Type::complexTy();
+    item.ty.imaginary = true;
+    item.imaginary = true;
   } else if (bag.character) {
     // A `CHAR(*)` or `CHAR(expr)` adjustable length (rule (18)): recorded on the
     // type for sema to validate as a parameter-only form and for codegen to

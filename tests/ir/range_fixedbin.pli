@@ -1,8 +1,17 @@
- test: procedure options(main);
-   declare a(100) fixed bin(31);
-   declare i fixed bin(31);
-   do i = 1 to 100;
-     a(i) = i;
-   end;
-   put skip list(a(50));
- end test;
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* D1 (ADR-365): a FIXED BINARY(15) load promises the declared range
+    [-2^15, 2^15-1] (ADR-282), half-open above, so a fact that used to
+    be one bit too narrow is now the range the SIZE check enforces.
+    The slot is i32, so the fact is narrower than the storage; a
+    FIXED BINARY(31) fills its slot and carries no fact. */
+ range_fixedbin: procedure options(main);
+    declare a(100) fixed bin(15);
+    declare b(100) fixed bin(31);
+    declare i fixed bin(31);
+    do i = 1 to 100;
+       a(i) = i;
+       b(i) = i;
+    end;
+    put skip list(a(50), b(50));
+ end range_fixedbin;

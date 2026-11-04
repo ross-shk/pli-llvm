@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* D1 (ADR-365): no range fact where another declaration shares the
+    storage. The OVERLAY base `a` is written through `b`'s type, and
+    `c`'s address escapes through ADDR, so neither load may claim the
+    declared range. */
+ test: procedure options(main);
+   declare a fixed bin(15);
+   declare b fixed bin(31) defined a;
+   b = 1;
+   put skip list(a);
+   call leaker;
+ end test;
+
+ leaker: procedure;
+   declare c fixed bin(15);
+   declare p pointer;
+   p = addr(c);
+   c = 2;
+   put skip list(c);
+ end leaker;

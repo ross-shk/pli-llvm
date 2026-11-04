@@ -35,16 +35,40 @@ static _Thread_local int pli_in_task = 0;
 typedef struct {
   void *(*body)(void *);
   void *ctx;
+  /* A11: the attacher's ON units (minus FINISH), captured at spawn so the
+   * new thread can restore them before running the body. The fn/ctx pointers
+   * are shared with the attacher; only the array is owned here and freed
+   * after the body returns. */
+  pli_on_frame *on_stack;
+  int on_sp;
 } pli_os_call;
 
 static void *pli_os_thread(void *p) {
   pli_os_call *c = (pli_os_call *)p;
   void *(*body)(void *) = c->body;
   void *ctx = c->ctx;
+  /* Inherit the attacher's ON units before the body runs: rt_task_local() is
+   * this thread's fresh (zeroed) copy under the legacy model. Save the
+   * pointers before freeing c. */
+  pli_on_frame *inh = c->on_stack;
+  int inh_sp = c->on_sp;
   pli_plat_free(c);
+  pli_task_local *dst = rt_task_local();
+  if (inh_sp) {
+    dst->on_stack = inh;
+    dst->on_sp = inh_sp;
+    dst->on_cap = inh_sp;
+  }
   pli_in_task = 1;
   body(ctx);
   pli_in_task = 0;
+  /* Drop the inherited stack: the fn/ctx memory is shared, not freed. */
+  if (dst->on_stack) {
+    pli_plat_free(dst->on_stack);
+    dst->on_stack = NULL;
+    dst->on_sp = 0;
+    dst->on_cap = 0;
+  }
   atomic_fetch_sub_explicit(&pli_os_live, 1, memory_order_acq_rel);
   return NULL;
 }
@@ -202,6 +226,28 @@ static void pli_spawn_task(void *(*body)(void *), void *ctx) {
     pli_abort("TASK: out of memory");
   c->body = body;
   c->ctx = ctx;
+  c->on_stack = NULL;
+  c->on_sp = 0;
+  /* A11: capture the attacher's ON stack (minus FINISH) so the new task
+   * inherits it. Runs in the attacher's thread, so rt_task_local() is the
+   * attacher's per-task state (the thread's copy under the legacy model). */
+  pli_task_local *src = rt_task_local();
+  int n = 0;
+  for (int i = 0; i < src->on_sp; ++i)
+    if (src->on_stack[i].key != RT_FINISH_KEY)
+      ++n;
+  if (n) {
+    c->on_stack = (pli_on_frame *)pli_plat_malloc((size_t)n * sizeof(pli_on_frame));
+    if (!c->on_stack) {
+      pli_plat_free(c);
+      pli_abort("TASK: out of memory");
+    }
+    int k = 0;
+    for (int i = 0; i < src->on_sp; ++i)
+      if (src->on_stack[i].key != RT_FINISH_KEY)
+        c->on_stack[k++] = src->on_stack[i]; /* shallow copy of fn/ctx */
+    c->on_sp = n;
+  }
   atomic_fetch_add_explicit(&pli_os_live, 1, memory_order_acq_rel);
   if (pli_spawn_detached(pli_os_thread, c) != 0) {
     atomic_fetch_sub_explicit(&pli_os_live, 1, memory_order_acq_rel);

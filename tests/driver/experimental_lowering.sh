@@ -74,6 +74,11 @@ witness: procedure options(main);
    if x ^= 3 then fails = fails + 1;
    x = fixed('123');
    if x ^= 123 then fails = fails + 1;
+   /* Exponent text parses in the LLVM and runtime paths alike */
+   x = fixed('1e3');
+   if x ^= 1000 then fails = fails + 1;
+   f = float('1.5e2');
+   if abs(f - 150.0) > 1e-9 then fails = fails + 1;
    if fails = 0 then put skip list('PASS witness');
    else put skip list('FAIL witness:', fails);
 end witness;

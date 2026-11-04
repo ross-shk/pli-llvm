@@ -190,6 +190,21 @@ static bool packedMemberPath(const Type& root, const std::vector<unsigned>& path
   return cur->unaligned;
 }
 
+// True when the leaf at `path` inside `root` is a UNION member (ADR-365): all
+// members start at offset 0, so a sibling declaration with a wider type can
+// write the storage the leaf is read from.
+static bool pathInUnion(const Type& root, const std::vector<unsigned>& path) {
+  const Type* cur = &root;
+  for (unsigned f : path) {
+    if (cur->isUnion)
+      return true;
+    if (f >= cur->members.size())
+      return false;
+    cur = &cur->members[f]->ty;
+  }
+  return false;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -2851,6 +2866,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   llvm::Value* seenSlot = entryAlloca(b_.getInt1Ty(), "fxc.seen");
   llvm::Value* dotSlot = entryAlloca(b_.getInt1Ty(), "fxc.dot");
   llvm::Value* overflowSlot = entryAlloca(b_.getInt1Ty(), "fxc.overflow");
+  llvm::Value* expSlot = entryAlloca(b_.getInt32Ty(), "fxc.exp");
+  llvm::Value* expNegSlot = entryAlloca(b_.getInt1Ty(), "fxc.exp_neg");
   b_.CreateStore(zero64, idxSlot, false);
   b_.CreateStore(zero256, allSlot, false);
   b_.CreateStore(zero32, digitsSlot, false);
@@ -2860,6 +2877,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   b_.CreateStore(b_.getFalse(), seenSlot, false);
   b_.CreateStore(b_.getFalse(), dotSlot, false);
   b_.CreateStore(b_.getFalse(), overflowSlot, false);
+  b_.CreateStore(zero32, expSlot, false);
+  b_.CreateStore(b_.getFalse(), expNegSlot, false);
 
   llvm::BasicBlock* skipBB = llvm::BasicBlock::Create(ctx_, "fxc.skip", F);
   llvm::BasicBlock* skipBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.skip_body", F);
@@ -2871,7 +2890,14 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   llvm::BasicBlock* fracBB = llvm::BasicBlock::Create(ctx_, "fxc.frac", F);
   llvm::BasicBlock* fracBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.frac_body", F);
   llvm::BasicBlock* checkBB = llvm::BasicBlock::Create(ctx_, "fxc.check_exp", F);
-  llvm::BasicBlock* expBB = llvm::BasicBlock::Create(ctx_, "fxc.exp", F);
+  llvm::BasicBlock* expMarkBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_mark", F);
+  llvm::BasicBlock* expSignBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_sign", F);
+  llvm::BasicBlock* expFirstBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_first", F);
+  llvm::BasicBlock* expFirstBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_first_body", F);
+  llvm::BasicBlock* expBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_body", F);
+  llvm::BasicBlock* expBodyBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_body_body", F);
+  llvm::BasicBlock* expApplyBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_apply", F);
+  llvm::BasicBlock* expFailBB = llvm::BasicBlock::Create(ctx_, "fxc.exp_fail", F);
   llvm::BasicBlock* finishBB = llvm::BasicBlock::Create(ctx_, "fxc.finish", F);
   b_.CreateBr(skipBB);
 
@@ -3006,25 +3032,126 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
     b_.CreateBr(fracBB);
   }
 
-  // Reject exponent text (1e3) rather than returning the integer prefix.
+  // Exponent text (rule (123)): e/E, an optional sign, and at least one digit.
+  // The exponent folds into the fraction count (eff = frac - exp); malformed
+  // text or an effective count outside +/-maxFrac keeps the CONVERSION path.
   startBlock(checkBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ck_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ck_range");
-    b_.CreateCondBr(inRange, expBB, finishBB);
+    b_.CreateCondBr(inRange, expMarkBB, finishBB);
   }
-  startBlock(expBB);
+  startBlock(expMarkBB);
   {
-    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.exp_i");
-    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
-                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.exp_ptr"), "fxc.exp_c");
-    llvm::Value* isExp = b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
-                                                     "fxc.is_e"),
-                                     b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
-                                                     "fxc.is_E"),
-                                     "fxc.is_exp");
-    llvm::Value* ov = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.exp_ov");
-    b_.CreateStore(b_.CreateOr(ov, isExp, "fxc.exp_bad"), overflowSlot, false);
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.em_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.em_ptr"), "fxc.em_c");
+    llvm::Value* isExp =
+        b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
+                                    "fxc.em_e"),
+                    b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
+                                    "fxc.em_E"),
+                    "fxc.em_is");
+    llvm::Value* next = b_.CreateAdd(i, one64, "fxc.em_next");
+    b_.CreateStore(b_.CreateSelect(isExp, next, i, "fxc.em_idx"), idxSlot, false);
+    b_.CreateCondBr(isExp, expSignBB, finishBB);
+  }
+  startBlock(expSignBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.es_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.es_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.es_ptr"), "fxc.es_c");
+    llvm::Value* isPlus = b_.CreateICmpEQ(c, plus, "fxc.es_plus");
+    llvm::Value* isMinus = b_.CreateICmpEQ(c, minus, "fxc.es_minus");
+    llvm::Value* hasSign =
+        b_.CreateAnd(inRange, b_.CreateOr(isPlus, isMinus, "fxc.es_sign"), "fxc.es_has");
+    llvm::Value* iNext = b_.CreateAdd(i, one64, "fxc.es_next");
+    b_.CreateStore(b_.CreateSelect(hasSign, iNext, i, "fxc.es_idx"), idxSlot, false);
+    b_.CreateStore(b_.CreateAnd(hasSign, isMinus, "fxc.es_neg"), expNegSlot, false);
+    b_.CreateBr(expFirstBB);
+  }
+  startBlock(expFirstBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ef_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ef_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ef_ptr"), "fxc.ef_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.ef_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.ef_le9"),
+                                        "fxc.ef_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ef_cont"), expFirstBodyBB,
+                    expFailBB);
+  }
+  startBlock(expFirstBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.efb_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.efb_ptr"), "fxc.efb_c");
+    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.efb_sub"),
+                                   b_.getInt32Ty(), "fxc.efb_d");
+    b_.CreateStore(d, expSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.efb_next"), idxSlot, false);
+    b_.CreateBr(expBodyBB);
+  }
+  startBlock(expBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.eb_i");
+    llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.eb_range");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.eb_ptr"), "fxc.eb_c");
+    llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.eb_ge0"),
+                                        b_.CreateICmpULE(c, nineCh, "fxc.eb_le9"),
+                                        "fxc.eb_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.eb_cont"), expBodyBodyBB,
+                    expApplyBB);
+  }
+  startBlock(expBodyBodyBB);
+  {
+    llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ebb_i");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ebb_ptr"), "fxc.ebb_c");
+    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.ebb_sub"),
+                                   b_.getInt32Ty(), "fxc.ebb_d");
+    llvm::Value* e = b_.CreateLoad(b_.getInt32Ty(), expSlot, "fxc.ebb_e");
+    llvm::Value* next = b_.CreateAdd(b_.CreateMul(e, i32(10), "fxc.ebb_mul"), d,
+                                     "fxc.ebb_add");
+    // Saturate past the parser's scale range; expApply rejects it as malformed.
+    llvm::Value* capped = b_.CreateSelect(
+        b_.CreateICmpUGT(next, i32(1000), "fxc.ebb_over"), i32(1000), next, "fxc.ebb_cap");
+    b_.CreateStore(capped, expSlot, false);
+    b_.CreateStore(b_.CreateAdd(i, one64, "fxc.ebb_next"), idxSlot, false);
+    b_.CreateBr(expBodyBB);
+  }
+  startBlock(expApplyBB);
+  {
+    llvm::Value* e = b_.CreateLoad(b_.getInt32Ty(), expSlot, "fxc.ea_e");
+    llvm::Value* neg = b_.CreateLoad(b_.getInt1Ty(), expNegSlot, "fxc.ea_neg");
+    llvm::Value* frac = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ea_frac");
+    // eff = frac - exp, so a negative exponent adds to the fraction count.
+    llvm::Value* signedExp =
+        b_.CreateSelect(neg, e, b_.CreateSub(i32(0), e, "fxc.ea_neg_e"), "fxc.ea_signed");
+    llvm::Value* eff = b_.CreateAdd(frac, signedExp, "fxc.ea_eff");
+    llvm::Value* negMaxFrac = b_.CreateSub(i32(0), maxFrac, "fxc.ea_negmax");
+    llvm::Value* inRange =
+        b_.CreateAnd(b_.CreateICmpSGE(eff, negMaxFrac, "fxc.ea_lo"),
+                     b_.CreateICmpSLE(eff, maxFrac, "fxc.ea_hi"), "fxc.ea_in");
+    // A zero mantissa is representable at any exponent (0e999 is 0).
+    llvm::Value* allNow = b_.CreateLoad(i256Ty, allSlot, "fxc.ea_all");
+    llvm::Value* zeroMag = b_.CreateICmpEQ(allNow, zero256, "fxc.ea_zero");
+    inRange = b_.CreateOr(inRange, zeroMag, "fxc.ea_ok");
+    llvm::Value* ov = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ea_ov");
+    b_.CreateStore(b_.CreateOr(ov, b_.CreateNot(inRange, "fxc.ea_bad"), "fxc.ea_bad2"),
+                   overflowSlot, false);
+    // A zero mantissa stores a zero scale, so the callers never build 10^1000.
+    llvm::Value* kept = b_.CreateSelect(inRange, eff, frac, "fxc.ea_eff");
+    llvm::Value* stored = b_.CreateSelect(zeroMag, i32(0), kept, "fxc.ea_eff_zero");
+    b_.CreateStore(stored, fracSlot, false);
+    b_.CreateBr(finishBB);
+  }
+  startBlock(expFailBB);
+  {
+    b_.CreateStore(b_.getTrue(), overflowSlot, false);
     b_.CreateBr(finishBB);
   }
 
@@ -3043,8 +3170,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
 }
 
 // Shared character parse (rule (123)): parse the signed significant digits and
-// fraction count, raising CONVERSION (rule 94) on unparseable text. The resume
-// value is the parsed prefix.
+// the fraction count (adjusted by an exponent), raising CONVERSION (rule 94)
+// on unparseable text. The resume value is the parsed prefix.
 llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
                                   llvm::Value* fracSlot) {
   llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "fxc.ok");
@@ -3087,32 +3214,39 @@ llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
 }
 
 // Character text → fixed target (rule (123)): parse the signed significant
-// digits and fraction count, then rescale in i256. DECIMAL targets round half
+// digits and fraction count, then rescale in i512. DECIMAL targets round half
 // away from zero; BINARY targets truncate toward zero. The parsed magnitude is
-// limited to 38 significant digits.
+// limited to 38 significant digits, but an exponent can move the point by up
+// to 76 places, so the intermediate scale needs more than i256.
 Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst) {
-  llvm::Type* i256Ty = b_.getIntNTy(256);
-  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
-  llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
-  llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
+  llvm::Type* i512Ty = b_.getIntNTy(512);
+  llvm::Value* zero512 = llvm::ConstantInt::get(i512Ty, 0);
+  llvm::Value* one512 = llvm::ConstantInt::get(i512Ty, 1);
+  llvm::Value* ten512 = llvm::ConstantInt::get(i512Ty, 10);
   llvm::Value* zero64 = i64(0);
   llvm::Value* one64 = i64(1);
 
   llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
-  llvm::Value* all = emitCharParts(s, slen, fracSlot);
+  llvm::Value* all256 = emitCharParts(s, slen, fracSlot);
+  llvm::Value* all = b_.CreateSExt(all256, i512Ty, "fxc.all");
 
   // Signed digits → magnitude plus sign.
-  llvm::Value* isNeg = b_.CreateICmpSLT(all, zero256, "fxc.neg");
+  llvm::Value* isNeg = b_.CreateICmpSLT(all, zero512, "fxc.neg");
   llvm::Value* mag =
-      b_.CreateSelect(isNeg, b_.CreateSub(zero256, all, "fxc.negmag"), all, "fxc.mag");
+      b_.CreateSelect(isNeg, b_.CreateSub(zero512, all, "fxc.negmag"), all, "fxc.mag");
 
-  // 10^frac, built by a short loop (frac <= 76, so it stays inside i256).
-  llvm::Value* powSlot = entryAlloca(i256Ty, "fxc.pow");
+  // 10^|frac|, built by a short loop (|frac| <= 76).
+  llvm::Value* powSlot = entryAlloca(i512Ty, "fxc.pow");
   llvm::Value* kSlot = entryAlloca(b_.getInt64Ty(), "fxc.k");
-  b_.CreateStore(one256, powSlot, false);
+  b_.CreateStore(one512, powSlot, false);
   b_.CreateStore(zero64, kSlot, false);
   llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.frac.load");
-  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.frac64");
+  // A negative fraction count means the exponent moved the point right:
+  // multiply the digits now and leave a 1 divisor for the rescale below.
+  llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.frac.neg");
+  llvm::Value* fracAbs = b_.CreateSelect(
+      negFrac, b_.CreateSub(i32(0), frac32, "fxc.frac.abs"), frac32, "fxc.frac.mag");
+  llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.frac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.pow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_body", curFn_);
   llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_done", curFn_);
@@ -3124,31 +3258,36 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   }
   startBlock(powBodyBB);
   {
-    llvm::Value* p = b_.CreateLoad(i256Ty, powSlot, "fxc.pow.load");
+    llvm::Value* p = b_.CreateLoad(i512Ty, powSlot, "fxc.pow.load");
     llvm::Value* k = b_.CreateLoad(b_.getInt64Ty(), kSlot, "fxc.k.inc");
-    b_.CreateStore(b_.CreateMul(p, ten256, "fxc.pow.next"), powSlot, false);
+    b_.CreateStore(b_.CreateMul(p, ten512, "fxc.pow.next"), powSlot, false);
     b_.CreateStore(b_.CreateAdd(k, one64, "fxc.k.next"), kSlot, false);
     b_.CreateBr(powBB);
   }
   startBlock(powDoneBB);
-  llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.pow10");
+  llvm::Value* pow10 = b_.CreateLoad(i512Ty, powSlot, "fxc.pow10");
+  llvm::Value* magScaled =
+      b_.CreateSelect(negFrac, b_.CreateMul(mag, pow10, "fxc.exp.mag"), mag, "fxc.mag2");
+  llvm::Value* div10 = b_.CreateSelect(negFrac, one512, pow10, "fxc.div10");
 
   llvm::Value* raw;
   if (dst.k == TK::FixedDec) {
     // Decimal target: all * 10^q / 10^f, rounded half away from zero.
-    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 10, dst.scale), "fxc.dec.mul");
-    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.dec.q");
-    llvm::Value* r = b_.CreateSRem(scaled, pow10, "fxc.dec.r");
-    llvm::Value* twice = b_.CreateMul(r, llvm::ConstantInt::get(i256Ty, 2), "fxc.dec.2r");
-    llvm::Value* roundUp = b_.CreateICmpUGE(twice, pow10, "fxc.dec.round");
-    q = b_.CreateAdd(q, b_.CreateZExt(roundUp, i256Ty, "fxc.dec.inc"), "fxc.dec.rounded");
-    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.dec.neg"), q, "fxc.dec.raw");
+    llvm::Value* scaled =
+        b_.CreateMul(magScaled, intPowConst(i512Ty, 10, dst.scale), "fxc.dec.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, div10, "fxc.dec.q");
+    llvm::Value* r = b_.CreateSRem(scaled, div10, "fxc.dec.r");
+    llvm::Value* twice = b_.CreateMul(r, llvm::ConstantInt::get(i512Ty, 2), "fxc.dec.2r");
+    llvm::Value* roundUp = b_.CreateICmpUGE(twice, div10, "fxc.dec.round");
+    q = b_.CreateAdd(q, b_.CreateZExt(roundUp, i512Ty, "fxc.dec.inc"), "fxc.dec.rounded");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero512, q, "fxc.dec.neg"), q, "fxc.dec.raw");
     wideMagTrap(raw, dst.prec);
   } else {
     // Binary target: all * 2^q / 10^f, truncated toward zero.
-    llvm::Value* scaled = b_.CreateMul(mag, intPowConst(i256Ty, 2, dst.scale), "fxc.bin.mul");
-    llvm::Value* q = b_.CreateSDiv(scaled, pow10, "fxc.bin.q");
-    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero256, q, "fxc.bin.neg"), q, "fxc.bin.raw");
+    llvm::Value* scaled =
+        b_.CreateMul(magScaled, intPowConst(i512Ty, 2, dst.scale), "fxc.bin.mul");
+    llvm::Value* q = b_.CreateSDiv(scaled, div10, "fxc.bin.q");
+    raw = b_.CreateSelect(isNeg, b_.CreateSub(zero512, q, "fxc.bin.neg"), q, "fxc.bin.raw");
     raw = fixedBinPrecTrap(raw, dst.prec);
   }
   Val v;
@@ -3165,6 +3304,7 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   llvm::Value* zero64 = i64(0);
   llvm::Value* one64 = i64(1);
   llvm::Value* one256 = llvm::ConstantInt::get(i256Ty, 1);
+  llvm::Value* zero256 = llvm::ConstantInt::get(i256Ty, 0);
   llvm::Value* ten256 = llvm::ConstantInt::get(i256Ty, 10);
 
   llvm::Value* fracSlot = entryAlloca(b_.getInt32Ty(), "fxc.frac");
@@ -3176,7 +3316,11 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   b_.CreateStore(one256, powSlot, false);
   b_.CreateStore(zero64, kSlot, false);
   llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ffrac.load");
-  llvm::Value* frac64 = b_.CreateZExt(frac32, b_.getInt64Ty(), "fxc.ffrac64");
+  // A negative fraction count means the exponent moved the point right.
+  llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.ffrac.neg");
+  llvm::Value* fracAbs = b_.CreateSelect(
+      negFrac, b_.CreateSub(i32(0), frac32, "fxc.ffrac.abs"), frac32, "fxc.ffrac.mag");
+  llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.ffrac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_body", curFn_);
   llvm::BasicBlock* powDoneBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_done", curFn_);
@@ -3197,11 +3341,33 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   startBlock(powDoneBB);
   llvm::Value* pow10 = b_.CreateLoad(i256Ty, powSlot, "fxc.fpow10");
 
-  llvm::Value* digits = b_.CreateSIToFP(all, b_.getDoubleTy(), "fxc.fdigits");
-  llvm::Value* scale = b_.CreateSIToFP(pow10, b_.getDoubleTy(), "fxc.fscale");
+  // Convert an i256 magnitude to double with four native 64-bit limbs: the
+  // runtime link has no compiler-rt 256-bit FP helper.
+  llvm::Value* two64 = llvm::ConstantFP::get(b_.getDoubleTy(), 18446744073709551616.0);
+  auto magToDouble = [&](llvm::Value* v, const char* nm) {
+    llvm::Value* d = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
+    for (int limb = 3; limb >= 0; --limb) {
+      llvm::Value* sh = b_.CreateLShr(
+          v, llvm::ConstantInt::get(i256Ty, 64 * limb), std::string(nm) + ".sh");
+      llvm::Value* l = b_.CreateTrunc(sh, b_.getInt64Ty(), std::string(nm) + ".lo");
+      llvm::Value* ld = b_.CreateUIToFP(l, b_.getDoubleTy(), std::string(nm) + ".d");
+      d = b_.CreateFAdd(b_.CreateFMul(d, two64, std::string(nm) + ".mul"), ld,
+                        std::string(nm) + ".add");
+    }
+    return d;
+  };
+  llvm::Value* allNeg = b_.CreateICmpSLT(all, zero256, "fxc.fneg");
+  llvm::Value* allMag = b_.CreateSelect(
+      allNeg, b_.CreateSub(zero256, all, "fxc.fmag.neg"), all, "fxc.fmag");
+  llvm::Value* digits = magToDouble(allMag, "fxc.fdigits");
+  digits = b_.CreateSelect(allNeg, b_.CreateFNeg(digits, "fxc.fneg.d"), digits,
+                           "fxc.fsigned");
+  llvm::Value* scale = magToDouble(pow10, "fxc.fscale");
   Val v;
   v.ty = dst;
-  v.reg = b_.CreateFDiv(digits, scale, "fxc.fvalue");
+  llvm::Value* div = b_.CreateFDiv(digits, scale, "fxc.fvalue");
+  llvm::Value* mul = b_.CreateFMul(digits, scale, "fxc.fvalue.mul");
+  v.reg = b_.CreateSelect(negFrac, mul, div, "fxc.fvalue");
   return v;
 }
 
@@ -3496,7 +3662,14 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
     return;
   }
   b_.CreateCall(dispatch, {});
-  b_.CreateBr(okBB);
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
+  // code is non-zero; branch to the escape block instead of resuming at okBB.
+  // Only create escape blocks when the procedure can return a value or has a
+  // handler with GO TO; otherwise the extra CFG edges break SSA dominance.
+  if (curProc_->isFunction || hasHandlerGoto_)
+    emitEscapeCheck(okBB);
+  else
+    b_.CreateBr(okBB);
 }
 
 // UNDERFLOW (rule 94; ADR-326): a floating-point result whose magnitude is
@@ -3949,11 +4122,11 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
       if (t.isChar() && t.starLen)
         pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
     }
-    // An external character-valued function (rules (34),(37)) returns through
-    // a hidden result buffer like structures do: the caller allocates it and
-    // passes its address as the first argument, so the declaration is
-    // `void @NAME(ptr sret, ...)`.
-    if (sym->entryIsFunction && sym->entryRetTy.isChar()) {
+    // An external character- or structure-valued function (rules (34),(37))
+    // returns through a hidden result buffer like structures do: the caller
+    // allocates it and passes its address as the first argument, so the
+    // declaration is `void @NAME(ptr sret, ...)`.
+    if (sym->entryIsFunction && (sym->entryRetTy.isChar() || sym->entryRetTy.isStruct())) {
       std::vector<llvm::Type*> pt2 = pt;
       pt2.insert(pt2.begin(), b_.getPtrTy());
       llvm::FunctionType* ft2 = llvm::FunctionType::get(b_.getVoidTy(), pt2, false);
@@ -3974,11 +4147,12 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
     if (t.isChar() && t.starLen)
       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
   }
-  // An external character-valued function (rules (34),(37)) returns through a
-  // hidden result buffer like structures do; for PL/I callers outside this
-  // TU we cannot generate the buffer allocation site here, but the external
-  // declaration must match the callee's inter-procedure signature (ptr-first).
-  bool extChar = sym->entryIsFunction && sym->entryRetTy.isChar();
+  // An external character- or structure-valued function (rules (34),(37))
+  // returns through a hidden result buffer like structures do; for PL/I
+  // callers outside this TU we cannot generate the buffer allocation site
+  // here, but the external declaration must match the callee's inter-procedure
+  // signature (ptr-first).
+  bool extChar = sym->entryIsFunction && (sym->entryRetTy.isChar() || sym->entryRetTy.isStruct());
   std::vector<llvm::Type*> pt2 = pt;
   if (extChar) {
     // Emit the declaration with hidden-result-pointer semantics: the external
@@ -4138,8 +4312,9 @@ std::string IRGen::run(HProgram& prog) {
   declareOnHandlers(prog);
 
   // P6.1b (ADR-215): decide by-value parameters once for the whole program
-  // so declareProc, emitProc, and every call site agree on signatures.
-  computeByValueParams(prog);
+  // so declareProc, emitProc, and every call site agree on signatures. The
+  // same walk collects the D1 range-fact safety facts (ADR-365).
+  computeWholeProgramFacts(prog);
   // WS-A1 (ADR-264): what each procedure can do to memory. The decision layer
   // computes it (the plan's C2); the verdict reaches LLVM only as a function
   // attribute (the plan's C1).
@@ -4505,6 +4680,11 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
     // convert()'s FIXED -> FIXED path.
     if (t.k == TK::FixedBin) {
       v.reg = wideDecConstant(t, binLitRescaled(e, t));
+      // D1 (ADR-365): an INITIAL element is a conversion into the declared
+      // type, so it carries the same SIZE check as an assignment (ADR-282);
+      // the array and structure itemlists stored an out-of-range constant
+      // unchecked, which would make the declared range fact false.
+      v.reg = fixedBinPrecTrap(v.reg, t.prec);
       break;
     }
     // Wide DECIMAL literal (ADR-191): rescale the full i128 value, not the wrapped i64 truncation.
@@ -5257,8 +5437,9 @@ bool IRGen::stmtTakesAddr(HStmt* st, Symbol* s) const {
 // the parameter is a plain FIXED/FLOAT/POINTER scalar that no body in its
 // lexical subtree stores through or exposes the address of. By reference
 // is always sound, so every uncertainty keeps by reference.
-void IRGen::computeByValueParams(const HProgram& prog) {
+void IRGen::computeWholeProgramFacts(const HProgram& prog) {
   byValParam_.clear();
+  rangeUnsafe_.clear();
   // Lexical children for the subtree walk (nested bodies can reference an
   // outer parameter through a static link). HProc::src points back at the
   // AST procedure, which is what Symbol::proc references.
@@ -5278,6 +5459,19 @@ void IRGen::computeByValueParams(const HProgram& prog) {
   // all-pointer convention) and asynchronously-called procedures (the task
   // context packs addresses).
   std::unordered_set<const HProc*> addrTaken, asyncCalled;
+  // D1 (ADR-365): the storage a reference designates — a whole variable, an
+  // element or a qualified member all resolve to their root Symbol.
+  std::function<Symbol*(HExpr*)> rootOf = [&](HExpr* e) -> Symbol* {
+    if (!e)
+      return nullptr;
+    if ((e->kind == HExpr::VarRef || e->kind == HExpr::Subscript) && e->sym)
+      return e->sym;
+    // A pseudo-variable target writes its first argument's storage.
+    if (e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR") &&
+        !e->args.empty())
+      return rootOf(e->args[0].get());
+    return nullptr;
+  };
   std::function<void(HExpr*)> scanExpr;
   scanExpr = [&](HExpr* e) {
     if (!e)
@@ -5285,20 +5479,92 @@ void IRGen::computeByValueParams(const HProgram& prog) {
     if (e->kind == HExpr::VarRef && e->sym && e->sym->kind == Symbol::ProcName && e->sym->proc)
       if (const HProc* hp = hprocOf(e->sym->proc))
         addrTaken.insert(hp);
+    // D1 (ADR-365): an ADDR escapes, and a user call passes its actuals by
+    // reference — either way, storage another declaration can write without
+    // the declared-precision check carries no range fact.
+    if (e->kind == HExpr::Call && (e->name == "ADDR" || e->name == "BYADDR")) {
+      if (HExpr* t = e->args.empty() ? nullptr : e->args[0].get())
+        if (Symbol* s = rootOf(t))
+          rangeUnsafe_.insert(s);
+    }
+    if (e->kind == HExpr::Call && e->sym &&
+        (e->sym->kind == Symbol::ProcName || e->sym->isEntry || e->sym->isEntryVar))
+      for (auto& a : e->args)
+        if (Symbol* s = rootOf(a.get()))
+          rangeUnsafe_.insert(s);
     scanExpr(e->a.get());
     scanExpr(e->b.get());
     scanExpr(e->locPtr.get());
     for (auto& a : e->args)
       scanExpr(a.get());
   };
-  std::function<void(HStmt*)> scan;
-  scan = [&](HStmt* st) {
+  std::function<void(HStmt*, bool)> scan;
+  scan = [&](HStmt* st, bool noSize) {
     if (!st)
       return;
+    // The effective check state (ADR-110/320): a (NOSIZE) prefix covers its
+    // subtree, and CHECK(SIZE) clears the inherited disable there.
+    bool unchecked = st->chkSize ? false : (noSize || st->noSize);
+    // D1 (ADR-365): the root a target expression writes.
+    auto mark = [&](HExpr* e) {
+      if (Symbol* s = rootOf(e))
+        rangeUnsafe_.insert(s);
+    };
+    // A raw byte store bypasses the precision check whatever the prefix says.
+    auto markRaw = [&](HExpr* e) {
+      if (e && e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR"))
+        mark(e);
+    };
+    switch (st->kind) {
+    case HStmt::Assign:
+      // A (NOSIZE) assignment may leave the declared precision (ADR-282 opts
+      // in at the prefix), and a pseudo-variable target writes raw bytes.
+      if (unchecked) {
+        mark(st->target.get());
+        for (auto& t : st->extraTargets)
+          mark(t.get());
+      }
+      markRaw(st->target.get());
+      for (auto& t : st->extraTargets)
+        markRaw(t.get());
+      break;
+    case HStmt::Get:
+      // GET converts into its targets under the same check state.
+      if (unchecked)
+        for (auto& it : st->items)
+          mark(it.get());
+      for (auto& it : st->items)
+        markRaw(it.get());
+      break;
+    case HStmt::Declare:
+      // INITIAL is a conversion into the declared type (ADR-282), skipped
+      // under a (NOSIZE) prefix.
+      if (unchecked)
+        for (auto& d : st->decls)
+          if (d.sym && (d.init || d.initCall))
+            rangeUnsafe_.insert(d.sym);
+      break;
+    case HStmt::DoIter:
+      if (unchecked && st->sym)
+        rangeUnsafe_.insert(st->sym);
+      break;
+    case HStmt::Read:
+      // READ INTO writes the record's raw bytes, so the value need not be
+      // inside the declared precision at all.
+      mark(st->target.get());
+      break;
+    default:
+      break;
+    }
     if ((st->kind == HStmt::CallS) && (st->hasTaskOpt || st->eventRef || st->priorityExpr) &&
         st->sym && st->sym->proc)
       if (const HProc* hp = hprocOf(st->sym->proc))
         asyncCalled.insert(hp);
+    // D1 (ADR-365): a CALL passes each actual by reference.
+    if (st->kind == HStmt::CallS)
+      for (auto& a : st->args)
+        if (Symbol* s = rootOf(a.get()))
+          rangeUnsafe_.insert(s);
     scanExpr(st->target.get());
     scanExpr(st->value.get());
     scanExpr(st->cond.get());
@@ -5355,16 +5621,20 @@ void IRGen::computeByValueParams(const HProgram& prog) {
       scanExpr(d.init.get());
       scanExpr(d.initCall.get());
     }
-    scan(st->thenS.get());
-    scan(st->elseS.get());
-    scan(st->unit.get());
+    scan(st->thenS.get(), unchecked);
+    scan(st->elseS.get(), unchecked);
+    scan(st->unit.get(), unchecked);
     for (auto& b : st->body)
-      scan(b.get());
+      scan(b.get(), unchecked);
   };
-  for (auto& p : prog.procs) {
+  for (auto& p : prog.procs)
     for (auto& st : p->body)
-      scan(st.get());
-  }
+      scan(st.get(), false);
+  // A DEFINED overlay writes its base's storage through the overlay's own
+  // type, so the base carries no range fact (D1, ADR-365).
+  for (Symbol* sym : sema_.storage())
+    if (sym && sym->definedBase)
+      rangeUnsafe_.insert(sym->definedBase);
   // A DEFINED overlay stores through its base's cell, so a parameter that
   // is any overlay's base keeps by reference.
   std::unordered_set<Symbol*> overlayBase;
@@ -5732,6 +6002,18 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
+  // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks,
+  // which are created during statement emission (before emitOnHandlers runs).
+  procLabelBlocks_[p] = labelBlocks_;
+  // B4: check if any ON-unit in this procedure contains a GO TO statement; if
+  // not, skip creating goto escape blocks (their CFG edges to label blocks
+  // would break SSA dominance).
+  hasHandlerGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerGotoStmt(st.get())) {
+      hasHandlerGoto_ = true;
+      break;
+    }
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
@@ -5764,7 +6046,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // P6.1b (ADR-215): a by-value parameter keeps a frame cell holding the
   // entry value, so every address-taking path (static links, argAddr of a
   // nested call, DEFINED-free reads) keeps working unchanged. No store to
-  // the cell exists anywhere (proven by computeByValueParams), so reads see
+  // the cell exists anywhere (proven by computeWholeProgramFacts), so reads see
   // the entry value and the inliner sees an SSA argument after SROA.
   for (Symbol* s : p->paramSyms) {
     if (!isByValueParam(s))
@@ -5846,6 +6128,15 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
+  // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks.
+  procLabelBlocks_[p] = labelBlocks_;
+  // B4: check if any ON-unit in this procedure contains a GO TO statement.
+  hasHandlerGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerGotoStmt(st.get())) {
+      hasHandlerGoto_ = true;
+      break;
+    }
 
   std::vector<Symbol*> uni;
   auto push = [&](Symbol* s) {
@@ -6023,6 +6314,336 @@ static void collectOnStmts(HStmt* s, std::map<std::pair<int, int>, HStmt*>& out)
     collectOnStmts(b.get(), out);
 }
 
+// B4: scan for any GO TO statement in a statement tree.
+static bool hasGotoStmt(HStmt* s);
+
+// B4: scan the statement tree for an ON-unit whose unit contains a GO TO
+// statement. Used to decide whether goto escape blocks are needed.
+bool IRGen::hasHandlerGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::On && !s->isSystem && s->unit)
+    if (hasGotoStmt(s->unit.get()))
+      return true;
+  if (s->thenS && hasHandlerGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasHandlerGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasHandlerGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasHandlerGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
+// B4: scan for any GO TO statement in a statement tree.
+static bool hasGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Goto)
+    return true;
+  if (s->thenS && hasGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
+// B4: module-level escape globals for ON-unit non-local exit. Created lazily
+// on first use; shared across all procedures in the module. The handler stores
+// escape info here and returns void; the trap/signal dispatch reads it and
+// branches to the return-with-value or goto-label target.
+llvm::GlobalVariable* IRGen::escapeCodeGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeCode"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeCode");
+}
+llvm::GlobalVariable* IRGen::escapeRetKindGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetKind"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeRetKind");
+}
+llvm::GlobalVariable* IRGen::escapeRetI64Global() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetI64"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetI64");
+}
+llvm::GlobalVariable* IRGen::escapeRetF64Global() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetF64"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getDoubleTy(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "onEscapeRetF64");
+}
+llvm::GlobalVariable* IRGen::escapeRetBufGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetBuf"))
+    return g;
+  return new llvm::GlobalVariable(mod_,
+      llvm::ArrayType::get(b_.getInt8Ty(), 4096), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::Constant::getNullValue(llvm::ArrayType::get(b_.getInt8Ty(), 4096)),
+      "onEscapeRetBuf");
+}
+llvm::GlobalVariable* IRGen::escapeRetSizeGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeRetSize"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetSize");
+}
+llvm::GlobalVariable* IRGen::escapeLabelIdxGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeLabelIdx"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
+      llvm::GlobalValue::InternalLinkage,
+      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeLabelIdx");
+}
+
+// B4: inside a handler unit, RETURN(value) stores the converted value in the
+// escape globals and returns void from the handler. The trap/signal dispatch
+// later performs the actual procedure return from emitEscapeReturnBlock().
+// curRetTy_ is void inside the handler; use curProc_->retTy (the establishing
+// procedure's return type).
+void IRGen::emitEscapeReturn(Val v) {
+  const Type& rty = curProc_->retTy;
+  // v is already converted to rty by the caller.
+  if (rty.isStruct() || rty.isChar()) {
+    b_.CreateStore(i32(rty.isStruct() ? 2 : 3), escapeRetKindGlobal());
+    llvm::Value* sz =
+        i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(rty)));
+    b_.CreateStore(sz, escapeRetSizeGlobal());
+    llvm::Value* dst = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(), "esc.buf");
+    b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+  } else if (rty.k == TK::Float) {
+    b_.CreateStore(i32(1), escapeRetKindGlobal());
+    // Extend float to double if needed (float -> double is fpext).
+    llvm::Value* storeVal = v.reg;
+    if (storeVal->getType() != b_.getDoubleTy())
+      storeVal = b_.CreateFPExt(storeVal, b_.getDoubleTy(), "esc.fpext");
+    b_.CreateStore(storeVal, escapeRetF64Global());
+  } else {
+    // fixed, bit, pointer, etc.: widen/truncate to i64 and store.
+    b_.CreateStore(i32(0), escapeRetKindGlobal());
+    llvm::Value* storeVal = v.reg;
+    unsigned srcBits = storeVal->getType()->getIntegerBitWidth();
+    if (srcBits < 64)
+      storeVal = b_.CreateZExt(storeVal, b_.getInt64Ty(), "esc.zext");
+    else if (srcBits > 64)
+      storeVal = b_.CreateTrunc(storeVal, b_.getInt64Ty(), "esc.trunc");
+    b_.CreateStore(storeVal, escapeRetI64Global());
+  }
+  b_.CreateStore(i32(1), escapeCodeGlobal());
+  b_.CreateRetVoid();
+}
+
+// B4: inside a handler unit, GO TO stores the label index in the escape
+// globals and returns void from the handler. The dispatch later performs the
+// indirect branch from emitEscapeGotoBlock().
+void IRGen::emitEscapeGoto(HStmt* s) {
+  // Dense label index: position of the label in the establishing procedure's
+  // labelBlocks_ (saved as procLabelBlocks_[curProc_] before handler emission).
+  int idx = 0;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls) {
+    if (kv.first == s->name) {
+      b_.CreateStore(i32(idx), escapeLabelIdxGlobal());
+      b_.CreateStore(i32(2), escapeCodeGlobal());
+      b_.CreateRetVoid();
+      return;
+    }
+    ++idx;
+  }
+  // Should not happen: sema validated the label exists in this procedure.
+  d_.error(s->loc, "GO TO target label not found in this procedure", "(77)");
+  b_.CreateRetVoid();
+}
+
+// B4: after a handler returns at a trap or signal site, check the escape code.
+// Branch to resumeBB when zero; otherwise fall into the escape block which is
+// filled by the caller via emitEscapeReturnBlock / emitEscapeGotoBlock.
+// The goto escape block is only created when the procedure has an ON-unit
+// containing a GO TO statement; otherwise its CFG edges to label blocks would
+// break SSA dominance.
+void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
+  llvm::Value* esc = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc");
+  llvm::Value* none = b_.CreateICmpEQ(esc, i32(0), "esc.none");
+  llvm::BasicBlock* escBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+  b_.CreateCondBr(none, resumeBB, escBB);
+  b_.SetInsertPoint(escBB);
+  // Switch on the escape code; default is unreachable (should not happen).
+  llvm::BasicBlock* badBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
+  unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+  llvm::SwitchInst* sw = b_.CreateSwitch(esc, badBB, numCases);
+  llvm::BasicBlock* retBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
+  if (hasHandlerGoto_) {
+    llvm::BasicBlock* gotoBB =
+        llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
+    b_.SetInsertPoint(gotoBB);
+    emitEscapeGotoBlock();
+  }
+  b_.SetInsertPoint(badBB);
+  b_.CreateUnreachable();
+  // Fill the return-with-value block.
+  b_.SetInsertPoint(retBB);
+  emitEscapeReturnBlock();
+  // Continue insertion at the resume block (the fall-through target).
+  b_.SetInsertPoint(resumeBB);
+}
+
+// B4: return-with-value escape block. Mirrors the tail of emitReturn: finish
+// signal, handler-depth reset, ctl epilogue, then return the stored value.
+// A void procedure cannot RETURN a value (sema rejects it), so the escape
+// blocks here are dead code — generate unreachable to keep the module valid.
+void IRGen::emitEscapeReturnBlock() {
+  emitFinishSignal();
+  if (curOnDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnDepth_, "ondepth")});
+  emitCtlEpilogue();
+  if (curRetTy_.isVoid()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* kind = b_.CreateLoad(b_.getInt32Ty(), escapeRetKindGlobal(),
+                                    "esc.kind");
+  llvm::BasicBlock* intBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.int", curFn_);
+  llvm::BasicBlock* fltBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.flt", curFn_);
+  llvm::BasicBlock* strBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.str", curFn_);
+  llvm::BasicBlock* chrBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.chr", curFn_);
+  llvm::BasicBlock* badBB =
+      llvm::BasicBlock::Create(ctx_, "on.escape.ret.bad", curFn_);
+  llvm::SwitchInst* sw = b_.CreateSwitch(kind, badBB, 4);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(0)), intBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), fltBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), strBB);
+  sw->addCase(llvm::cast<llvm::ConstantInt>(i32(3)), chrBB);
+
+  b_.SetInsertPoint(intBB);
+  {
+    // kind 0 = integer/pointer return.
+    if (curRetTy_.isFixed() || curRetTy_.isBit() || curRetTy_.isPointer() ||
+        curRetTy_.isLocator()) {
+      llvm::Value* v64 = b_.CreateLoad(b_.getInt64Ty(), escapeRetI64Global(),
+                                       "esc.v.i64");
+      llvm::Type* retLLVM = llvmTy(curRetTy_);
+      llvm::Value* retVal = v64;
+      if (retLLVM->isIntegerTy()) {
+        unsigned retBits = retLLVM->getIntegerBitWidth();
+        if (retBits < 64)
+          retVal = b_.CreateTrunc(v64, retLLVM, "esc.trunc");
+        else if (retBits > 64)
+          retVal = b_.CreateZExt(v64, retLLVM, "esc.zext");
+      } else if (retLLVM->isPointerTy()) {
+        retVal = b_.CreateIntToPtr(v64, retLLVM, "esc.inttoptr");
+      }
+      b_.CreateRet(retVal);
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(fltBB);
+  {
+    // kind 1 = float return.
+    if (curRetTy_.k == TK::Float) {
+      llvm::Value* vd = b_.CreateLoad(b_.getDoubleTy(), escapeRetF64Global(),
+                                      "esc.v.f64");
+      llvm::Type* retLLVM = llvmTy(curRetTy_);
+      llvm::Value* retVal = vd;
+      if (retLLVM != b_.getDoubleTy())
+        retVal = b_.CreateFPTrunc(vd, retLLVM, "esc.fptrunc");
+      b_.CreateRet(retVal);
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(strBB);
+  {
+    // kind 2 = struct return.
+    if (curRetTy_.isStruct() && structRetPtr_) {
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
+                                      "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
+                                          "esc.buf");
+      llvm::Value* dst = structRetPtr_;
+      b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
+      b_.CreateRetVoid();
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(chrBB);
+  {
+    // kind 3 = char return.
+    if (curRetTy_.isChar() && structRetPtr_) {
+      // Character result: copy into the hidden result buffer, pad/truncate.
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
+                                      "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
+                                          "esc.buf");
+      storeCharTo(structRetPtr_, curRetTy_, Val{curRetTy_, nullptr, src, sz},
+                  SourceLoc{});
+      b_.CreateRetVoid();
+    } else {
+      b_.CreateUnreachable();
+    }
+  }
+  b_.SetInsertPoint(badBB);
+  b_.CreateUnreachable();
+}
+
+// B4: goto-label escape block. Restore the ON depth to the target's scope,
+// then indirect-branch to the label block selected by the stored index.
+void IRGen::emitEscapeGotoBlock() {
+  // Restore the handler's own depth (the unit was a block activation).
+  if (curOnUnitDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_,
+                                 "onunitdepth")});
+  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(),
+                                   "esc.idx");
+  llvm::Value* idx64 = b_.CreateZExt(idx, b_.getInt64Ty(), "esc.idx64");
+  // Build an indirect branch whose targets are every label block in this
+  // procedure. A select maps the dense index to a blockaddress.
+  std::vector<llvm::BasicBlock*> dests;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls)
+    dests.push_back(kv.second);
+  if (dests.empty()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* target = llvm::ConstantPointerNull::get(b_.getPtrTy());
+  for (size_t i = 0; i < dests.size(); ++i) {
+    llvm::Value* addr = llvm::BlockAddress::get(curFn_, dests[i]);
+    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"),
+                             addr, target, "esc.addr");
+  }
+  auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
+  for (llvm::BasicBlock* d : dests)
+    ib->addDestination(d);
+}
+
 void IRGen::declareOnHandlers(HProgram& prog) {
   std::map<std::pair<int, int>, HStmt*> byId;
   for (auto& p : prog.procs)
@@ -6082,6 +6703,10 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       inHandler_ = true;
       llvm::AllocaInst* savedDepth = curOnDepth_;
       curOnDepth_ = nullptr;
+      // B4: labelBlocks_ was already snapshotted into procLabelBlocks_[curProc_]
+      // by emitPlainProc/emitMultiEntryProc before statement emission; the
+      // handler emission below clears labelBlocks_ but must not overwrite the
+      // snapshot with an empty map.
       labelBlocks_.clear();
       labelBeginChain_.clear();
       labelElemInits_.clear();
@@ -6249,13 +6874,53 @@ void IRGen::emitSignal(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
   llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
   b_.CreateCall(hft, fn, {ctx});
-  if (s->condKey == 0)
-    b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
-  // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
-  // (ADR-333), which either runs an ERROR unit or takes the system action.
-  if (s->condKey == Stmt::kOverflowCondKey)
-    emitErrorRaise();
-  b_.CreateBr(resBB);
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
+  // code is non-zero; branch to the escape block instead of the normal resume
+  // path. Only create escape blocks when needed to avoid extraneous CFG edges.
+  if (curProc_->isFunction || hasHandlerGoto_) {
+    llvm::Value* escCode = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc.code");
+    llvm::Value* escNone = b_.CreateICmpEQ(escCode, i32(0), "esc.none");
+    llvm::BasicBlock* normalBB =
+        llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
+    llvm::BasicBlock* escBB =
+        llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+    b_.CreateCondBr(escNone, normalBB, escBB);
+    // Normal path: reset oncode, handle overflow, resume.
+    b_.SetInsertPoint(normalBB);
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+    // (ADR-333), which either runs an ERROR unit or takes the system action.
+    if (s->condKey == Stmt::kOverflowCondKey)
+      emitErrorRaise();
+    b_.CreateBr(resBB);
+    // Escape block: switch on the code and fill the return/goto targets.
+    b_.SetInsertPoint(escBB);
+    llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
+    unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+    llvm::SwitchInst* sw = b_.CreateSwitch(escCode, badBB, numCases);
+    llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
+    if (hasHandlerGoto_) {
+      llvm::BasicBlock* gotoBB = llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
+      sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
+      b_.SetInsertPoint(gotoBB);
+      emitEscapeGotoBlock();
+    }
+    b_.SetInsertPoint(badBB);
+    b_.CreateUnreachable();
+    b_.SetInsertPoint(retBB);
+    emitEscapeReturnBlock();
+    b_.SetInsertPoint(resBB);
+  } else {
+    if (s->condKey == 0)
+      b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(0)});
+    // IBM's normal-return rule for OVERFLOW: the returned unit raises ERROR
+    // (ADR-333), which either runs an ERROR unit or takes the system action.
+    if (s->condKey == Stmt::kOverflowCondKey)
+      emitErrorRaise();
+    b_.CreateBr(resBB);
+  }
   b_.SetInsertPoint(resBB);
 }
 
@@ -6438,6 +7103,26 @@ void IRGen::emitStmt(HStmt* s) {
     emitRecordDelete(s);
     break;
   case HStmt::Return: {
+    // B4: inside an ON-unit handler, RETURN does a non-local exit from the
+    // establishing procedure. A bare RETURN ends the unit and resumes after
+    // the SIGNAL; RETURN(value) returns the value from the procedure.
+    if (inHandler_) {
+      if (!s->value) {
+        // Bare RETURN ends the unit's activation (ADR-350); the dispatch
+        // resumes after the SIGNAL. Just return void from the handler — the
+        // trap/signal dispatch handles resume.
+        b_.CreateRetVoid();
+      } else {
+        // RETURN(value): convert to the establishing procedure's return type
+        // (curRetTy_ is void inside the handler; use curProc_->retTy), store
+        // in the escape globals, and return void from the handler.
+        const Type& rty = curProc_->retTy;
+        Val v = emitExpr(s->value.get());
+        Val rv = convert(v, rty, s->loc);
+        emitEscapeReturn(rv);
+      }
+      break;
+    }
     // FINISH (rule 94; ADR-322): an early return is the task procedure's
     // exit too, so the condition is raised here before the handler state goes.
     emitFinishSignal();
@@ -6538,6 +7223,20 @@ void IRGen::emitStmt(HStmt* s) {
     emitSignal(s);
     break;
   case HStmt::Goto:
+    // B4: inside an ON-unit handler, GO TO does a non-local exit to a label in
+    // the establishing procedure. Store the label index and return void from
+    // the handler; the dispatch performs the indirect branch.
+    if (inHandler_) {
+      if (s->gotoTarget) {
+        // Indirect GO TO (label variable) from a handler is not yet served.
+        d_.error(s->loc, "indirect GO TO inside an ON-unit is not implemented in this stage",
+                 "(91)");
+        b_.CreateRetVoid();
+      } else {
+        emitEscapeGoto(s);
+      }
+      break;
+    }
     // Rule (91) / Y33 block termination: a GO TO that leaves enclosing BEGIN
     // blocks reverts the handlers those blocks established, restoring the
     // depth saved at the outermost exited block's entry.
@@ -10986,25 +11685,32 @@ void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
   }
 }
 
-// Stamp !range on a FIXED BINARY(p) load (P3b): the declared precision bounds
-// the value to a signed p-bit range, narrower than the i32/i64 storage. LLVM
-// can then fold downstream overflow checks and narrow induction variables.
-// Guard: only when sizeChecks() is off — at -O2/-O3 the optimizer already
-// assumes no signed overflow, making the range fact consistent; with traps on
-// the trap blocks own overflow control and the range would be unsound.
-void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty) {
-  if (!load || ty.k != TK::FixedBin || sizeChecks())
+// Stamp !range on a FIXED BINARY(p) load (D1, ADR-365). The declared range is
+// [-2^p, 2^p-1] (ADR-282), and it is an invariant only where the SIZE check
+// enforces it at every write (ADR-252): a (NOSIZE) build stores values wider
+// than the declared precision, so no fact is emitted there. The fact is also
+// skipped where another declaration can write the storage — an overlay, a
+// locator, an escaped address, a raw UNSPEC store, a UNION sibling — because
+// those writes carry no check for this type. The predicate itself lives in the
+// decision layer so it can be read without a backend (the plan's C2).
+void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty, Symbol* root,
+                               const std::vector<unsigned>* memberPath) {
+  if (!load || ty.k != TK::FixedBin || noRangeFacts_)
     return;
   if (!load->getType()->isIntegerTy())
     return; // a whole array is copied; there is no scalar range to stamp
-  unsigned typeWidth = load->getType()->getIntegerBitWidth();
-  unsigned prec = ty.prec;
-  if (prec <= 0 || prec >= typeWidth)
-    return; // range fills the type — no narrowing
-  // Signed p-bit range: [-(2^(p-1)), 2^(p-1)-1]; LLVM range is half-open.
-  llvm::APInt lo = llvm::APInt::getSignedMinValue(prec).sextOrTrunc(typeWidth);
-  llvm::APInt hi = llvm::APInt::getSignedMaxValue(prec).sextOrTrunc(typeWidth);
-  hi += 1; // half-open upper bound, widened before increment to avoid prec-bit overflow
+  pli::RangeSite site;
+  site.storageBits = load->getType()->getIntegerBitWidth();
+  site.precisionChecked = sizeChecks();
+  site.privateStorage = root && curProc_ && !rangeUnsafe_.count(root) &&
+                        pli::aliasClass(root) == pli::AliasClass::Disjoint;
+  site.unionMember = root && memberPath && pathInUnion(root->ty, *memberPath);
+  pli::RangeFact f = pli::fixedBinRangeFact(ty.prec, site);
+  if (!f.emit)
+    return;
+  // The declared range ADR-282 defines: [-2^p, 2^p-1], half-open above.
+  llvm::APInt lo = llvm::APInt(site.storageBits, (uint64_t)f.lo, /*isSigned=*/true);
+  llvm::APInt hi = llvm::APInt(site.storageBits, (uint64_t)f.hi, /*isSigned=*/true);
   llvm::MDBuilder mdb(load->getContext());
   load->setMetadata(llvm::LLVMContext::MD_range, mdb.createRange(lo, hi));
 }
@@ -11043,7 +11749,7 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   }
    llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   annotateAlias(r, sym);
-  stampFixedBinRange(r, ty);
+  stampFixedBinRange(r, ty, sym);
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
@@ -11427,7 +12133,7 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
       arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-     stampFixedBinRange(cast<llvm::LoadInst>(r), el);
+     stampFixedBinRange(cast<llvm::LoadInst>(r), el, sym);
      if (el.isBit() && el.len == 1)
        v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
      else
@@ -11817,6 +12523,16 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     re.ty = Type::flt(6);
     re.reg = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
     return convert(re, dst, loc);
+  }
+  // real -> imaginary: (0, value), real part zeroed (ADR-364).
+  if (!v.ty.isComplex() && dst.isImaginary()) {
+    Val re = convert(v, Type::flt(6), loc);
+    llvm::Value* s =
+        llvm::UndefValue::get(llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getDoubleTy()}));
+    s = b_.CreateInsertValue(s, flt(0.0), 0, "cpx.re");
+    s = b_.CreateInsertValue(s, re.reg, 1, "cpx.im");
+    out.cpx = s;
+    return out;
   }
   if (!v.ty.isComplex() && dst.isComplex()) {
     Val re = convert(v, Type::flt(6), loc);
@@ -12588,7 +13304,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::LoadInst* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       if (packed)
         r->setAlignment(llvm::Align(1));
-      stampFixedBinRange(r, leaf);
+      stampFixedBinRange(r, leaf, e->sym, &e->memberPath);
       v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }
@@ -12653,7 +13369,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // argument, and return its address/length to the caller.
       std::vector<llvm::Value*> args;
       llvm::Value* sretPtr = nullptr;
-      if (rty.isChar()) {
+      if (rty.isChar() || rty.isStruct()) {
         sretPtr = sretAlloc(rty);
         args.push_back(sretPtr);
       }
@@ -12711,6 +13427,15 @@ Val IRGen::emitExpr(HExpr* e) {
           v.ptr = sretPtr;
           v.len = i64(rty.len);
         }
+        return v;
+      }
+      if (rty.isStruct()) {
+        // The structure result lives in the caller's buffer (the sret); the
+        // callee returns void, so the call carries no result value name.
+        b_.CreateCall(extFn, args);
+        flushVarWrites();
+        v.ty = rty;
+        v.ptr = sretPtr; // the result lives in the caller's buffer
         return v;
       }
       llvm::CallInst* call = b_.CreateCall(extFn, args, "fres");
@@ -13040,23 +13765,42 @@ Val IRGen::emitExpr(HExpr* e) {
                                         b.ty.isBit() ? Type::fixedBin(63, 0) : b.ty)
                       : e->ty;
   // Power always promotes to FLOAT (rule 121, CM5). Division stays in the
-  // type sema chose: FIXED for integer-valued operands (P3, ADR-190 — sdiv),
-  // FLOAT for non-integer operands (fdiv).
+  // type sema chose: FIXED for two FIXED operands (ADR-361/362), FLOAT when
+  // either operand is FLOAT.
   if (!isCmp && op == Tok::Power && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
-  const bool fixedDiv = op == Tok::Slash && common.isFixed() && a.ty.isFixed() &&
-                        b.ty.isFixed() && a.ty.k == b.ty.k;
+  const bool fixedDiv =
+      op == Tok::Slash && common.isFixed() && a.ty.isFixed() && b.ty.isFixed();
   if (fixedDiv) {
-    // Exact FIXED division (ADR-361): keep each operand's own scale so the raw
-    // integers divide directly. Rescaling both to the result scale first would
-    // round away the quotient digits the division is meant to produce.
-    Type wa = common;
-    wa.scale = a.ty.scale;
-    Type wb = common;
-    wb.scale = b.ty.scale;
+    // Exact FIXED division (ADR-361/362): keep each operand's own scale so the
+    // raw integers divide directly. Rescaling both to the result scale first
+    // would round away the quotient digits the division is meant to produce.
+    // A mixed pair converts the DECIMAL side to its binary view first (IBM
+    // Appendix 1), so the quotient is computed from the converted values.
+    Type wa = common, wb = common;
+    const bool mixed = a.ty.k != b.ty.k;
+    wa.scale = a.ty.k == TK::FixedDec && mixed
+                   ? std::min(62, decToBinScale(a.ty.scale))
+                   : a.ty.scale;
+    wb.scale = b.ty.k == TK::FixedDec && mixed
+                   ? std::min(62, decToBinScale(b.ty.scale))
+                   : b.ty.scale;
+    if (mixed) {
+      // The converted DECIMAL side is a BIN(p',q'); the binary side keeps its
+      // own declared precision, so the formula can use p1 below.
+      if (a.ty.k == TK::FixedDec)
+        wa.prec = decToBinDigits(a.ty.prec);
+      if (b.ty.k == TK::FixedDec)
+        wb.prec = decToBinDigits(b.ty.prec);
+    }
     av = convert(a, wa, e->loc);
     bv = convert(b, wb, e->loc);
+    // A converted operand narrower than its slot joins the i64 formula width.
+    if (av.reg->getType()->isIntegerTy(32))
+      av.reg = b_.CreateSExt(av.reg, b_.getInt64Ty(), "ai");
+    if (bv.reg->getType()->isIntegerTy(32))
+      bv.reg = b_.CreateSExt(bv.reg, b_.getInt64Ty(), "bi");
   } else if (op == Tok::Star && common.isFixed()) {
     // A product's scale is the sum of the operand scales (ADR-006); multiply
     // the raw scaled integers without first rescaling either operand.
@@ -13244,18 +13988,28 @@ Val IRGen::emitExpr(HExpr* e) {
       ZdivCheck zd = beginZerodivide(dz, fzero, Stmt::kZerodivideCondKey);
       llvm::Value* div = b_.CreateFDiv(av.reg, bv.reg, "bin");
       r = endZerodivide(zd, div);
-    } else if (fixedDiv) {
-      // Exact FIXED division (rule 121, ADR-361): the raw operands divide at
-      // the RULES(IBM) result scale, sdiv truncating toward zero. The divisor
-      // is zero-guarded before the sdiv so the compute block always divides by
-      // a non-zero value (rule 94).
+    } else {
+      // Exact FIXED division (rule 121, ADR-361/362): the raw operands divide
+      // at the RULES(IBM) result scale, sdiv truncating toward zero. A mixed
+      // pair already arrived as its binary view, so the formula uses the
+      // converted dividend precision p1. The divisor is zero-guarded before
+      // the sdiv so the compute block always divides by a non-zero value.
       const bool dec = common.k == TK::FixedDec;
       const int maxP = dec ? 31 : 63;
-      const int dq = maxP - a.ty.prec + a.ty.scale - b.ty.scale;
+      int p1 = a.ty.prec, q1 = a.ty.scale, q2 = b.ty.scale;
+      if (!dec) {
+        if (a.ty.k == TK::FixedDec) {
+          p1 = decToBinDigits(a.ty.prec);
+          q1 = std::min(62, decToBinScale(a.ty.scale));
+        }
+        if (b.ty.k == TK::FixedDec)
+          q2 = std::min(62, decToBinScale(b.ty.scale));
+      }
+      const int dq = maxP - p1 + q1 - q2;
       // A_raw * base^(maxp - p1) is the exact quotient numerator; it fits the
       // result width because |A_raw| < base^p1.
       llvm::Value* ai = av.reg;
-      int up = maxP - a.ty.prec;
+      int up = maxP - p1;
       if (up > 0)
         ai = dec ? b_.CreateMul(ai, i128(pliPow10_128(up)), "dnum")
                  : b_.CreateMul(ai, i64(1LL << up), "dnum");
@@ -13288,48 +14042,6 @@ Val IRGen::emitExpr(HExpr* e) {
         }
       }
       r = qv;
-    } else {
-      // Mixed-base integer division (the B11 tail): two scale-0 operands of
-      // different bases keep the old FIXED path. sdiv truncates toward zero,
-      // matching PL/I's FIXED division semantics (rule 121). Operands widened
-      // so CreateSDiv is well-defined (32-bit sdiv has narrower range); widened
-      // to i64 normally, i128 for a wide (>18 digit) DECIMAL common (ADR-191).
-      // ZERODIVIDE (rule 94): a zero divisor traps, resuming with 0 — guarded
-      // by branching before the sdiv so the divisor is provably non-zero in the
-      // compute block (no safe-divisor select on the hot path, rule 94).
-      bool wide = common.intBits() == 128; // ADR-191
-      // Operands widened to the division width (i64, or i128 for a wide
-      // >18-digit DECIMAL common) so CreateSDiv is well-defined and so the ICmp
-      // zero-divide guard compares same-width values. av/bv are already
-      // converted to `common`, so widen only when their storage is narrower.
-      llvm::Type* wty = wide ? b_.getInt128Ty() : b_.getInt64Ty();
-      unsigned wbits = wide ? 128 : 64;
-      llvm::Value* ai = (av.reg->getType()->getIntegerBitWidth() == wbits)
-                            ? av.reg
-                            : b_.CreateSExt(av.reg, wty, "ai");
-      llvm::Value* bi = (bv.reg->getType()->getIntegerBitWidth() == wbits)
-                            ? bv.reg
-                            : b_.CreateSExt(bv.reg, wty, "bi");
-      llvm::Value* z0 = wide ? i128(0) : i64(0);
-      llvm::Value* q;
-      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(bi)) {
-        if (ci->isZero()) {
-          q = zerodivideResume(b_.getTrue(), z0, z0);
-        } else {
-          q = b_.CreateSDiv(ai, bi, "bin");
-        }
-      } else {
-        // Branch-then-compute: sdiv only runs when the divisor is non-zero,
-        // eliminating the safe-divisor select from the hot path (T1a).
-        llvm::Value* dz = b_.CreateICmpEQ(bi, z0, "zdiv");
-        ZdivCheck zd = beginZerodivide(dz, z0, Stmt::kZerodivideCondKey);
-        q = b_.CreateSDiv(ai, bi, "bin");
-        q = endZerodivide(zd, q);
-      }
-      if (wide)
-        r = q; // already at common's i128 width and scale
-      else
-        r = convert(Val{Type::fixedBin(63, 0), q}, common, e->loc).reg;
     }
     break;
   }

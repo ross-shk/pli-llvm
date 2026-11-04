@@ -1,0 +1,5 @@
+CHECK: define {{.*}}@PLI_TEST
+CHECK-NOT: !range
+CHECK: define {{.*}}@LEAKER
+CHECK-NOT: !range
+CHECK: define i32 @main

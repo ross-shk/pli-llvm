@@ -80,6 +80,9 @@ IR_BENCHMARKS = [
 
 LANG_BENCHMARKS = [
     ("checks_on",     "lang/checks_on.pli",     "lang/baseline/checks_on_c.c"),
+    # D1 (ADR-365): every hot item is narrower than its slot, so the declared
+    # range fact is what lets LLVM fold the storage-width overflow checks.
+    ("fixed_narrow",  "lang/fixed_narrow.pli",  "lang/baseline/fixed_narrow_c.c"),
     ("on_dispatch",   "lang/on_dispatch.pli",   "lang/baseline/on_dispatch_c.c"),
     ("decimal_scale", "lang/decimal_scale.pli", "lang/baseline/decimal_scale_c.c"),
     ("bit_fields",    "lang/bit_fields.pli",    "lang/baseline/bit_fields_c.c"),
@@ -136,6 +139,14 @@ PAIRS = [
      ["--subscript-checks"]),
     ("checks_on", "check-free", [], "size-checks",
      ["--size-checks"]),
+    # D1 (ADR-365): the same two ratios for a narrow precision. The 15-bit
+    # item lives in an i32 slot, so the declared range is a real fact and the
+    # storage-width checks are the ones it can fold. The last pair is the
+    # fact itself: same flags on both sides but --no-range-facts on B.
+    ("fixed_narrow", "check-free", [], "size-checks",
+     ["--size-checks"]),
+    ("fixed_narrow", "range-facts", ["--size-checks"], "no-range-facts",
+     ["--size-checks", "--no-range-facts"]),
     # WS-A1 (ADR-264): what the inferred procedure memory effects are worth.
     # The same program, once with the inference and once with
     # --no-memory-effects, so every call keeps LLVM's default effects.
@@ -287,6 +298,7 @@ CHECKS = {
     # The PL/I-language corpus: exact parity with the C twin (both are
     # exact integer or fixed-point arithmetic, never floating point).
     "checks_on":        {"min_ms_O2": 50, "float_tol": False},
+    "fixed_narrow":     {"min_ms_O2": 50, "float_tol": False},
     "on_dispatch":      {"min_ms_O2": 50, "float_tol": False},
     "decimal_scale":    {"min_ms_O2": 50, "float_tol": False},
     "bit_fields":       {"min_ms_O2": 50, "float_tol": False},

@@ -419,14 +419,14 @@ zero in the one-argument form; a complex value with `p`/`q` is rejected.
 Complex values are carried as a `{double,double}` pair, so the fixed/float
 distinction is not represented separately.
 
-A character source now parses a fractional value: a binary target truncates
-toward zero and a decimal target rounds half away from zero. For example,
-`fixed('3.75', 8, 2)` gives binary `3.75`, while `fixeddec('1.5', 5, 0)`
-gives `2.00`.
+A character source now parses a fractional value, with an optional exponent:
+a binary target truncates toward zero and a decimal target rounds half away
+from zero. For example, `fixed('3.75', 8, 2)` gives binary `3.75`, while
+`fixeddec('1.5', 5, 0)` gives `2.00`. `fixed('1e3')` is `1000`, and
+`float('1.5e-2')` is `0.015`. An exponent-adjusted scale beyond `+/-76`
+places raises `CONVERSION`.
 
-**Limitations** — `FIXED` of a `BIT` argument is an error. Exponent text
-such as `'1e3'` raises `CONVERSION` instead of being parsed; `FLOAT(char)`
-uses the same fractional parser.
+**Limitations** — `FIXED` of a `BIT` argument is an error.
 
 ### `FIXEDBIN(x[,p[,q]])` / `FIXEDDEC(x[,p[,q]])`
 
@@ -451,9 +451,9 @@ d = fixeddec(3.5, 6, 1);    /* d is 3.50 */
 b = fixedbin('123');        /* b is 123 */
 ```
 
-Character input parses a decimal point. The conversion uses the target base:
-binary targets truncate toward zero, decimal targets round half away from
-zero. Exponent text raises `CONVERSION`.
+Character input parses a decimal point and an optional exponent. The
+conversion uses the target base: binary targets truncate toward zero, decimal
+targets round half away from zero.
 
 ### `FLOAT(x[,p])` → `FLOAT(p)`
 
@@ -469,8 +469,9 @@ f = float(3, 6);                  /* FLOAT(6) */
 ```
 
 Character text follows the same parser as the fixed conversions: leading
-blanks, one optional sign, digits, and at most one decimal point. Exponent
-text raises `CONVERSION`.
+blanks, one optional sign, digits, at most one decimal point, and an optional
+exponent. An exponent-adjusted scale beyond `+/-76` places raises
+`CONVERSION`.
 
 ---
 
