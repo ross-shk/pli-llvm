@@ -1,0 +1,63 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (100),(101),(112),(113): keyed/direct record I/O — WRITE/READ/REWRITE
+    DELETE addressed by KEY/KEYTO/KEYFROM against a KEYED file; the host format
+    is a fixed-size binary .dat plus a .kix key sidecar (ADR-367). */
+ keyed_record: procedure options(main);
+    declare f file;
+    declare rk char(8);
+    declare rec char(16);
+
+    /* Phase 1: write four records by KEY; OUTPUT creates the file. */
+    open file(f) record keyed output
+       title('tests/core/out/keyed_record.dat');
+    rk = 'K001   '; rec = 'record one   '; write file(f) from(rec) key(rk);
+    rk = 'K002   '; rec = 'record two   '; write file(f) from(rec) key(rk);
+    rk = 'K003   '; rec = 'record three '; write file(f) from(rec) key(rk);
+    rk = 'K004   '; rec = 'record four  '; write file(f) from(rec) key(rk);
+    close file(f);
+
+    /* Phase 2: read back by KEY; KEYTO receives the key read. */
+    open file(f) record keyed input
+       title('tests/core/out/keyed_record.dat');
+    rk = 'K003   '; read file(f) into(rec) key(rk) keyto(rk);
+    if rec ^= 'record three ' then do;
+       put skip list('FAIL keyed read k003 got', rec);
+       stop;
+    end;
+    rk = 'K001   '; read file(f) into(rec) key(rk) keyto(rk);
+    if rec ^= 'record one   ' then do;
+       put skip list('FAIL keyed read k001 got', rec);
+       stop;
+    end;
+    close file(f);
+
+    /* Phase 3: rewrite K002 and delete K004 via KEYFROM; UPDATE opens the
+       existing keyed file read-write so REWRITE/DELETE can act in place. */
+    open file(f) record keyed update
+       title('tests/core/out/keyed_record.dat');
+    rk = 'K002   '; rec = 'record two-x '; rewrite file(f) from(rec) keyfrom(rk);
+    rk = 'K004   '; delete file(f) keyfrom(rk);
+    close file(f);
+
+    /* Phase 4: verify final contents K001, K002-x, K003. */
+    open file(f) record keyed input
+       title('tests/core/out/keyed_record.dat');
+    rk = 'K001   '; read file(f) into(rec) key(rk) keyto(rk);
+    if rec ^= 'record one   ' then do;
+       put skip list('FAIL final k001 got', rec);
+       stop;
+    end;
+    rk = 'K002   '; read file(f) into(rec) key(rk) keyto(rk);
+    if rec ^= 'record two-x ' then do;
+       put skip list('FAIL final k002 got', rec);
+       stop;
+    end;
+    rk = 'K003   '; read file(f) into(rec) key(rk) keyto(rk);
+    if rec ^= 'record three ' then do;
+       put skip list('FAIL final k003 got', rec);
+       stop;
+    end;
+    close file(f);
+    put skip list('PASS keyed_record');
+ end keyed_record;

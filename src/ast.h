@@ -309,6 +309,20 @@ struct Stmt {
                            // read and write in place (REWRITE/DELETE)
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
                            // file; READ/WRITE transfer fixed-size binary records
+  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
+                           // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
+                           // KEYTO/KEYFROM to address records by key
+  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
+                           // direct organisation; same keyed access as KEYED
+  // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
+  // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
+  // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE). NOLOCK/SET/LOCATE
+  // stay diagnosed with rule (113).
+  ExprP keyOpt = nullptr;    // KEY( expression )
+  ExprP keyToOpt = nullptr;  // KEYTO( variable )
+  ExprP keyFromOpt = nullptr;// KEYFROM( expression )
+  bool keyNoLock = false;    // NOLOCK option (diagnosed (113))
+  bool keySet = false;       // SET option (diagnosed (113))
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.

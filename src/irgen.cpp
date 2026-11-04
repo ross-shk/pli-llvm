@@ -7099,16 +7099,28 @@ void IRGen::emitStmt(HStmt* s) {
     emitClose(s);
     break;
   case HStmt::Read:
-    emitRecordRead(s);
+    if (s->fileSym && (s->fileSym->openKeyed || s->fileSym->openDirect))
+      emitRecordReadKeyed(s);
+    else
+      emitRecordRead(s);
     break;
   case HStmt::Write:
-    emitRecordWrite(s);
+    if (s->fileSym && (s->fileSym->openKeyed || s->fileSym->openDirect))
+      emitRecordWriteKeyed(s);
+    else
+      emitRecordWrite(s);
     break;
   case HStmt::Rewrite:
-    emitRecordRewrite(s);
+    if (s->fileSym && (s->fileSym->openKeyed || s->fileSym->openDirect))
+      emitRecordRewriteKeyed(s);
+    else
+      emitRecordRewrite(s);
     break;
   case HStmt::Delete:
-    emitRecordDelete(s);
+    if (s->fileSym && (s->fileSym->openKeyed || s->fileSym->openDirect))
+      emitRecordDeleteKeyed(s);
+    else
+      emitRecordDelete(s);
     break;
   case HStmt::Return: {
     // B4: inside an ON-unit handler, RETURN does a non-local exit from the
@@ -8733,6 +8745,14 @@ void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
   llvm::Value* name = globalString(s->openTitle);
   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
+  if (s->openKeyed || s->openDirect) {
+    // Keyed/direct organisation: open the data file and load the .kix sidecar.
+    b_.CreateCall(
+        runtimeFn("pli_file_open_keyed"),
+        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+         i64(f->fileNonprint ? 1 : 0), i64(1)});
+    return;
+  }
    b_.CreateCall(
        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
@@ -8796,6 +8816,124 @@ void IRGen::emitRecordRewrite(HStmt* s) {
 // rest of the file down so the next READ sees the following record.
 void IRGen::emitRecordDelete(HStmt* s) {
   b_.CreateCall(runtimeFn("pli_record_delete"), {fileSlotValue(s->fileSym)});
+}
+
+// Keyed/direct record I/O (rules (112),(113)): the key (KEY/KEYFROM) and the
+// key-receiver (KEYTO) are CHARACTER non-varying; sema has already validated
+// the types and that the file was opened KEYED/DIRECT.
+
+// WRITE ... KEY(k): append the record and index it by key.
+void IRGen::emitRecordWriteKeyed(HStmt* s) {
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+  Val v = emitExpr(s->value.get());
+  Val k = emitExpr(s->keyOpt.get());
+  switch (v.ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_fixed"),
+                  {slot, k.ptr, k.len, toI64(v)});
+    break;
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_float"),
+                  {slot, k.ptr, k.len, v.reg});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_bit"),
+                  {slot, k.ptr, k.len, bit});
+    break;
+  }
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_char"),
+                  {slot, k.ptr, k.len, v.ptr, v.len});
+    break;
+  default:
+    break; // other types are diagnosed by sema
+  }
+}
+
+// READ ... KEY(k) [KEYTO(kv)]: look up the key in the sidecar, read the record,
+// and (for KEYTO) store the search key into the KEYTO variable.
+void IRGen::emitRecordReadKeyed(HStmt* s) {
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+  HExpr* t = s->target.get();
+  const Type& ty = t->ty;
+  Val k = emitExpr(s->keyOpt.get());
+  Val v;
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
+    v.ty = Type::fixedBin(63, 0);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Float:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
+    v.ty = Type::flt(6);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Bit: {
+    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
+    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+    v.ty = Type::bit();
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  case TK::Char: {
+    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+    b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
+                  {slot, k.ptr, k.len, buf, i64(ty.len)});
+    v.ptr = buf;
+    v.len = i64(ty.len);
+    v.ty = ty;
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  default:
+    break; // other types are diagnosed by sema
+  }
+  // KEYTO( variable ): copy the search key into the KEYTO target.
+  if (s->keyToOpt) {
+    Val kt = emitExpr(s->keyToOpt.get());
+    storeCharTo(kt.ptr, kt.ty, k, s->loc);
+  }
+}
+
+// REWRITE ... KEYFROM(k): look up the key, rewrite the record in place.
+void IRGen::emitRecordRewriteKeyed(HStmt* s) {
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+  Val v = emitExpr(s->value.get());
+  Val k = emitExpr(s->keyFromOpt.get());
+  switch (v.ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_fixed"),
+                  {slot, k.ptr, k.len, toI64(v)});
+    break;
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_float"),
+                  {slot, k.ptr, k.len, v.reg});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_bit"),
+                  {slot, k.ptr, k.len, bit});
+    break;
+  }
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_char"),
+                  {slot, k.ptr, k.len, v.ptr, v.len});
+    break;
+  default:
+    break; // other types are diagnosed by sema
+  }
+}
+
+// DELETE ... KEYFROM(k): look up the key, remove the record, shift the tail.
+void IRGen::emitRecordDeleteKeyed(HStmt* s) {
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+  Val k = emitExpr(s->keyFromOpt.get());
+  b_.CreateCall(runtimeFn("pli_record_delete_keyed"), {slot, k.ptr, k.len});
 }
 
 // READ (rules (112),(113)): consume one fixed-size binary record into a plain

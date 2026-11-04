@@ -4554,6 +4554,31 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (t->ty.isVoid() || t->ty.isArray() || t->ty.isStruct() || t->ty.isPointer() ||
         t->ty.isComplex() || (t->ty.isChar() && t->ty.varying))
       d_.error(s->loc, "READ INTO of this type is not implemented in this stage", "(112)");
+    // Key options (rules (112),(113)): require a keyed/direct open; key must be
+    // non-varying CHARACTER; KEYTO target a CHARACTER variable; NOLOCK/SET deferred.
+    if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
+      if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
+        d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
+    if (s->keyOpt) {
+      typeExpr(s->keyOpt.get(), sc, p);
+      Expr* k = s->keyOpt.get();
+      if (!k || !k->ty.isChar() || k->ty.varying)
+        d_.error(s->loc, "KEY must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyToOpt) {
+      typeExpr(s->keyToOpt.get(), sc, p);
+      Expr* kt = s->keyToOpt.get();
+      if (!kt || kt->kind != Expr::VarRef || !kt->sym || !kt->ty.isChar() || kt->ty.varying)
+        d_.error(s->loc, "KEYTO requires a non-varying CHARACTER variable", "(113)");
+    }
+    if (s->keyFromOpt) {
+      typeExpr(s->keyFromOpt.get(), sc, p);
+      Expr* kf = s->keyFromOpt.get();
+      if (!kf || !kf->ty.isChar() || kf->ty.varying)
+        d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyNoLock || s->keySet)
+      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
     break;
   }
   case Stmt::Write:
@@ -4573,6 +4598,31 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (!v || v->ty.isVoid() || v->ty.isArray() || v->ty.isStruct() || v->ty.isPointer() ||
         v->ty.isComplex() || (v->ty.isChar() && v->ty.varying))
       d_.error(s->loc, verb + " FROM of this type is not implemented in this stage", "(112)");
+    // Key options (rules (112),(113)): require a keyed/direct open; key must be
+    // non-varying CHARACTER; KEYFROM source a CHARACTER expression; NOLOCK/SET deferred.
+    if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
+      if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
+        d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
+    if (s->keyOpt) {
+      typeExpr(s->keyOpt.get(), sc, p);
+      Expr* k = s->keyOpt.get();
+      if (!k || !k->ty.isChar() || k->ty.varying)
+        d_.error(s->loc, "KEY must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyToOpt) {
+      typeExpr(s->keyToOpt.get(), sc, p);
+      Expr* kt = s->keyToOpt.get();
+      if (!kt || kt->kind != Expr::VarRef || !kt->sym || !kt->ty.isChar() || kt->ty.varying)
+        d_.error(s->loc, "KEYTO requires a non-varying CHARACTER variable", "(113)");
+    }
+    if (s->keyFromOpt) {
+      typeExpr(s->keyFromOpt.get(), sc, p);
+      Expr* kf = s->keyFromOpt.get();
+      if (!kf || !kf->ty.isChar() || kf->ty.varying)
+        d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyNoLock || s->keySet)
+      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
     break;
   }
   case Stmt::Delete: {
@@ -4583,6 +4633,31 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       break;
     }
     s->fileSym = rsym;
+    // Key options (rules (112),(113)): require a keyed/direct open; KEYFROM must
+    // be non-varying CHARACTER; NOLOCK/SET deferred.
+    if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
+      if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
+        d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
+    if (s->keyOpt) {
+      typeExpr(s->keyOpt.get(), sc, p);
+      Expr* k = s->keyOpt.get();
+      if (!k || !k->ty.isChar() || k->ty.varying)
+        d_.error(s->loc, "KEY must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyToOpt) {
+      typeExpr(s->keyToOpt.get(), sc, p);
+      Expr* kt = s->keyToOpt.get();
+      if (!kt || kt->kind != Expr::VarRef || !kt->sym || !kt->ty.isChar() || kt->ty.varying)
+        d_.error(s->loc, "KEYTO requires a non-varying CHARACTER variable", "(113)");
+    }
+    if (s->keyFromOpt) {
+      typeExpr(s->keyFromOpt.get(), sc, p);
+      Expr* kf = s->keyFromOpt.get();
+      if (!kf || !kf->ty.isChar() || kf->ty.varying)
+        d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
+    }
+    if (s->keyNoLock || s->keySet)
+      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
     break;
   }
   case Stmt::Allocate:
@@ -4963,6 +5038,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   case Stmt::Close:
     // OPEN/CLOSE FILE ( f ) (rules 100-103): f must be a declared FILE variable.
     checkFileTarget(s, sc);
+    // Propagate the open organisation to the file symbol so record I/O can check it.
+    if (s->kind == Stmt::Open && s->fileSym) {
+      s->fileSym->openRecord = s->openRecord;
+      s->fileSym->openKeyed = s->openKeyed;
+      s->fileSym->openDirect = s->openDirect;
+    }
     break;
   case Stmt::Goto:
     // Direct GO TO label: target must be a label in this procedure (rules (64),(77)).

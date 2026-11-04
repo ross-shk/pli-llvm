@@ -413,6 +413,13 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->openInput = s->openInput;
   h->openUpdate = s->openUpdate;
   h->openRecord = s->openRecord;
+  h->openKeyed = s->openKeyed;
+  h->openDirect = s->openDirect;
+  h->keyOpt = lowerExpr(s->keyOpt.get());
+  h->keyToOpt = lowerExpr(s->keyToOpt.get());
+  h->keyFromOpt = lowerExpr(s->keyFromOpt.get());
+  h->keyNoLock = s->keyNoLock;
+  h->keySet = s->keySet;
   h->replyTarget = lowerExpr(s->replyTarget.get());
 
   // CALL statement arguments: coerce to the callee's parameter types.

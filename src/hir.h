@@ -229,6 +229,15 @@ struct HStmt {
   bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112))
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
 
+  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
+  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
+  // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
+  HExprP keyOpt = nullptr;    // KEY( expression )
+  HExprP keyToOpt = nullptr;  // KEYTO( variable )
+  HExprP keyFromOpt = nullptr;// KEYFROM( expression )
+  bool keyNoLock = false;     // NOLOCK option (diagnosed (113))
+  bool keySet = false;        // SET option (diagnosed (113))
+
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   HExprP replyTarget;

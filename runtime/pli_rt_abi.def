@@ -261,6 +261,26 @@ PLI_FN(pli_record_read_float, DOUBLE, (I64))
 PLI_FN(pli_record_read_char, VOID, (I64, PTR, I64))
 PLI_FN(pli_record_read_bit, I8, (I64))
 
+/* KEYED/DIRECT RECORD files (rules (112),(113), ADR-366): the data file holds
+ * fixed-size binary records; a <name>.kix sidecar maps key -> (offset, length).
+ * pli_file_open_keyed opens the data file and loads the sidecar; writes append
+ * and index, reads look up the key, rewrites update in place, deletes shift the
+ * tail; the sidecar is rewritten on close. Mode 0 = INPUT, 1 = OUTPUT, 2 = UPDATE. */
+PLI_FN(pli_file_open_keyed, VOID, (I64, CPTR, I64, I64, I64, I64))  /* slot, name, namelen, mode, nonprint, keyed=1 */
+PLI_FN(pli_record_write_keyed_fixed, VOID, (I64, PTR, I64, I64))     /* slot, keyptr, keylen, value */
+PLI_FN(pli_record_write_keyed_float, VOID, (I64, PTR, I64, DOUBLE))
+PLI_FN(pli_record_write_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, valueptr, valuelen */
+PLI_FN(pli_record_write_keyed_bit, VOID, (I64, PTR, I64, I8))
+PLI_FN(pli_record_rewrite_keyed_fixed, VOID, (I64, PTR, I64, I64))   /* REWRITE in place at keyed offset */
+PLI_FN(pli_record_rewrite_keyed_float, VOID, (I64, PTR, I64, DOUBLE))
+PLI_FN(pli_record_rewrite_keyed_char, VOID, (I64, PTR, I64, PTR, I64))
+PLI_FN(pli_record_rewrite_keyed_bit, VOID, (I64, PTR, I64, I8))
+PLI_FN(pli_record_delete_keyed, VOID, (I64, PTR, I64))               /* DELETE by key: shift tail, truncate */
+PLI_FN(pli_record_read_keyed_fixed, I64, (I64, PTR, I64))
+PLI_FN(pli_record_read_keyed_float, DOUBLE, (I64, PTR, I64))
+PLI_FN(pli_record_read_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, buf, buflen */
+PLI_FN(pli_record_read_keyed_bit, I8, (I64, PTR, I64))
+
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT completion flags are i32
  * words (0 incomplete, 1 complete) owned by PL/I variables; the runtime
  * serialises them behind one mutex+cond. TASK handles are opaque ids. */

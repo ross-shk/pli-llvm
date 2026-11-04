@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (113): KEY must be a non-varying CHARACTER expression; FIXED BINARY
+    is rejected. */
+ bad_keyed_type: procedure options(main);
+    declare f file;
+    declare x fixed binary(31);
+    open file(f) record keyed output
+       title('tests/core/out/bad_keyed_type.dat');
+    write file(f) from(x) key(x);
+ end bad_keyed_type;

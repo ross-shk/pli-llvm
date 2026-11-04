@@ -377,6 +377,10 @@ private:
   void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
   void emitRecordRewrite(HStmt* s); // REWRITE (rule (112)): replace the current record
   void emitRecordDelete(HStmt* s);  // DELETE (rule (112)): remove the current record
+  void emitRecordReadKeyed(HStmt* s);   // READ ... KEY(k) [KEYTO(kv)]
+  void emitRecordWriteKeyed(HStmt* s);  // WRITE ... KEY(k)
+  void emitRecordRewriteKeyed(HStmt* s);// REWRITE ... KEYFROM(k)
+  void emitRecordDeleteKeyed(HStmt* s); // DELETE ... KEYFROM(k)
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is

@@ -13864,3 +13864,53 @@ than the library call for every shape the repo supports, so no call site
 honestly prefers the library; the predicate returns true (inline) for all
 non-constant call sites and the library path remains available only through
 `--experimental-lowering=runtime` or operations with no LLVM expansion.
+
+## ADR-367 — Keyed/direct record I/O host format: `.dat` data file + `.kix` sidecar
+
+**Context.** DEFERRED-WORK row B7 serves keyed/direct record I/O (TR 25.084
+rules (100)–(105),(112),(113)): `OPEN FILE ( f ) RECORD KEYED|DIRECT`, and
+`KEY( )`/`KEYTO( )`/`KEYFROM( )` on READ/WRITE/REWRITE/DELETE. IBM keyed files
+are not portable across hosts (index blocks, embedded keys, ESDS/KSDS layouts),
+so the implementation needs a host-defined on-disk format. Decision 3
+(DEFERRED-WORK "Open decisions") was left open pending this choice.
+
+**Decision.** A keyed file is a pair of host files:
+* `<name>.dat` — fixed-size binary records, same layout as `RECORD SEQUENTIAL`
+  (ADR-101/286). Records are appended on WRITE, overwritten in place on
+  REWRITE, and removed by shifting the tail down on DELETE.
+* `<name>.kix` — a sidecar index mapping key → (offset, length). Format:
+  magic `PLIKIX` (6 bytes), entry count (i64), then per entry: keylen (i64),
+  key bytes, off (i64), len (i64). The index is loaded at open, held in
+  memory, and rewritten on close when dirty. Entries are sorted by offset in
+  the saved sidecar; lookups use linear search in memory (MVP; a later row may
+  replace it with a sorted/binary index).
+
+**Behavior.** `WRITE ... KEY(k)` appends the record and inserts `k → (off, len)`
+into the index; a duplicate key raises ERROR via `pli_signal_error` (no silent
+overwrite, consistent with fixed-record uniqueness). `READ ... KEY(k)` looks up
+`k`, seeks to `off`, reads `len` bytes. `REWRITE ... KEYFROM(k)` looks up `k`
+and overwrites in place (size must match, else ERROR). `DELETE ... KEYFROM(k)`
+looks up `k`, shifts the tail down and truncates, then removes the index entry
+and adjusts the offsets of subsequent entries. `KEYTO( kv )` on READ copies the
+search key into `kv`.
+
+**Scope.** `LOCATE`/`SET`/`EVENT`/`NOLOCK` are diagnosed with rule (113) and
+deferred. Variable-length records and `UPDATE` mode on keyed files are out of
+scope for the MVP. Sidecar crash consistency (a crash between DELETE and CLOSE
+loses the index update) is an accepted MVP limitation.
+
+**Consequences.**
+* `src/irgen.cpp` `emitOpen` branches keyed/direct to `pli_file_open_keyed`;
+  READ/WRITE/REWRITE/DELETE dispatch to keyed variants that build the key
+  value and call `pli_record_*_keyed`.
+* `runtime/rt_file.c` keeps per-slot `rt_kix[PLI_MAX_FILES]` (in-memory sorted
+  key array plus dirty flag) and implements open/read/write/rewrite/delete plus
+  sidecar load/save, using only `pli_plat_*` calls (platform-agnostic).
+* `tests/core/keyed_record.pli` (golden) and `bad_keyed_seq.pli`/
+  `bad_keyed_type.pli` (negatives) gate the feature.
+
+**Rejected.** A single combined file with embedded keys (variable-length records,
+IBM block layout); a hashed index (no ordering guarantee); updating the sidecar
+on every write instead of at close (crash window unchanged, extra I/O cost).
+
+---

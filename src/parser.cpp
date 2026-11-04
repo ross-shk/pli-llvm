@@ -4446,6 +4446,60 @@ StmtP Parser::parseRecordIO() {
     }
   }
   while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("KEY")) {
+      // KEY( expression ): the record key (rules (112),(113)).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEY", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("KEYTO")) {
+      // KEYTO( reference ): receives the key of the record read (READ).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEYTO", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyToOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("KEYFROM")) {
+      // KEYFROM( expression ): key of the record to rewrite/delete.
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEYFROM", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyFromOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("NOLOCK")) {
+      // NOLOCK: accepted syntactically, deferred with (113).
+      st->keyNoLock = true;
+      advance();
+      continue;
+    }
+    if (atWord("SET")) {
+      // SET: accepted syntactically, deferred with (113).
+      st->keySet = true;
+      advance();
+      continue;
+    }
+    if (atWord("LOCATE") || atWord("UNLOCK") || atWord("EVENT")) {
+      d_.error(cur().loc, "record option " + cur().text + " is not implemented in this stage",
+               "(113)");
+      advance();
+      continue;
+    }
     d_.error(cur().loc,
              "record option '" +
                  (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
@@ -4529,12 +4583,25 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("KEYED") || atWord("ENVIRONMENT") || atWord("IDENT") ||
-        atWord("LINESIZE") || atWord("PAGESIZE")) {
-      d_.error(cur().loc, "OPEN option " + cur().text + " is not implemented in this stage",
-               "(101)");
-      resync();
-      return nullptr;
+    if (atWord("KEYED")) {
+      // Keyed record organisation (rules (100),(101),(112),(113)): records
+      // addressed by KEY/KEYTO/KEYFROM instead of position.
+      st->openKeyed = true;
+      advance();
+      continue;
+    }
+    if (atWord("DIRECT")) {
+      // Direct record organisation (rules (100),(101),(112),(113)): same
+      // keyed access as KEYED; treated identically in this stage.
+      st->openDirect = true;
+      advance();
+      continue;
+    }
+    if (atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE") ||
+        atWord("ENVIRONMENT")) {
+      // File attributes accepted as no-ops in this stage (decision 14).
+      advance();
+      continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
     resync();

@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (113): KEY on a sequential (non-keyed/direct) file is rejected. */
+ bad_keyed_seq: procedure options(main);
+    declare f file;
+    declare rec char(16);
+    declare k char(8);
+    open file(f) record sequential output
+       title('tests/core/out/bad_keyed_seq.dat');
+    read file(f) into(rec) key(k);
+ end bad_keyed_seq;

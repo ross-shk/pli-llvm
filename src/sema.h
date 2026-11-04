@@ -29,6 +29,9 @@ struct Symbol {
   bool fileAttr = false;   // FILE variable (rules 39,40): a named file
   bool fileNonprint = false; // NONPRINT (ADR-204): stream writes to this file discarded
   int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
+  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
+  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
+  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration

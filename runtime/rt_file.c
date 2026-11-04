@@ -7,6 +7,9 @@
  * pli_plat_fread/pli_plat_fwrite (the platform seam). */
 /* Defined with the record state below; pli_file_close resets it too. */
 static void rt_rec_reset(long long slot);
+/* KEYED/DIRECT sidecar index helpers (defined after pli_file_open_record). */
+static void kix_save(long long slot);
+static void kix_reset(long long slot);
 
 void pli_string_put_open(char *buf, long long cap) {
   rt_out_lock();
@@ -148,16 +151,37 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   }
 }
 
+/* KEYED/DIRECT sidecar index state: key -> (offset, length) in the data file.
+ * Loaded at open, held in memory, rewritten at close when dirty. */
+struct kix_entry {
+  char *key;       /* owned copy of keylen bytes */
+  long long keylen;
+  long long off;   /* offset of the record in the data file */
+  long long len;   /* record byte length */
+};
+struct kix_state {
+  struct kix_entry *ent;
+  long long count;
+  long long cap;
+  int dirty;
+  int is_keyed;    /* 1 when this slot was opened KEYED/DIRECT */
+  char kixpath[512]; /* sidecar path, populated at open for save-on-close */
+};
+static struct kix_state rt_kix[PLI_MAX_FILES];
+
 /* CLOSE (rule 102): close the file in `slot` and release the slot. */
 void pli_file_close(long long slot) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   rt_rec_reset(slot);
+  if (rt_kix[slot].is_keyed)
+    kix_save(slot);
   if (rt_pli_files[slot]) {
     rt_file_out_detach(rt_pli_files[slot]);
     pli_plat_fclose(rt_pli_files[slot]);
     rt_pli_files[slot] = NULL;
   }
+  kix_reset(slot);
 }
 
 /* FILE ( f ) output routing (rule 105): rt_put_raw writes to the named file until
@@ -234,6 +258,155 @@ struct rt_rec_pos {
   int valid;
 };
 static struct rt_rec_pos rt_rec[PLI_MAX_FILES];
+
+static void kix_reset(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  struct kix_state *st = &rt_kix[slot];
+  for (long long i = 0; i < st->count; ++i)
+    pli_plat_free(st->ent[i].key);
+  pli_plat_free(st->ent);
+  st->ent = NULL;
+  st->count = st->cap = 0;
+  st->dirty = 0;
+  st->is_keyed = 0;
+}
+
+static long long kix_find(long long slot, char *key, long long keylen) {
+  struct kix_state *st = &rt_kix[slot];
+  for (long long i = 0; i < st->count; ++i)
+    if (st->ent[i].keylen == keylen &&
+        pli_memcmp(st->ent[i].key, key, (size_t)keylen) == 0)
+      return i;
+  return -1;
+}
+
+static void kix_insert(long long slot, char *key, long long keylen,
+                       long long off, long long len) {
+  struct kix_state *st = &rt_kix[slot];
+  if (kix_find(slot, key, keylen) >= 0)
+    return; /* duplicate: the caller signals ERROR before inserting */
+  if (st->count == st->cap) {
+    long long ncap = st->cap ? st->cap * 2 : 16;
+    struct kix_entry *n = (struct kix_entry *)pli_plat_realloc(
+        st->ent, (size_t)ncap * sizeof(struct kix_entry));
+    if (!n) {
+      pli_signal_error("keyed index out of memory");
+      return;
+    }
+    st->ent = n;
+    st->cap = ncap;
+  }
+  st->ent[st->count].key = (char *)pli_plat_malloc((size_t)keylen);
+  if (!st->ent[st->count].key) {
+    pli_signal_error("keyed index out of memory");
+    return;
+  }
+  pli_memcpy(st->ent[st->count].key, key, (size_t)keylen);
+  st->ent[st->count].keylen = keylen;
+  st->ent[st->count].off = off;
+  st->ent[st->count].len = len;
+  st->count++;
+  st->dirty = 1;
+}
+
+static void kix_remove(long long slot, long long idx) {
+  struct kix_state *st = &rt_kix[slot];
+  if (idx < 0 || idx >= st->count)
+    return;
+  pli_plat_free(st->ent[idx].key);
+  for (long long i = idx + 1; i < st->count; ++i)
+    st->ent[i - 1] = st->ent[i];
+  st->count--;
+  st->dirty = 1;
+}
+
+static int kix_cmp_off(const void *a, const void *b) {
+  long long ao = ((const struct kix_entry *)a)->off;
+  long long bo = ((const struct kix_entry *)b)->off;
+  return ao < bo ? -1 : (ao > bo ? 1 : 0);
+}
+
+/* Sidecar file format: magic "PLIKIX", count (i64), then per entry:
+ * keylen (i64), key bytes, off (i64), len (i64). */
+#define KIX_MAGIC "PLIKIX"
+#define KIX_MAGIC_LEN 6
+
+static void kix_load(long long slot, const char *path) {
+  struct kix_state *st = &rt_kix[slot];
+  long long n = pli_strlen(path);
+  if (n + 5 > (long long)sizeof st->kixpath - 1) n = (long long)sizeof st->kixpath - 5;
+  pli_memcpy(st->kixpath, path, (size_t)n);
+  st->kixpath[n] = '\0';
+  pli_memcpy(st->kixpath + n, ".kix", 5);
+  FILE *f = pli_plat_fopen(st->kixpath, "rb");
+  if (!f) return; /* no sidecar yet: empty index */
+  char magic[KIX_MAGIC_LEN];
+  if (pli_plat_fread(magic, 1, KIX_MAGIC_LEN, f) != KIX_MAGIC_LEN ||
+      pli_memcmp(magic, KIX_MAGIC, KIX_MAGIC_LEN) != 0) {
+    pli_plat_fclose(f);
+    return;
+  }
+  long long count = 0;
+  if (pli_plat_fread(&count, sizeof count, 1, f) != 1) { pli_plat_fclose(f); return; }
+  for (long long i = 0; i < count; ++i) {
+    long long keylen = 0, off = 0, len = 0;
+    if (pli_plat_fread(&keylen, sizeof keylen, 1, f) != 1 ||
+        keylen < 0 || keylen > (long long)sizeof(((struct kix_entry *)0)->key) * 0 + 1024)
+      break;
+    char *key = (char *)pli_plat_malloc((size_t)keylen);
+    if (!key) break;
+    if (pli_plat_fread(key, 1, (size_t)keylen, f) != (size_t)keylen ||
+        pli_plat_fread(&off, sizeof off, 1, f) != 1 ||
+        pli_plat_fread(&len, sizeof len, 1, f) != 1) {
+      pli_plat_free(key);
+      break;
+    }
+    /* Append (unsorted); linear search is used for lookups. */
+    if (st->count == st->cap) {
+      long long ncap = st->cap ? st->cap * 2 : 16;
+      struct kix_entry *m = (struct kix_entry *)pli_plat_realloc(
+          st->ent, (size_t)ncap * sizeof(struct kix_entry));
+      if (!m) { pli_plat_free(key); break; }
+      st->ent = m; st->cap = ncap;
+    }
+    st->ent[st->count].key = key;
+    st->ent[st->count].keylen = keylen;
+    st->ent[st->count].off = off;
+    st->ent[st->count].len = len;
+    st->count++;
+  }
+  pli_plat_fclose(f);
+}
+
+static void kix_save(long long slot) {
+  struct kix_state *st = &rt_kix[slot];
+  if (!st->dirty) return;
+  FILE *f = pli_plat_fopen(st->kixpath, "wb");
+  if (!f) { pli_signal_error("keyed sidecar could not be written"); return; }
+  if (pli_plat_fwrite(KIX_MAGIC, 1, KIX_MAGIC_LEN, f) != KIX_MAGIC_LEN ||
+      pli_plat_fwrite(&st->count, sizeof st->count, 1, f) != 1) {
+    pli_plat_fclose(f); return;
+  }
+  /* Sort by offset so the sidecar mirrors the data file layout. */
+  struct kix_entry *copy = (struct kix_entry *)pli_plat_malloc(
+      (size_t)st->count * sizeof(struct kix_entry));
+  if (!copy) { pli_plat_fclose(f); return; }
+  pli_memcpy(copy, st->ent, (size_t)st->count * sizeof(struct kix_entry));
+  qsort(copy, (size_t)st->count, sizeof(struct kix_entry), kix_cmp_off);
+  for (long long i = 0; i < st->count; ++i) {
+    long long keylen = copy[i].keylen;
+    if (pli_plat_fwrite(&keylen, sizeof keylen, 1, f) != 1 ||
+        pli_plat_fwrite(copy[i].key, 1, (size_t)keylen, f) != (size_t)keylen ||
+        pli_plat_fwrite(&copy[i].off, sizeof copy[i].off, 1, f) != 1 ||
+        pli_plat_fwrite(&copy[i].len, sizeof copy[i].len, 1, f) != 1) {
+      break;
+    }
+  }
+  pli_plat_free(copy);
+  pli_plat_fclose(f);
+  st->dirty = 0;
+}
 
 /* Mirrors Stmt::kEndfileBaseCondKey in src/ast.h: ON ENDFILE(f) is keyed by
  * the FILE variable's runtime slot so each file has its own handler. */
@@ -322,6 +495,61 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   rt_pli_nonprint[slot] = 0;
   /* mode 0 = INPUT, 1 = OUTPUT, 2 = UPDATE (read and write in place). */
   rt_pli_files[slot] = pli_plat_fopen(buf, mode == 2 ? "r+b" : (mode ? "wb" : "rb"));
+  if (!rt_pli_files[slot])
+    rt_undef_file(slot);
+}
+
+/* KEYED/DIRECT OPEN: open the data file and load the <name>.kix sidecar index.
+ * OUTPUT mode opens r+b when the file exists (read+write for REWRITE/DELETE)
+ * and wb when it does not; INPUT opens rb; UPDATE opens r+b. */
+void pli_file_open_keyed(long long slot, const char *name, long long namelen,
+                         long long mode, long long nonprint, long long keyed) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  char buf[256];
+  if (namelen < 0) namelen = 0;
+  size_t n = namelen < (long long)(sizeof buf - 1) ? (size_t)namelen : sizeof buf - 1;
+  pli_memcpy(buf, name, n);
+  buf[n] = '\0';
+  rt_rec_reset(slot);
+  kix_reset(slot);
+  rt_kix[slot].is_keyed = 1;
+  if (rt_pli_files[slot]) {
+    rt_file_out_detach(rt_pli_files[slot]);
+    pli_plat_fclose(rt_pli_files[slot]);
+  }
+  if (nonprint) {
+    rt_pli_files[slot] = NULL;
+    rt_pli_nonprint[slot] = 1;
+    return;
+  }
+  rt_pli_nonprint[slot] = 0;
+  /* Determine the fopen mode. OUTPUT creates/truncates (wb); UPDATE opens
+   * read-write (r+b); INPUT opens read-only (rb). */
+  const char *fmode;
+  if (mode == 2)
+    fmode = "r+b";
+  else if (mode == 1)
+    fmode = "wb";
+  else
+    fmode = "rb";
+  rt_pli_files[slot] = pli_plat_fopen(buf, fmode);
+  if (rt_pli_files[slot]) {
+    /* OUTPUT truncates the data file: discard any stale sidecar index and do
+     * not load the old .kix (it will be rewritten on close). */
+    if (mode == 1) {
+      kix_reset(slot);
+      rt_kix[slot].is_keyed = 1;
+      rt_kix[slot].dirty = 1;
+      long long n = pli_strlen(buf);
+      if (n + 5 > (long long)sizeof rt_kix[slot].kixpath - 1)
+        n = (long long)sizeof rt_kix[slot].kixpath - 5;
+      pli_memcpy(rt_kix[slot].kixpath, buf, (size_t)n);
+      rt_kix[slot].kixpath[n] = '\0';
+      pli_memcpy(rt_kix[slot].kixpath + n, ".kix", 5);
+    } else
+      kix_load(slot, buf);
+  }
   if (!rt_pli_files[slot])
     rt_undef_file(slot);
 }
@@ -534,6 +762,227 @@ void pli_record_delete(long long slot) {
     pli_signal_error("DELETE from record file failed");
   rt_rec_reset(slot);
   (void)pli_plat_fseek(f, off, SEEK_SET);
+}
+
+/* --- KEYED/DIRECT record I/O (rules (112),(113), ADR-366) --- */
+
+/* Look up a key in the sidecar index; returns the entry index or -1. */
+static long long kix_lookup(long long slot, char *key, long long keylen) {
+  return kix_find(slot, key, keylen);
+}
+
+/* WRITE ... KEY(k): key must not already exist; append the record and index it. */
+void pli_record_write_keyed_fixed(long long slot, char *key, long long keylen,
+                                  long long v) {
+  FILE *f = rec_file(slot, "WRITE");
+  long long idx;
+  if (!f || kix_lookup(slot, key, keylen) >= 0) {
+    if (f) pli_signal_error("WRITE duplicates an existing key");
+    return;
+  }
+  if (pli_plat_fseek(f, 0, SEEK_END) != 0) { pli_signal_error("WRITE to keyed file failed"); return; }
+  long long off = pli_plat_ftell(f);
+  if (pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("WRITE to keyed file failed"); return; }
+  kix_insert(slot, key, keylen, off, (long long)sizeof v);
+}
+
+void pli_record_write_keyed_float(long long slot, char *key, long long keylen, double v) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f || kix_lookup(slot, key, keylen) >= 0) {
+    if (f) pli_signal_error("WRITE duplicates an existing key");
+    return;
+  }
+  if (pli_plat_fseek(f, 0, SEEK_END) != 0) { pli_signal_error("WRITE to keyed file failed"); return; }
+  long long off = pli_plat_ftell(f);
+  if (pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("WRITE to keyed file failed"); return; }
+  kix_insert(slot, key, keylen, off, (long long)sizeof v);
+}
+
+void pli_record_write_keyed_char(long long slot, char *key, long long keylen,
+                                 char *p, long long len) {
+  FILE *f = rec_file(slot, "WRITE");
+  long long off;
+  if (!f || len <= 0 || kix_lookup(slot, key, keylen) >= 0) {
+    if (f) pli_signal_error("WRITE duplicates an existing key");
+    return;
+  }
+  if (pli_plat_fseek(f, 0, SEEK_END) != 0) { pli_signal_error("WRITE to keyed file failed"); return; }
+  off = pli_plat_ftell(f);
+  if (pli_plat_fwrite(p, 1, (size_t)len, f) != (size_t)len) { pli_signal_error("WRITE to keyed file failed"); return; }
+  kix_insert(slot, key, keylen, off, len);
+}
+
+void pli_record_write_keyed_bit(long long slot, char *key, long long keylen,
+                                unsigned char v) {
+  FILE *f = rec_file(slot, "WRITE");
+  if (!f || kix_lookup(slot, key, keylen) >= 0) {
+    if (f) pli_signal_error("WRITE duplicates an existing key");
+    return;
+  }
+  if (pli_plat_fseek(f, 0, SEEK_END) != 0) { pli_signal_error("WRITE to keyed file failed"); return; }
+  long long off = pli_plat_ftell(f);
+  if (pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("WRITE to keyed file failed"); return; }
+  kix_insert(slot, key, keylen, off, (long long)sizeof v);
+}
+
+/* READ ... KEY(k): look up the key and read the record into the buffer. */
+long long pli_record_read_keyed_fixed(long long slot, char *key, long long keylen) {
+  FILE *f = rec_file(slot, "READ");
+  long long v = 0, idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
+}
+
+double pli_record_read_keyed_float(long long slot, char *key, long long keylen) {
+  FILE *f = rec_file(slot, "READ");
+  double v = 0; long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
+}
+
+void pli_record_read_keyed_char(long long slot, char *key, long long keylen,
+                                char *p, long long len) {
+  FILE *f = rec_file(slot, "READ");
+  long long idx;
+  if (!f || len <= 0 || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return;
+  }
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(p, 1, (size_t)(rlen < len ? rlen : len), f) != (size_t)(rlen < len ? rlen : len)) {
+    pli_signal_error("READ from keyed file failed");
+    return;
+  }
+}
+
+unsigned char pli_record_read_keyed_bit(long long slot, char *key, long long keylen) {
+  FILE *f = rec_file(slot, "READ");
+  unsigned char v = 0; long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
+}
+
+/* REWRITE ... KEYFROM(k): look up the key and rewrite the record in place. */
+void pli_record_rewrite_keyed_fixed(long long slot, char *key, long long keylen,
+                                    long long v) {
+  FILE *f = rec_file(slot, "REWRITE");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("REWRITE key not found");
+    return;
+  }
+  long long off = rt_kix[slot].ent[idx].off;
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (rlen != (long long)sizeof v) { pli_signal_error("REWRITE changes the record size"); return; }
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("REWRITE to keyed file failed"); return; }
+}
+
+void pli_record_rewrite_keyed_float(long long slot, char *key, long long keylen,
+                                    double v) {
+  FILE *f = rec_file(slot, "REWRITE");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("REWRITE key not found");
+    return;
+  }
+  long long off = rt_kix[slot].ent[idx].off;
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (rlen != (long long)sizeof v) { pli_signal_error("REWRITE changes the record size"); return; }
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("REWRITE to keyed file failed"); return; }
+}
+
+void pli_record_rewrite_keyed_char(long long slot, char *key, long long keylen,
+                                   char *p, long long len) {
+  FILE *f = rec_file(slot, "REWRITE");
+  long long idx;
+  if (!f || len <= 0 || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("REWRITE key not found");
+    return;
+  }
+  long long off = rt_kix[slot].ent[idx].off;
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (rlen != len) { pli_signal_error("REWRITE changes the record size"); return; }
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fwrite(p, 1, (size_t)len, f) != (size_t)len) { pli_signal_error("REWRITE to keyed file failed"); return; }
+}
+
+void pli_record_rewrite_keyed_bit(long long slot, char *key, long long keylen,
+                                  unsigned char v) {
+  FILE *f = rec_file(slot, "REWRITE");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("REWRITE key not found");
+    return;
+  }
+  long long off = rt_kix[slot].ent[idx].off;
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (rlen != (long long)sizeof v) { pli_signal_error("REWRITE changes the record size"); return; }
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fwrite(&v, sizeof v, 1, f) != 1) { pli_signal_error("REWRITE to keyed file failed"); return; }
+}
+
+/* DELETE ... KEYFROM(k): look up the key, remove the record, shift the tail. */
+void pli_record_delete_keyed(long long slot, char *key, long long keylen) {
+  FILE *f = rec_file(slot, "DELETE");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("DELETE key not found");
+    return;
+  }
+  long long off = rt_kix[slot].ent[idx].off;
+  long long size = rt_kix[slot].ent[idx].len;
+  if (pli_plat_fseek(f, 0, SEEK_END) != 0) { pli_signal_error("DELETE from keyed file failed"); return; }
+  long long end = pli_plat_ftell(f);
+  long long src = off + size;
+  long long dst = off;
+  char buf[8192];
+  if (src > end) { pli_signal_error("DELETE from keyed file failed"); return; }
+  while (src < end) {
+    long long n = end - src;
+    if (n > (long long)sizeof buf) n = (long long)sizeof buf;
+    if (pli_plat_fseek(f, src, SEEK_SET) != 0 ||
+        pli_plat_fread(buf, 1, (size_t)n, f) != (size_t)n ||
+        pli_plat_fseek(f, dst, SEEK_SET) != 0 ||
+        pli_plat_fwrite(buf, 1, (size_t)n, f) != (size_t)n) {
+      pli_signal_error("DELETE from keyed file failed");
+      return;
+    }
+    src += n; dst += n;
+  }
+  if (pli_plat_ftruncate(f, dst) != 0) { pli_signal_error("DELETE from keyed file failed"); return; }
+  /* Remove the deleted entry and re-key every following entry to its new offset. */
+  kix_remove(slot, idx);
+  for (long long i = 0; i < rt_kix[slot].count; ++i)
+    if (rt_kix[slot].ent[i].off >= off + size)
+      rt_kix[slot].ent[i].off -= size;
+  rt_kix[slot].dirty = 1;
 }
 
 /* FILEOPEN(f) (TR 123): returns 1 if the file in slot f is open, 0 otherwise. */
