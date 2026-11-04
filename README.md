@@ -147,81 +147,39 @@ Builds on Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), and Windows (x86_
 | C++20 compiler | gcc 12 / clang 15 / clang-cl 18+ | Windows: VS 2022 Build Tools (MSVC headers + Windows SDK) |
 | CMake | 3.20 | All platforms |
 | Ninja | recent | Ships with VS 2022; present in the Developer PowerShell |
-| LLVM + clang + lld | 23 | Development libraries and lld headers/libs |
+| Pinned static LLVM (fetched automatically) | 23 | `scripts/fetch_llvm_static.*` downloads + verifies the pinned stash; no distro install needed |
 | Python | 3 | Build scripts and test runner |
 | Git | recent | Optional; without it `pli version` reports `unknown` |
 
-Use a distro LLVM for development, or the pinned static toolchain for releases (and, on Windows, for development too).
+The pinned static toolchain is the only supported build path — no distro LLVM, no vcpkg, no external DLLs.
 
 ### Linux / macOS
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23           # Linux
-cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH="$(brew --prefix llvm)"   # macOS
-cmake --build build/cmake -j
-```
-
-A distro LLVM 23 is usually found without `CMAKE_PREFIX_PATH`; Homebrew's `llvm` is keg-only, so there the line is required.
-
-### Windows
-
-Build with `clang-cl` + `lld-link` (not `cl.exe`, MinGW, MSYS2, Cygwin, or WSL) from a
-**Developer PowerShell for VS 2022** — that shell supplies the Windows SDK, MSVC headers,
-and CMake. Ninja ships with VS 2022 but is not on `PATH` by default; add it:
-
-```pwsh
-$env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$env:PATH"
-```
-
-(Adjust the path if VS 2022 is installed elsewhere — `vswhere` can locate it.)
-
-Recommended: the pinned static LLVM — the same toolchain the release builds use — which needs
-no vcpkg and produces a self-contained `pli.exe`. Fetch once, then put its `bin` on `PATH`
-*before* running cmake so `clang-cl` and `lld-link` resolve:
-
-```pwsh
-.\scripts\fetch_llvm_static.ps1 -Prefix $env:USERPROFILE\pli-deps   # once per machine
-$env:PATH = "$env:USERPROFILE\pli-deps\bin;$env:PATH"               # clang-cl + lld
-
-cmake -G Ninja -S . -B build/cmake `
-  -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps `
-  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build/cmake -j
-```
-
-Configure may report `ZLIB not found`; the pinned LLVM is built without zlib, so that warning
-is informational.
-
-Alternatively, point at a prebuilt LLVM 23 Windows release: the extracted folder that holds
-`bin`, `lib`, and `include` (put its `bin` on `PATH` first so `clang-cl` resolves). That build
-has zlib/zstd enabled but ships neither library, so pass a vcpkg triplet that has them. The
-resulting `pli.exe` imports `z.dll`/`zstd.dll`, so keep the triplet's `bin` on `PATH` when
-running it:
-
-```pwsh
-cmake -G Ninja -S . -B build/cmake `
-  -DCMAKE_PREFIX_PATH=C:/clang+llvm-23.1.3-x86_64-pc-windows-msvc `
-  -DPLI_VCPKG_ROOT="" `
-  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build/cmake -j
-```
-
-### Hermetic static toolchain
-
-Use the pinned static LLVM instead of a distro install (Windows: see above):
-
-```sh
-sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps
+sh scripts/fetch_llvm_static.sh --prefix ~/pli-deps   # once per machine
 cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=~/pli-deps
 cmake --build build/cmake -j
 ```
 
-Rebuild the toolchain only when bumping `scripts/llvm_static.pins`:
+The pinned static toolchain is fetched once and verified by sha256; no distro LLVM install is needed.
+
+### Windows
+
+Single command (recommended):
+
+```pwsh
+.\scripts\build.ps1
+```
+
+`build.ps1` runs `vcvarsall.bat x64`, fetches the pinned static LLVM, configures Ninja + clang-cl,
+and builds `build/cmake/pli.exe` — self-contained, no vcpkg or external DLLs.
+
+## Test
 
 ```sh
-sh scripts/build_llvm_static.sh --prefix ~/pli-deps --pack out.tar.zst
+ctest --test-dir build/cmake -j              # full suite
+python3 tests/run_tests.py usecases          # one group
+cmake --build build/cmake --target check     # formatting + static analysis + -Werror
 ```
 
 ### Install the build
@@ -231,14 +189,6 @@ cmake --install build/cmake
 ```
 
 Add `--prefix /opt/pli` to install elsewhere. The default prefix may need `sudo` or an elevated shell.
-
-## Test
-
-```sh
-ctest --test-dir build/cmake -j              # full suite
-python3 tests/run_tests.py usecases          # one group
-cmake --build build/cmake --target check     # formatting + static analysis + -Werror
-```
 
 ## Cross-compilation
 

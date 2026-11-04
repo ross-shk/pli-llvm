@@ -27,7 +27,7 @@ import os
 import re
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 TIMEOUT = 10  # seconds per exec run step
@@ -449,6 +449,7 @@ def main():
 
     def work(job):
         dir_path, name, kind = job
+        print(f"RUN {name}", flush=True)
         # dir_path may use native separators; normalize for the skip lookup.
         if IS_WINDOWS and (Path(dir_path).as_posix(), name) in WINDOWS_SKIP:
             return job, f"SKIP {name} ({WINDOWS_SKIP[(Path(dir_path).as_posix(), name)]})", 0, ()
@@ -459,7 +460,10 @@ def main():
 
     results = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for job, result, rc, sans in pool.map(work, jobs):
+        futures = {pool.submit(work, job): job for job in jobs}
+        for fut in as_completed(futures):
+            job, result, rc, sans = fut.result()
+            print(result, flush=True)
             results[job] = (result, rc, sans)
 
     pass_count = fail_count = skip_count = 0

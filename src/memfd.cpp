@@ -9,8 +9,11 @@
 #include <filesystem>
 #include <map>
 #include <string>
+
+#if !defined(_WIN32)
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -79,6 +82,9 @@ std::string createMemBlob(llvm::StringRef bytes, std::string& err) {
 }
 
 void closeMemBlob(const std::string& path) {
+#if defined(_WIN32)
+  return;
+#else
   auto it = memFdTable().find(path);
   if (it == memFdTable().end())
     return;
@@ -86,6 +92,7 @@ void closeMemBlob(const std::string& path) {
   memFdTable().erase(it);
   if (fd >= 0)
     ::close(fd);
+#endif
 }
 
 } // namespace pli

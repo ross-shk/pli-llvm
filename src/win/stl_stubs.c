@@ -293,3 +293,260 @@ const void *__std_min_element_d(const void *first, const void *last, int unused)
     }
     return best;
 }
+
+/* ---- __std_rotate: rotate [first, middle, last) so middle becomes first ----
+ * New STL rotates by swapping blocks (verified: lld passes pointer triples). */
+void *__std_rotate(void *first, void *middle, void *last, size_t elem_size) {
+    uint8_t *f = (uint8_t *)first, *m = (uint8_t *)middle, *l = (uint8_t *)last;
+    while (f != m) {
+        uint8_t *next = m;
+        uint8_t *it = f;
+        while (it != next) {
+            uint8_t tmp[8];
+            memcpy(tmp, it, elem_size);
+            memcpy(it, next, elem_size);
+            memcpy(next, tmp, elem_size);
+            it += elem_size;
+            next += elem_size;
+            if (next == l) next = m;
+            if (it == m) m = next;
+        }
+    }
+    return first;
+}
+
+/* ---- __std_min_element_4/8: pointer to first minimal int/uint ----
+ * New STL returns pointer (not value). */
+const void *__std_min_element_4i(const void *first, const void *last) {
+    const int32_t *f = (const int32_t *)first, *l = (const int32_t *)last;
+    const int32_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f < *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+const void *__std_min_element_4u(const void *first, const void *last) {
+    const uint32_t *f = (const uint32_t *)first, *l = (const uint32_t *)last;
+    const uint32_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f < *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- __std_unique_4/8: compact consecutive duplicates ----
+ * Returns new end pointer. */
+void *__std_unique_4(void *first, void *last) {
+    uint32_t *f = (uint32_t *)first, *l = (uint32_t *)last;
+    if (f == l) return f;
+    uint32_t *result = f;
+    ++f;
+    while (f < l) {
+        if (*f != *result) {
+            ++result;
+            *result = *f;
+        }
+        ++f;
+    }
+    return result + 1;
+}
+void *__std_unique_8(void *first, void *last) {
+    uint64_t *f = (uint64_t *)first, *l = (uint64_t *)last;
+    if (f == l) return f;
+    uint64_t *result = f;
+    ++f;
+    while (f < l) {
+        if (*f != *result) {
+            ++result;
+            *result = *f;
+        }
+        ++f;
+    }
+    return result + 1;
+}
+
+/* ---- __std_find_first_of_trivial_1: first element also in set (8-byte) ----
+ * 4-pointer shape. */
+const void *__std_find_first_of_trivial_1(const void *first1, const void *last1,
+                                          const void *first2, const void *last2) {
+    const uint8_t *f1 = (const uint8_t *)first1, *l1 = (const uint8_t *)last1;
+    const uint8_t *f2 = (const uint8_t *)first2, *l2 = (const uint8_t *)last2;
+    while (f1 < l1) {
+        for (const uint8_t *it = f2; it < l2; ++it) {
+            if (*f1 == *it) return f1;
+        }
+        ++f1;
+    }
+    return l1;
+}
+
+/* ---- __std_max_element_1u: pointer to first maximal uint8 ----
+ * New STL returns pointer. */
+const void *__std_max_element_1u(const void *first, const void *last) {
+    const uint8_t *f = (const uint8_t *)first, *l = (const uint8_t *)last;
+    const uint8_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f > *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- __std_find_not_ch_1: first byte != needle ----
+ * Returns last1 when all match. */
+const void *__std_find_not_ch_1(const void *first1, const void *last1,
+                                 uint8_t needle) {
+    const uint8_t *f = (const uint8_t *)first1, *l = (const uint8_t *)last1;
+    while (f < l) {
+        if (*f != needle) return f;
+        ++f;
+    }
+    return l;
+}
+
+/* ---- __std_find_last_not_ch_pos_1: last byte != needle, byte offset ----
+ * Returns (size_t)-1 when all match. */
+size_t __std_find_last_not_ch_pos_1(const void *first1, const void *last1,
+                                     uint8_t needle) {
+    const uint8_t *f = (const uint8_t *)first1, *l = (const uint8_t *)last1;
+    while (l > f) {
+        --l;
+        if (*l != needle) return (size_t)(l - f);
+    }
+    return (size_t)-1;
+}
+
+/* ---- __std_unique_2: compact consecutive 2-byte duplicates ----
+ * Returns new end pointer. */
+void *__std_unique_2(void *first, void *last) {
+    uint16_t *f = (uint16_t *)first, *l = (uint16_t *)last;
+    if (f == l) return f;
+    uint16_t *result = f;
+    ++f;
+    while (f < l) {
+        if (*f != *result) {
+            ++result;
+            *result = *f;
+        }
+        ++f;
+    }
+    return result + 1;
+}
+
+/* ---- __std_max_element_8u: pointer to first maximal uint64 ----
+ * New STL returns pointer. */
+const void *__std_max_element_8u(const void *first, const void *last) {
+    const uint64_t *f = (const uint64_t *)first, *l = (const uint64_t *)last;
+    const uint64_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f > *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- __std_minmax_element_8u: pointer pair (min, max) for uint64 ----
+ * Returns pointer to min in first out-param slot. */
+const void *__std_minmax_element_8u(const void *first, const void *last) {
+    const uint64_t *f = (const uint64_t *)first, *l = (const uint64_t *)last;
+    const uint64_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f > *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- __std_min_element_f_: pointer to first minimal float ----
+ * Trailing-underscore variant of __std_min_element_f. */
+const void *__std_min_element_f_(const void *first, const void *last, int unused) {
+    (void)unused;
+    const float *f = (const float *)first, *l = (const float *)last;
+    const float *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f < *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- __std_max_element_4u: pointer to first maximal uint32 ----
+ * New STL returns pointer. */
+const void *__std_max_element_4u(const void *first, const void *last) {
+    const uint32_t *f = (const uint32_t *)first, *l = (const uint32_t *)last;
+    const uint32_t *best = f;
+    if (f < l) {
+        ++f;
+        while (f < l) {
+            if (*f > *best) best = f;
+            ++f;
+        }
+    }
+    return best;
+}
+
+/* ---- compiler-rt 128-bit division/modulo: __divti3 / __modti3 ----
+ * Prebuilt clang_rt.builtins for Windows x86_64 does not export these,
+ * so the linker reports them undefined. Implement via 64-bit long division
+ * so i128 constant folding (constfold.cpp / irgen.cpp) links and runs. */
+
+typedef unsigned __int128 u128;
+
+static u128 udiv128(u128 a, u128 b) {
+    u128 q = 0, r = 0;
+    for (int i = 127; i >= 0; i--) {
+        r = (r << 1) | ((a >> i) & 1u);
+        if (r >= b) {
+            r -= b;
+            q |= ((u128)1 << i);
+        }
+    }
+    return q;
+}
+
+static u128 urem128(u128 a, u128 b) {
+    u128 r = 0;
+    for (int i = 127; i >= 0; i--) {
+        r = (r << 1) | ((a >> i) & 1u);
+        if (r >= b) r -= b;
+    }
+    return r;
+}
+
+__int128 __divti3(__int128 a, __int128 b) {
+    int neg = 0;
+    u128 ua = (u128)(a < 0 ? -a : a);
+    u128 ub = (u128)(b < 0 ? -b : b);
+    if (a < 0) neg = !neg;
+    if (b < 0) neg = !neg;
+    u128 q = udiv128(ua, ub);
+    return (__int128)(neg ? -(__int128)q : q);
+}
+
+__int128 __modti3(__int128 a, __int128 b) {
+    int neg = (a < 0);
+    u128 ua = (u128)(a < 0 ? -a : a);
+    u128 ub = (u128)(b < 0 ? -b : b);
+    u128 r = urem128(ua, ub);
+    return (__int128)(neg ? -(__int128)r : r);
+}
