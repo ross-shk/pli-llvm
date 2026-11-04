@@ -1,0 +1,6 @@
+CHECK-LABEL: define internal void @PLI_RANGE_GUARD
+CHECK-NOT: !range
+CHECK: ret void
+CHECK-LABEL: define {{.*}}void @SUB
+CHECK-NOT: !range
+CHECK: ret void

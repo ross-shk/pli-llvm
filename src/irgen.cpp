@@ -190,6 +190,21 @@ static bool packedMemberPath(const Type& root, const std::vector<unsigned>& path
   return cur->unaligned;
 }
 
+// True when the leaf at `path` inside `root` is a UNION member (ADR-365): all
+// members start at offset 0, so a sibling declaration with a wider type can
+// write the storage the leaf is read from.
+static bool pathInUnion(const Type& root, const std::vector<unsigned>& path) {
+  const Type* cur = &root;
+  for (unsigned f : path) {
+    if (cur->isUnion)
+      return true;
+    if (f >= cur->members.size())
+      return false;
+    cur = &cur->members[f]->ty;
+  }
+  return false;
+}
+
 llvm::Type* IRGen::llvmTy(const Type& t) {
   // An array is a [N x elemTy] aggregate (rules (12),(13)); handled here so a
   // struct member that is itself an array (2 A(10) ...) lays out correctly.
@@ -4297,8 +4312,9 @@ std::string IRGen::run(HProgram& prog) {
   declareOnHandlers(prog);
 
   // P6.1b (ADR-215): decide by-value parameters once for the whole program
-  // so declareProc, emitProc, and every call site agree on signatures.
-  computeByValueParams(prog);
+  // so declareProc, emitProc, and every call site agree on signatures. The
+  // same walk collects the D1 range-fact safety facts (ADR-365).
+  computeWholeProgramFacts(prog);
   // WS-A1 (ADR-264): what each procedure can do to memory. The decision layer
   // computes it (the plan's C2); the verdict reaches LLVM only as a function
   // attribute (the plan's C1).
@@ -4664,6 +4680,11 @@ Val IRGen::initValue(const Type& t, const Expr* e) {
     // convert()'s FIXED -> FIXED path.
     if (t.k == TK::FixedBin) {
       v.reg = wideDecConstant(t, binLitRescaled(e, t));
+      // D1 (ADR-365): an INITIAL element is a conversion into the declared
+      // type, so it carries the same SIZE check as an assignment (ADR-282);
+      // the array and structure itemlists stored an out-of-range constant
+      // unchecked, which would make the declared range fact false.
+      v.reg = fixedBinPrecTrap(v.reg, t.prec);
       break;
     }
     // Wide DECIMAL literal (ADR-191): rescale the full i128 value, not the wrapped i64 truncation.
@@ -5416,8 +5437,9 @@ bool IRGen::stmtTakesAddr(HStmt* st, Symbol* s) const {
 // the parameter is a plain FIXED/FLOAT/POINTER scalar that no body in its
 // lexical subtree stores through or exposes the address of. By reference
 // is always sound, so every uncertainty keeps by reference.
-void IRGen::computeByValueParams(const HProgram& prog) {
+void IRGen::computeWholeProgramFacts(const HProgram& prog) {
   byValParam_.clear();
+  rangeUnsafe_.clear();
   // Lexical children for the subtree walk (nested bodies can reference an
   // outer parameter through a static link). HProc::src points back at the
   // AST procedure, which is what Symbol::proc references.
@@ -5437,6 +5459,19 @@ void IRGen::computeByValueParams(const HProgram& prog) {
   // all-pointer convention) and asynchronously-called procedures (the task
   // context packs addresses).
   std::unordered_set<const HProc*> addrTaken, asyncCalled;
+  // D1 (ADR-365): the storage a reference designates — a whole variable, an
+  // element or a qualified member all resolve to their root Symbol.
+  std::function<Symbol*(HExpr*)> rootOf = [&](HExpr* e) -> Symbol* {
+    if (!e)
+      return nullptr;
+    if ((e->kind == HExpr::VarRef || e->kind == HExpr::Subscript) && e->sym)
+      return e->sym;
+    // A pseudo-variable target writes its first argument's storage.
+    if (e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR") &&
+        !e->args.empty())
+      return rootOf(e->args[0].get());
+    return nullptr;
+  };
   std::function<void(HExpr*)> scanExpr;
   scanExpr = [&](HExpr* e) {
     if (!e)
@@ -5444,20 +5479,92 @@ void IRGen::computeByValueParams(const HProgram& prog) {
     if (e->kind == HExpr::VarRef && e->sym && e->sym->kind == Symbol::ProcName && e->sym->proc)
       if (const HProc* hp = hprocOf(e->sym->proc))
         addrTaken.insert(hp);
+    // D1 (ADR-365): an ADDR escapes, and a user call passes its actuals by
+    // reference — either way, storage another declaration can write without
+    // the declared-precision check carries no range fact.
+    if (e->kind == HExpr::Call && (e->name == "ADDR" || e->name == "BYADDR")) {
+      if (HExpr* t = e->args.empty() ? nullptr : e->args[0].get())
+        if (Symbol* s = rootOf(t))
+          rangeUnsafe_.insert(s);
+    }
+    if (e->kind == HExpr::Call && e->sym &&
+        (e->sym->kind == Symbol::ProcName || e->sym->isEntry || e->sym->isEntryVar))
+      for (auto& a : e->args)
+        if (Symbol* s = rootOf(a.get()))
+          rangeUnsafe_.insert(s);
     scanExpr(e->a.get());
     scanExpr(e->b.get());
     scanExpr(e->locPtr.get());
     for (auto& a : e->args)
       scanExpr(a.get());
   };
-  std::function<void(HStmt*)> scan;
-  scan = [&](HStmt* st) {
+  std::function<void(HStmt*, bool)> scan;
+  scan = [&](HStmt* st, bool noSize) {
     if (!st)
       return;
+    // The effective check state (ADR-110/320): a (NOSIZE) prefix covers its
+    // subtree, and CHECK(SIZE) clears the inherited disable there.
+    bool unchecked = st->chkSize ? false : (noSize || st->noSize);
+    // D1 (ADR-365): the root a target expression writes.
+    auto mark = [&](HExpr* e) {
+      if (Symbol* s = rootOf(e))
+        rangeUnsafe_.insert(s);
+    };
+    // A raw byte store bypasses the precision check whatever the prefix says.
+    auto markRaw = [&](HExpr* e) {
+      if (e && e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR"))
+        mark(e);
+    };
+    switch (st->kind) {
+    case HStmt::Assign:
+      // A (NOSIZE) assignment may leave the declared precision (ADR-282 opts
+      // in at the prefix), and a pseudo-variable target writes raw bytes.
+      if (unchecked) {
+        mark(st->target.get());
+        for (auto& t : st->extraTargets)
+          mark(t.get());
+      }
+      markRaw(st->target.get());
+      for (auto& t : st->extraTargets)
+        markRaw(t.get());
+      break;
+    case HStmt::Get:
+      // GET converts into its targets under the same check state.
+      if (unchecked)
+        for (auto& it : st->items)
+          mark(it.get());
+      for (auto& it : st->items)
+        markRaw(it.get());
+      break;
+    case HStmt::Declare:
+      // INITIAL is a conversion into the declared type (ADR-282), skipped
+      // under a (NOSIZE) prefix.
+      if (unchecked)
+        for (auto& d : st->decls)
+          if (d.sym && (d.init || d.initCall))
+            rangeUnsafe_.insert(d.sym);
+      break;
+    case HStmt::DoIter:
+      if (unchecked && st->sym)
+        rangeUnsafe_.insert(st->sym);
+      break;
+    case HStmt::Read:
+      // READ INTO writes the record's raw bytes, so the value need not be
+      // inside the declared precision at all.
+      mark(st->target.get());
+      break;
+    default:
+      break;
+    }
     if ((st->kind == HStmt::CallS) && (st->hasTaskOpt || st->eventRef || st->priorityExpr) &&
         st->sym && st->sym->proc)
       if (const HProc* hp = hprocOf(st->sym->proc))
         asyncCalled.insert(hp);
+    // D1 (ADR-365): a CALL passes each actual by reference.
+    if (st->kind == HStmt::CallS)
+      for (auto& a : st->args)
+        if (Symbol* s = rootOf(a.get()))
+          rangeUnsafe_.insert(s);
     scanExpr(st->target.get());
     scanExpr(st->value.get());
     scanExpr(st->cond.get());
@@ -5514,16 +5621,20 @@ void IRGen::computeByValueParams(const HProgram& prog) {
       scanExpr(d.init.get());
       scanExpr(d.initCall.get());
     }
-    scan(st->thenS.get());
-    scan(st->elseS.get());
-    scan(st->unit.get());
+    scan(st->thenS.get(), unchecked);
+    scan(st->elseS.get(), unchecked);
+    scan(st->unit.get(), unchecked);
     for (auto& b : st->body)
-      scan(b.get());
+      scan(b.get(), unchecked);
   };
-  for (auto& p : prog.procs) {
+  for (auto& p : prog.procs)
     for (auto& st : p->body)
-      scan(st.get());
-  }
+      scan(st.get(), false);
+  // A DEFINED overlay writes its base's storage through the overlay's own
+  // type, so the base carries no range fact (D1, ADR-365).
+  for (Symbol* sym : sema_.storage())
+    if (sym && sym->definedBase)
+      rangeUnsafe_.insert(sym->definedBase);
   // A DEFINED overlay stores through its base's cell, so a parameter that
   // is any overlay's base keeps by reference.
   std::unordered_set<Symbol*> overlayBase;
@@ -5935,7 +6046,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   // P6.1b (ADR-215): a by-value parameter keeps a frame cell holding the
   // entry value, so every address-taking path (static links, argAddr of a
   // nested call, DEFINED-free reads) keeps working unchanged. No store to
-  // the cell exists anywhere (proven by computeByValueParams), so reads see
+  // the cell exists anywhere (proven by computeWholeProgramFacts), so reads see
   // the entry value and the inliner sees an SSA argument after SROA.
   for (Symbol* s : p->paramSyms) {
     if (!isByValueParam(s))
@@ -11574,25 +11685,32 @@ void IRGen::annotateAlias(llvm::Instruction* inst, Symbol* s) {
   }
 }
 
-// Stamp !range on a FIXED BINARY(p) load (P3b): the declared precision bounds
-// the value to a signed p-bit range, narrower than the i32/i64 storage. LLVM
-// can then fold downstream overflow checks and narrow induction variables.
-// Guard: only when sizeChecks() is off — at -O2/-O3 the optimizer already
-// assumes no signed overflow, making the range fact consistent; with traps on
-// the trap blocks own overflow control and the range would be unsound.
-void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty) {
-  if (!load || ty.k != TK::FixedBin || sizeChecks())
+// Stamp !range on a FIXED BINARY(p) load (D1, ADR-365). The declared range is
+// [-2^p, 2^p-1] (ADR-282), and it is an invariant only where the SIZE check
+// enforces it at every write (ADR-252): a (NOSIZE) build stores values wider
+// than the declared precision, so no fact is emitted there. The fact is also
+// skipped where another declaration can write the storage — an overlay, a
+// locator, an escaped address, a raw UNSPEC store, a UNION sibling — because
+// those writes carry no check for this type. The predicate itself lives in the
+// decision layer so it can be read without a backend (the plan's C2).
+void IRGen::stampFixedBinRange(llvm::LoadInst* load, const Type& ty, Symbol* root,
+                               const std::vector<unsigned>* memberPath) {
+  if (!load || ty.k != TK::FixedBin || noRangeFacts_)
     return;
   if (!load->getType()->isIntegerTy())
     return; // a whole array is copied; there is no scalar range to stamp
-  unsigned typeWidth = load->getType()->getIntegerBitWidth();
-  unsigned prec = ty.prec;
-  if (prec <= 0 || prec >= typeWidth)
-    return; // range fills the type — no narrowing
-  // Signed p-bit range: [-(2^(p-1)), 2^(p-1)-1]; LLVM range is half-open.
-  llvm::APInt lo = llvm::APInt::getSignedMinValue(prec).sextOrTrunc(typeWidth);
-  llvm::APInt hi = llvm::APInt::getSignedMaxValue(prec).sextOrTrunc(typeWidth);
-  hi += 1; // half-open upper bound, widened before increment to avoid prec-bit overflow
+  pli::RangeSite site;
+  site.storageBits = load->getType()->getIntegerBitWidth();
+  site.precisionChecked = sizeChecks();
+  site.privateStorage = root && curProc_ && !rangeUnsafe_.count(root) &&
+                        pli::aliasClass(root) == pli::AliasClass::Disjoint;
+  site.unionMember = root && memberPath && pathInUnion(root->ty, *memberPath);
+  pli::RangeFact f = pli::fixedBinRangeFact(ty.prec, site);
+  if (!f.emit)
+    return;
+  // The declared range ADR-282 defines: [-2^p, 2^p-1], half-open above.
+  llvm::APInt lo = llvm::APInt(site.storageBits, (uint64_t)f.lo, /*isSigned=*/true);
+  llvm::APInt hi = llvm::APInt(site.storageBits, (uint64_t)f.hi, /*isSigned=*/true);
   llvm::MDBuilder mdb(load->getContext());
   load->setMetadata(llvm::LLVMContext::MD_range, mdb.createRange(lo, hi));
 }
@@ -11631,7 +11749,7 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
   }
    llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   annotateAlias(r, sym);
-  stampFixedBinRange(r, ty);
+  stampFixedBinRange(r, ty, sym);
   if (ty.isComplex()) {
     // A complex value (QR2.2/CM5) is the {double,double} struct itself.
     v.cpx = r;
@@ -12015,7 +12133,7 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
       arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : nullptr,
                        dynLb_.count(sym) ? dynLb_[sym] : nullptr);
      llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-     stampFixedBinRange(cast<llvm::LoadInst>(r), el);
+     stampFixedBinRange(cast<llvm::LoadInst>(r), el, sym);
      if (el.isBit() && el.len == 1)
        v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
      else
@@ -13186,7 +13304,7 @@ Val IRGen::emitExpr(HExpr* e) {
       llvm::LoadInst* r = b_.CreateLoad(llvmTy(leaf), addr, "mld");
       if (packed)
         r->setAlignment(llvm::Align(1));
-      stampFixedBinRange(r, leaf);
+      stampFixedBinRange(r, leaf, e->sym, &e->memberPath);
       v.reg = leaf.isBit() && leaf.len == 1 ? b_.CreateTrunc(r, b_.getInt1Ty(), "b1") : r;
       return v;
     }

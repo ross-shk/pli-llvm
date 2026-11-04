@@ -1,0 +1,21 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* D1 (ADR-365): a range fact is emitted only where the declared range
+    is an invariant. A (NOSIZE) store may leave the precision, a call
+    passes the actual by reference (the callee can write it), and a
+    parameter is the caller's storage, so none of these loads carries
+    a fact. */
+ range_guard: procedure options(main);
+    declare a(4) fixed bin(15);
+    declare b fixed bin(15);
+    declare i fixed bin(31);
+    i = 1;
+    (nosize): a(i) = 40000;
+    b = 1;
+    call sub(b);
+    put skip list(a(i), b);
+ end range_guard;
+ sub: procedure(x);
+    declare x fixed bin(15);
+    put skip list(x);
+ end sub;

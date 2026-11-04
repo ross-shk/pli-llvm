@@ -13695,3 +13695,92 @@ the COMPLEX layout and every arithmetic/built-in path). Treat IMAGINARY as an
 error everywhere (the feature is IBM Enterprise and B11 lists it as remaining
 work). Infer the imaginary part from usage without the attribute (there is no
 surface syntax for that in PL/I).
+
+## ADR-365 — The declared-precision range fact is emitted only where SIZE enforces it
+
+**Context.** `DEFERRED-WORK.md` D1 is the range-fact step ADR-252 ordered after
+the declared-precision check: once `SIZE` enforces `FIXED BINARY(p)`'s range
+`[-2^p, 2^p-1]` at every conversion (ADR-282, row A2), a load may promise that
+range so LLVM can fold the storage-width overflow checks that remain. The tree
+had a `stampFixedBinRange` from the P3b work, and it was not sound:
+
+* it stamped a **p-bit signed** range, `[-2^(p-1), 2^(p-1)-1]` — one bit
+  narrower than the range ADR-282 defines, so a legal `FIXED BINARY(31)` value
+  of `2147483647` was described as `< 2^30`;
+* it stamped only with the SIZE checks **off**, which is the mode where a
+  `(NOSIZE)` store may leave the declared precision and make the range false;
+* it stamped any load of a `FIXED BINARY(p)` symbol, including a parameter, an
+  overlay base, a UNION member, and storage an escaped address lets another
+  declaration write.
+
+The consequence was a live silent wrong answer at the default `-O2` (which
+implies `--no-size-checks`, ADR-111): a `FIXED BINARY(31)` array element holding
+`2147483647` and compared with `> 1073741824` printed `0`, because the load
+carried `!range [-2^30, 2^30)`.
+
+**Decision.**
+
+1. **The fact states ADR-282's range.** `[-2^p, 2^p-1]`, half-open above, so
+   the emitted metadata is `[i32 -32768, i32 32768)` for `FIXED BINARY(15)`.
+   When `p+1` fills the slot (`p = 31` in i32, `p = 63` in i64) the fact says
+   nothing and is not emitted.
+2. **The fact is emitted only where the range is an invariant.** The predicate
+   moves into the decision layer (`RangeSite`/`fixedBinRangeFact`,
+   `src/irgen_decisions.cpp`, the plan's C2), and it requires: the SIZE check is
+   on at the load (`sizeChecks()`, so a `(NOSIZE)` build or `--no-size-checks`
+   emits none), the storage is owned by the declaration (`aliasClass` is
+   `Disjoint`), and the storage is on none of the unsafe lists the module walk
+   collects:
+   * an **address that escapes**: `ADDR`/`BYADDR`, or an actual of a user call
+     (the callee — or foreign code — can write it with no check for this type);
+   * a **raw byte store**: `READ ... INTO`, `UNSPEC(x) = …`, `SUBSTR(x, …) = …`;
+   * a **(NOSIZE) write**: an effective `(NOSIZE)` prefix covers its subtree
+     (`CHECK(SIZE)` clears it), and a `(NOSIZE)` assignment, `GET`, `INITIAL`
+     or DO-control store may leave the declared precision;
+   * a **UNION member**, whose sibling shares the storage, and a **DEFINED
+     base**, which an overlay writes through its own type.
+3. **`INITIAL` item lists run the ADR-282 check.** An array or structure
+   `INITIAL` element stored an out-of-range constant without the precision
+   check, which would have made a fact on it false; `initValue` now routes a
+   `FIXED BINARY` initial through `fixedBinPrecTrap`.
+4. **`--no-range-facts` is the differential oracle.** It emits the same program
+   without the metadata, so the benchmark pair prices the fact itself.
+
+**Measurements** (arm64 macOS, LLVM 23.1.3, median of five):
+
+| Pair | A (ms) | B (ms) | B/A |
+|---|---|---|---|
+| `fixed_narrow`, check-free vs `--size-checks` | 76.51 | 139.44 | 1.82x |
+| `fixed_narrow`, facts vs `--no-range-facts` (both `--size-checks`) | 139.26 | 156.10 | **1.12x** |
+| `checks_on`, check-free vs `--size-checks` | 85.98 | 158.48 | 1.84x |
+
+The fact is worth **12%** on the narrow workload: with the fact, LLVM folds the
+storage-width checks that the precision check leaves behind on `x * 3 + 1`.
+`checks_on` is unchanged at 1.84x, exactly as ADR-282 predicted:
+its hot items are `FIXED BINARY(31)`/`(63)`, whose declared range fills the slot,
+so there is no narrower fact to emit. The fact therefore cannot move the
+checks-on ratio toward 1.5x; it is worth what D1's text says it is worth, and
+only for a `p` narrower than its slot.
+
+**Consequences.** The fact no longer exists in a checks-off build (the default
+`-O2`), where it was the source of the wrong answer; it exists to let LLVM fold
+the checks that survive with SIZE on. `tests/driver/range_facts.sh` pins seventeen
+cases — the top of a narrow range, a full-slot value at the default `-O2`, a
+`(NOSIZE)` write, a callee writing the caller's storage by reference, a
+parameter, a UNION sibling and an `ADDR`-exposed variable — each in a checked
+and a default build, plus the `--no-range-facts` oracle.
+`tests/ir/range_fixedbin.pli` pins the emitted `[-32768, 32768)` and
+`tests/ir/range_fixedbin_guard.pli` pins the absence of a fact for the unsafe
+storage. The previous `tests/ir/range_fixedbin.flags` (`--no-size-checks -O2`)
+was removed: that mode no longer emits a fact, which is the point.
+
+**Rejected.** *Emit the fact with the checks off* — a `(NOSIZE)` store leaves
+the declared precision, so the p+1 range would be a lie; the old test pinned it
+and the old code miscompiled. *Keep the p-bit range* — it is one bit narrower
+than the declared type, so a legal value alone is enough to fold a comparison
+wrongly. *Trust `aliasClass` alone* — it classifies the declaration's storage
+kind, not whether the address escaped; a plain AUTOMATIC passed by reference is
+still `Disjoint`. *Wrap `(NOSIZE)` stores to `p+1` bits and keep the fact in
+every mode* — a larger semantic change (ADR-282's gate pins the wide-slot value
+standing), and the fact's purpose is to fold checks, which only exist with
+SIZE on.

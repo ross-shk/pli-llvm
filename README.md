@@ -116,6 +116,7 @@ On x86-64, with alternating PL/I/C samples, the IR geomean is **0.84× on Window
 | `by_name` | 0.47× | Copies a group of fields using name-based mapping |
 | `pure_call` | 0.65× | Lets the compiler reuse a helper call safely inside a loop |
 | `io_list` | 0.69× | Writes a list of mixed value types |
+| `fixed_narrow` | 0.74× | Does narrow FIXED BINARY arithmetic inside its declared range |
 | `concat_const` | 0.85× | Builds a final string using fixed offsets |
 | `checks_on` | 0.85× | Does array and overflow checks that can’t be skipped |
 | `bit_merge` | 0.98× | Combines two masked bit tests into one |

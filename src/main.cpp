@@ -111,6 +111,8 @@ static void usage() {
          "                   it is set (ADR-266; off by default)\n"
          "  --remark-library-calls  remark when a built-in hands a conversion to\n"
          "                   the library routine (ADR-254; off by default)\n"
+         "  --no-range-facts  suppress the declared-precision !range facts\n"
+         "                   (ADR-365; the differential oracle for a benchmark)\n"
          "  --emit-effects=FILE  publish the effects this module's external\n"
          "                   procedures promise, for another module to use\n"
          "  --effects=FILE  use the effects another module published (ADR-267)\n"
@@ -332,7 +334,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        bool noMemoryEffects = false, bool warnUnset = false,
                        const std::string& effectsFile = "",
                        const std::string& emitEffectsFile = "",
-                       bool remarkLibraryCalls = false) {
+                       bool remarkLibraryCalls = false, bool noRangeFacts = false) {
   (void)fileIndex;
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
@@ -403,6 +405,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                 false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
+    irgen.setNoRangeFacts(noRangeFacts);
     irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -421,6 +424,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                 false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
+    irgen.setNoRangeFacts(noRangeFacts);
     std::string ir = irgen.run(hir);
     if (!diags.ok())
       return false;
@@ -466,6 +470,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
               linkBitcode, lowerMode, perOpOverrides, platformBc, noMemoryEffects, optimizing);
     ipg.setPublishedEffects(published);
     ipg.setRemarkLibraryCalls(remarkLibraryCalls);
+    ipg.setNoRangeFacts(noRangeFacts);
     auto om = ipg.takeModule(hir);
     if (!om) {
       if (diags.ok())
@@ -574,6 +579,8 @@ int main(int argc, char** argv) {
   bool warnUnset = false; // --warn-unset: WS-A5 "used before set" (ADR-266)
   // --remark-library-calls: WS-K4, the library-call conversion remark (ADR-254).
   bool remarkLibraryCalls = false;
+  // --no-range-facts: D1's oracle, the same program without !range (ADR-365).
+  bool noRangeFacts = false;
   // WS-A2 (ADR-267): the published-effects file, in both directions.
   std::string effectsFile, emitEffectsFile;
   std::string ltoKind;
@@ -607,6 +614,8 @@ int main(int argc, char** argv) {
       print_facts = true;
     else if (a == "--remark-library-calls")
       remarkLibraryCalls = true;
+    else if (a == "--no-range-facts")
+      noRangeFacts = true;
     else if (a == "-fsyntax-only")
       syntaxOnly = true;
     else if (a == "--keep-ll")
@@ -967,7 +976,7 @@ int main(int argc, char** argv) {
                     ltoKind,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
                     noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
-                    remarkLibraryCalls))
+                    remarkLibraryCalls, noRangeFacts))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);

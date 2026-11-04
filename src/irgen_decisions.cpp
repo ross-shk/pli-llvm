@@ -927,6 +927,24 @@ InlineDecision decideInline(const std::string& op, const CallSite& site) {
   return d;
 }
 
+// D1's decision (ADR-365): a FIXED BINARY(p) load may promise the declared
+// range only when the SIZE check enforces that range at every write (ADR-252)
+// and no other declaration shares the storage. A range that fills the slot
+// says nothing, so it is not emitted either.
+RangeFact fixedBinRangeFact(int prec, const RangeSite& site) {
+  RangeFact f;
+  if (prec <= 0 || site.storageBits == 0 || prec >= (int)site.storageBits - 1)
+    return f;
+  if (!site.precisionChecked || !site.privateStorage || site.unionMember)
+    return f;
+  // prec is at most storageBits - 2 (at most 62 here), so 2^prec fits.
+  long long lim = 1LL << prec;
+  f.lo = -lim;
+  f.hi = lim;
+  f.emit = true;
+  return f;
+}
+
 
 // The text of a REPEAT of a constant string a constant number of times
 // (ADR-241). The decision lives here, outside irgen.cpp (the plan's C2), so

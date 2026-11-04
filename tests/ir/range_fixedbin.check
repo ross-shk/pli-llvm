@@ -1,3 +1,2 @@
-CHECK: load i32, ptr
-CHECK: !range !
-CHECK: !5 = !{i32 -1073741824, i32 1073741824}
+CHECK: %ald{{[0-9]*}} = load i32, ptr %aelem{{[0-9]*}}, align 4, !range !{{[0-9]+}}
+CHECK: !{{[0-9]+}} = !{i32 -32768, i32 32768}

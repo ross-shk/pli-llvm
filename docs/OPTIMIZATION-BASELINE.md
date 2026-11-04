@@ -1141,6 +1141,29 @@ bounded outcome ADR-252 predicted, now with the range defined correctly: the
 surviving checks are the storage checks, and at `p = 31`/`63` those are the
 precision checks.
 
+**The range fact, measured on a narrow precision (D1, ADR-365).** D1's win only
+exists where `p` is narrower than its slot, so the corpus gained
+`benchmarks/lang/fixed_narrow.pli`: every hot item is `FIXED BINARY(15)` in an
+i32 slot, with a C `int16_t` twin. The pair that prices the fact itself compiles
+the same program twice with `--size-checks` and differs only in
+`--no-range-facts`:
+
+| Pair | A (ms) | B (ms) | B/A |
+|---|---|---|---|
+| `fixed_narrow`, `--size-checks` vs `--size-checks --no-range-facts` | 139.26 | 156.10 | **1.12x** |
+| `fixed_narrow`, check-free (`-O2`) vs `--size-checks` | 76.51 | 139.44 | 1.82x |
+| `checks_on`, check-free vs `--size-checks` (re-run) | 85.98 | 158.48 | 1.84x |
+
+The fact is worth **12%** for a narrow precision: with it, LLVM folds the
+storage-width overflow checks that the precision check leaves behind (the
+`x * 3 + 1` in the hot loop). `checks_on` does not move, because its
+`FIXED BINARY(31)`/`(63)` items fill their slots and have no narrower range to
+state — the 1.5x criterion stays out of reach for the reason ADR-252 gave. The
+fact is emitted only where the declared range is an invariant (ADR-365): a
+`(NOSIZE)` build emits none, so the default `-O2` loses the old metadata that
+had been the source of a `FIXED BINARY(31)` wrong answer; the fact's purpose is
+to fold the checks that exist with SIZE on.
+
 ### 11.2 I2 — loop fusion: **deferred**
 
 The plan defers it: it needs a dependence analysis, LLVM's loop-fusion pass is

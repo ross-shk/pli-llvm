@@ -126,7 +126,7 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 
 | ID | Work | Status | Gate to promote | Size | Deps |
 |---|---|---|---|---|---|
-| D1 | Range facts for declared precision, then re-measure the checks-on ratio against 1.5x | open | A2 landed (ADR-282); `OB §11.1`, ADR-252. The win is now only for a `p` narrower than its slot: at `p = 31`/`63` the storage check is the precision check, and `stampFixedBinRange` also needs the ADR-282 range before a fact is emitted | M | — |
+| D1 | **Range facts for declared precision, then re-measure the checks-on ratio against 1.5x** | done | Served by ADR-365: the fact states ADR-282's `[-2^p, 2^p-1]` (the old code stamped a *p*-bit range, one bit too narrow, and miscompiled a `FIXED BINARY(31)` value at the default `-O2`) and is emitted only where the declared range is an invariant — SIZE on, `AliasClass::Disjoint`, no `(NOSIZE)` write, no escaped address/`ADDR`, not a parameter, overlay base, UNION member or `READ ... INTO` target; `INITIAL` item lists now run the A2 precision check. Gates: `tests/driver/range_facts.sh` (seventeen cases), `tests/ir/range_fixedbin*.pli`; `--no-range-facts` is the oracle. `fixed_narrow` facts vs no facts: **139.26 vs 156.10 ms, 1.12x**; check-free vs `--size-checks` 1.82x; `checks_on` 1.84x, unchanged because `p = 31`/`63` fills the slot — the 1.5x target stays out of reach, as ADR-282 predicted | the fact is correct at every site it is emitted, folds the surplus storage check for a `p` narrower than its slot, and `OB §11.1` records the re-measurement | M | A2 |
 | D2 | `C5` exponent patch: `sitofp` followed by a multiply by 2^-q | done | Served by ADR-284 in the A3 change: `convert()` lowers `FIXED BINARY -> FLOAT` as `sitofp` then `fmul 2^-q` (factor from `std::ldexp(1.0, -q)`), not a divide; ADR-244 is released (`OB §9.4`) | S | A3 |
 | D3 | `E5` narrow-type codegen: add a 32-bit target benchmark first | gated | a narrow-integer workload on a 32-bit or embedded target shows a gap; on x86-64 the expected gain is ~0 (`OB §10.3`) | S–M | measurement |
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
@@ -162,7 +162,8 @@ Do not re-open these without a new record.
 
 - `A1` (landed) was the tracking surface every other row depends on; its standing
   duty is now a working rule.
-- `A2` → `D1` (the precision check must land before range facts are emitted).
+- `A2` → `D1` (the precision check must land before range facts are emitted;
+  D1 landed in ADR-365).
 - `A3` → `D2` (served together by ADR-284: the language feature and its
   exponent patch).
 - `B0` → `B5` (a sanitizer run before the area and locator work ships).
@@ -188,8 +189,9 @@ Do not re-open these without a new record.
   ADR-351 served A8, ADR-352 served A9, ADR-353 served A10, ADR-354 served
   B14, ADR-355 served B15, ADR-356 served C6, ADR-357 served C7 and ADR-358
   served B0; ADR-360 served the in-memory link, ADR-361/362 served B11's
-  FIXED division, and ADR-363 served character exponent text, so 364 is now
-  the next free number. Collisions happen: 192/194 and
+  FIXED division, ADR-363 served character exponent text, ADR-364 served
+  B11's IMAGINARY and ADR-365 served D1, so 366 is now the next free number.
+  Collisions happen: 192/194 and
   239 were renumbered (ADR-232, ADR-279),
   the fiber-stack entry that repeated the ABNORMAL/NORMAL ADR-308 was
   renumbered to ADR-313, and the ASan ADR is now 341 after the GET branch took
