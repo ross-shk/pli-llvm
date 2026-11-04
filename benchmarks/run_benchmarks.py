@@ -99,6 +99,10 @@ LANG_BENCHMARKS = [
     # the same constants with a binary search, which is what a
     # binary-search lowering would produce.
     ("select_chain",  "lang/select_chain.pli",  "lang/baseline/select_chain_c.c"),
+    # WS-K2 (ADR-254): INDEX with a constant needle folds to a membership
+    # table; INDEX with a variable needle uses the LLVM memchr expansion.
+    # The per-call-site predicate flips the path between the two call sites.
+    ("index_flip",    "lang/index_flip.pli",    "lang/baseline/index_flip_c.c"),
 ]
 
 # WS-A2 (ADR-267): a benchmark whose callee lives in another compilation unit
@@ -310,6 +314,7 @@ CHECKS = {
     "bit_merge":        {"min_ms_O2": 50, "float_tol": False},
     "by_name":          {"min_ms_O2": 50, "float_tol": False},
     "select_chain":     {"min_ms_O2": 50, "float_tol": False},
+    "index_flip":       {"min_ms_O2": 50, "float_tol": False},
 }
 
 # Benchmarks whose C twin is a *descriptive* reference, not a parity twin: the

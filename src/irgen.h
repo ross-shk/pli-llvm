@@ -776,7 +776,7 @@ private:
   // LLVM lowering is implemented for the requested mode. Forced modes that
   // have no implementation fall back to runtime and report the fallback
   // under -v (design-docs/mlir-runtime-migration-plan.md §5.2, §6.5).
-  bool useRuntimeCall(const std::string& op);
+  bool useRuntimeCall(const std::string& op, const pli::CallSite& site = {});
   // The lowering policy for `op` without recording the decision: used where
   // the caller has already asked for it (ADR-260).
   bool runtimePath(const std::string& op);
@@ -791,7 +791,8 @@ private:
   // LLVM lowering (P1+). call sites always go through these so the policy
   // table and per-op overrides are honoured uniformly.
   void emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src, llvm::Value* srcLen);
-  llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen);
+  llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
+                         llvm::Value* bLen, const pli::CallSite& site);
   // Dispatch wrappers for W1 string operations (P3). Each checks the active
   // lowering mode and either emits a pli_* runtime call or a direct LLVM
   // lowering.

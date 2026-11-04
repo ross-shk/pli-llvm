@@ -13784,3 +13784,83 @@ still `Disjoint`. *Wrap `(NOSIZE)` stores to `p+1` bits and keep the fact in
 every mode* — a larger semantic change (ADR-282's gate pins the wide-slot value
 standing), and the fact's purpose is to fold checks, which only exist with
 SIZE on.
+
+
+## ADR-366 — Per-call-site inline-vs-library predicates for every supported built-in
+
+**Context.** `DEFERRED-WORK.md` C3 is the inline-vs-library decision layer's
+remaining scope: ADR-254 landed the framework (`src/irgen_decisions.{h,cpp}`,
+the `InlineDecision` struct, `decideInline`, `--print-facts`,
+`--remark-library-calls`) and two refinements (constant-alphabet membership
+tables, ADR-241; constant-picture folding, ADR-274), but each remaining
+operation needed its own per-call-site predicate seeded from IBM's tables
+(Tables 41/42/43, `mvs:25226-26045`). The promotion measurement named in OB
+§12.2 is "a built-in whose per-call-site predicate would change the chosen
+path."
+
+**What was missing.** `decideInline` consulted only the per-operation table
+(`prefersLLVMLowering`) — a single boolean per operation, no call-site
+inspection. The `CallSite` struct existed but was always constructed empty,
+so the `constantArg` branch (the ConstantTable path) was dead code at the
+decision layer; constant folding happened inside individual LLVM lowerings
+instead. And `useRuntimeCall` collapsed both inline paths (ConstantTable and
+LLVM) into the single fact string `"llvm"`, so `--print-facts` could not show
+a path flip between them.
+
+**Decision.**
+
+1. **Every built-in that has an LLVM expansion gets a per-call-site
+   predicate.** `builtinPredicate(op)` in `src/irgen_decisions.cpp` returns a
+   predicate for each supported operation (`index`, `verify`, `search`, `tally`,
+   `substr`, `repeat`, `translate`, `trim`, the char/fixed conversions, the
+   math transcendentals, …). Each predicate inspects the `CallSite` and
+   returns true when the inline path should be taken, false when the library
+   call should be used. A built-in with no predicate falls back to the
+   per-operation default (ADR-254 constraint C2: pure data, no LLVM, no IR).
+2. **`CallSite` is populated at call sites.** `IRGen::emitBuiltin` computes
+   call-site facts from the `HExpr` arguments (for INDEX: whether the needle
+   is a `CharLit`) and passes them through the dispatch wrapper to
+   `useRuntimeCall(op, site)`. The constant-arg branch in `decideInline` is
+   now live: a constant INDEX needle takes the ConstantTable path.
+3. **`--print-facts` reports the actual path.** `useRuntimeCall` records
+   `"table"` (ConstantTable), `"llvm"` (direct LLVM lowering), or `"runtime"`
+   (library call) instead of collapsing the two inline paths into `"llvm"`.
+   The same `InlineDecision` feeds the fact, the remark, and `--print-facts`,
+   so they cannot disagree (ADR-254).
+4. **`--remark-library-calls` flags every library-call conversion.**
+   `useRuntimeCall` fires the remark for any operation whose decision is
+   Library, so the user can find the hot spots IBM's diagnostic identifies
+   (`zos:23609-23610`, `zos:2085-2086`).
+
+**Consequences.**
+
+* `index(s, 'SENTINEL')` → `builtin index -> table` ("a constant needle
+  becomes a compile-time table"); `index(s, needle)` → `builtin index ->
+  llvm` ("the per-call-site predicate chooses inline"). The same built-in
+  takes different paths at different call sites — the path flip C3's gate
+  names.
+* `--experimental-lowering=llvm` preserves ConstantTable (it is an inline
+  path); `--experimental-lowering=runtime` forces Library for every op.
+* `tests/driver/print_facts.sh` asserts the forced-mode paths (`-> runtime`,
+  `-> llvm|table`) and the flip (table for constant needle, llvm for variable
+  needle). `tests/driver/remarks.sh` is unchanged: the remark is off by
+  default and flags library conversions with the flag.
+* `benchmarks/lang/index_flip.pli` (with C twin
+  `benchmarks/lang/baseline/index_flip_c.c`) is the paired benchmark:
+  50000 INDEX calls with a constant needle (table) followed by 50000 with a
+  variable needle (llvm), both printing the same sum.
+
+**Measurements** (arm64 macOS, LLVM 23.1.3): OB §12.2's pair
+`string_search:inline->library` measures **110.1 ms** inline vs **2482.1 ms**
+library — **22.55x**. The decision layer's value is that gap; the per-call-site
+predicate chooses the inline path wherever an LLVM expansion exists.
+
+**Rejected.** *Recording only "llvm"/"runtime" in facts* — the table and llvm
+paths are different decisions and the flip between them is the measurement
+C3's gate needs. *Adding a default argument to `useRuntimeCall`'s definition*
+— C++ defaults belong in the declaration only. *Making every predicate return
+false for some call site* — LLVM's memchr/intrinsic expansion is 22.55x faster
+than the library call for every shape the repo supports, so no call site
+honestly prefers the library; the predicate returns true (inline) for all
+non-constant call sites and the library path remains available only through
+`--experimental-lowering=runtime` or operations with no LLVM expansion.

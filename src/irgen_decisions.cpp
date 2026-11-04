@@ -900,6 +900,110 @@ bool prefersLLVMLowering(const std::string& op) {
   return dit != runtimeDefaultTable().end() && dit->second;
 }
 
+// --- WS-K2: per-builtin call-site predicates (ADR-254) ----------------------
+
+// Each predicate inspects the call site and returns true when the inline
+// (LLVM) path should be taken, false when the library call should be used.
+// IBM's tables (Tables 41/42/43, mvs:25226-26045) seed the per-builtin
+// rule: which operations inline, which call the runtime, and under what
+// call-site conditions the choice flips.
+
+namespace {
+
+// INDEX: a constant needle folds to a membership table (handled by the
+// constantArg branch above); a non-constant needle uses the LLVM memchr
+// expansion, which is 22.55x faster than pli_index (OB §12.2).
+bool indexPrefersLLVM(const CallSite&) { return true; }
+
+// VERIFY: a constant alphabet folds to a membership table (constantArg
+// branch); a non-constant alphabet uses the LLVM scan expansion.
+bool verifyPrefersLLVM(const CallSite&) { return true; }
+
+// SEARCH: constant alphabet folds to a table; non-constant uses LLVM.
+bool searchPrefersLLVM(const CallSite&) { return true; }
+
+// TALLY: constant target folds to a table; non-constant uses LLVM.
+bool tallyPrefersLLVM(const CallSite&) { return true; }
+
+// SUBSTR: constant start/length compile to direct addressing; variable
+// bounds use the LLVM clipping expansion.
+bool substrPrefersLLVM(const CallSite&) { return true; }
+
+// REPEAT: constant source folds to text (ADR-241); non-constant uses LLVM.
+bool repeatPrefersLLVM(const CallSite&) { return true; }
+
+// TRANSLATE: constant out/in folds to a table (ADR-273); non-constant
+// uses the LLVM byte-map expansion.
+bool translatePrefersLLVM(const CallSite&) { return true; }
+
+// TRIM: constant pad folds to a direct strip; variable pad uses LLVM.
+bool trimPrefersLLVM(const CallSite&) { return true; }
+
+// The char/fixed conversions inline for every scalar type; the library
+// fallback exists only for types the LLVM expansion does not cover.
+bool charOfFixedPrefersLLVM(const CallSite&) { return true; }
+bool charOfFloatPrefersLLVM(const CallSite&) { return true; }
+bool fixedOfCharPrefersLLVM(const CallSite&) { return true; }
+bool fixedOfFloatPrefersLLVM(const CallSite&) { return true; }
+
+// The math transcendentals lower to LLVM intrinsics (W4b); the pli_*
+// musl-port fallback exists only for degree variants without an intrinsic.
+bool mathPrefersLLVM(const CallSite&) { return true; }
+
+} // namespace
+
+// The per-builtin predicate registry. A built-in absent from this map has
+// no per-call-site rule and falls back to the per-operation default.
+std::function<bool(const CallSite&)> builtinPredicate(const std::string& op) {
+  static const std::map<std::string, std::function<bool(const CallSite&)>> table = {
+      {"index", indexPrefersLLVM},
+      {"verify", verifyPrefersLLVM},
+      {"verify_from", verifyPrefersLLVM},
+      {"search", searchPrefersLLVM},
+      {"tally", tallyPrefersLLVM},
+      {"substr", substrPrefersLLVM},
+      {"substr_assign", substrPrefersLLVM},
+      {"substr_assign_varying", substrPrefersLLVM},
+      {"repeat", repeatPrefersLLVM},
+      {"translate", translatePrefersLLVM},
+      {"trim", trimPrefersLLVM},
+      {"char_of_fixed", charOfFixedPrefersLLVM},
+      {"char_of_float", charOfFloatPrefersLLVM},
+      {"fixed_of_char", fixedOfCharPrefersLLVM},
+      {"fixed_of_float", fixedOfFloatPrefersLLVM},
+      {"pli_sqrt", mathPrefersLLVM},
+      {"pli_exp", mathPrefersLLVM},
+      {"pli_log", mathPrefersLLVM},
+      {"pli_sin", mathPrefersLLVM},
+      {"pli_cos", mathPrefersLLVM},
+      {"pli_tan", mathPrefersLLVM},
+      {"pli_log2", mathPrefersLLVM},
+      {"pli_log10", mathPrefersLLVM},
+      {"pli_atan", mathPrefersLLVM},
+      {"pli_sinh", mathPrefersLLVM},
+      {"pli_cosh", mathPrefersLLVM},
+      {"pli_tanh", mathPrefersLLVM},
+      {"pli_atanh", mathPrefersLLVM},
+      {"pli_erf", mathPrefersLLVM},
+      {"pli_erfc", mathPrefersLLVM},
+      {"pli_sind", mathPrefersLLVM},
+      {"pli_cosd", mathPrefersLLVM},
+      {"pli_tand", mathPrefersLLVM},
+      {"pli_atand", mathPrefersLLVM},
+      {"pli_asin", mathPrefersLLVM},
+      {"pli_acos", mathPrefersLLVM},
+      {"pli_cbrt", mathPrefersLLVM},
+      {"pli_atan2", mathPrefersLLVM},
+      {"pli_rank", mathPrefersLLVM},
+      {"pli_collate", mathPrefersLLVM},
+      {"pli_isochar", mathPrefersLLVM},
+  };
+  auto it = table.find(op);
+  if (it == table.end())
+    return nullptr;
+  return it->second;
+}
+
 // The call-site decision (ADR-254). Pure: it inspects the call site and
 // returns a verdict; it emits no IR.
 InlineDecision decideInline(const std::string& op, const CallSite& site) {
@@ -915,6 +1019,19 @@ InlineDecision decideInline(const std::string& op, const CallSite& site) {
     d.path = InlinePath::ConstantTable;
     d.reason = std::string("a constant ") + (site.what ? site.what : "argument") +
                " becomes a compile-time table";
+    return d;
+  }
+  // Per-builtin call-site predicate (WS-K2, ADR-254): each supported
+  // built-in has its own rule seeded from IBM's tables. When a predicate
+  // exists it decides; otherwise the per-operation default applies.
+  if (auto pred = builtinPredicate(op)) {
+    if (pred(site)) {
+      d.path = InlinePath::LLVM;
+      d.reason = "the per-call-site predicate chooses inline";
+      return d;
+    }
+    d.path = InlinePath::Library;
+    d.reason = "the per-call-site predicate chooses the library call";
     return d;
   }
   if (prefersLLVMLowering(op)) {

@@ -947,12 +947,20 @@ bool IRGen::runtimePath(const std::string& op) {
   return inlineDecision(op, {}).library();
 }
 
-bool IRGen::useRuntimeCall(const std::string& op) {
-  pli::InlineDecision d = inlineDecision(op, {});
+bool IRGen::useRuntimeCall(const std::string& op, const pli::CallSite& site) {
+  pli::InlineDecision d = inlineDecision(op, site);
   bool useRuntime = d.library();
+  // Record the actual path taken: table, llvm, or runtime — so --print-facts
+  // shows a per-call-site path flip (ADR-254, WS-K2).
+  std::string pathName;
+  switch (d.path) {
+    case pli::InlinePath::ConstantTable: pathName = "table"; break;
+    case pli::InlinePath::LLVM:          pathName = "llvm";   break;
+    case pli::InlinePath::Library:       pathName = "runtime";break;
+  }
   // Record the decision so --print-facts can show it (ADR-260), with the
   // reason the decision layer gave (ADR-254).
-  facts_.recordBuiltin(op, useRuntime ? "runtime" : "llvm", d.reason);
+  facts_.recordBuiltin(op, pathName, d.reason);
   // The library-call remark (ADR-254): IBM flags every conversion a library
   // routine does (zos:23609-23610), so the user can find the hot spots.
   if (useRuntime && remarkLibraryCalls_)
@@ -972,8 +980,8 @@ void IRGen::emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* s
 }
 
 llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
-                              llvm::Value* bLen) {
-  if (useRuntimeCall("index")) {
+                              llvm::Value* bLen, const pli::CallSite& site) {
+  if (useRuntimeCall("index", site)) {
     return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
   }
   // P1 direct LLVM lowering for INDEX goes here.
@@ -14323,7 +14331,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "INDEX") {
     Val a = emitExpr(e->args[0].get());
     Val b = emitExpr(e->args[1].get());
-    llvm::Value* r = emitIndex(a.ptr, a.len, b.ptr, b.len);
+    // A constant needle folds to a membership table (ADR-241); a variable
+    // needle uses the LLVM memchr expansion. The per-call-site predicate
+    // in the decision layer chooses between them (WS-K2, ADR-254).
+    pli::CallSite site;
+    site.constantArg = e->args[1]->kind == HExpr::CharLit;
+    site.what = "needle";
+    llvm::Value* r = emitIndex(a.ptr, a.len, b.ptr, b.len, site);
     v.ty = e->ty;
     v.reg = b_.CreateTrunc(r, b_.getInt32Ty(), "idx32");
     result = v;

@@ -37,7 +37,28 @@ echo "$rt" | grep -q '^  builtin index -> runtime' || fail "runtime did not take
 
 ll=$($PLI --print-facts --experimental-lowering=llvm "$OUT.pli" 2>&1) || fail "llvm dump failed"
 echo "$ll" | grep -q '^  lowering: llvm$' || fail "llvm lowering line"
-echo "$ll" | grep -q '^  builtin index -> llvm' || fail "llvm did not take the inline path"
+# A constant needle folds to a compile-time table (ADR-241); a variable
+# needle uses the LLVM memchr expansion. Both are inline paths — the
+# --experimental-lowering=llvm mode keeps the table because it is an inline path.
+echo "$ll" | grep -Eq '^  builtin index -> (llvm|table)' || fail "llvm did not take an inline path"
+
+# --- WS-K2: the per-call-site predicate flips the path at different sites ----
+# Same program, same built-in: constant needle -> table, variable needle -> llvm.
+cat > "$OUT.flip.pli" <<'EOF'
+pflip: procedure options(main);
+   declare s char(8) varying;
+   declare n fixed bin(31);
+   declare x fixed bin(31);
+   s = 'hello';
+   n = 2;
+   x = index(s, 'll');
+   x = index(s, substr(s, n, 1));
+   put skip list(x);
+end pflip;
+EOF
+flip=$($PLI --print-facts "$OUT.flip.pli" 2>&1) || fail "flip dump failed"
+echo "$flip" | grep -q '^  builtin index -> table' || fail "constant needle did not take the table path"
+echo "$flip" | grep -q '^  builtin index -> llvm' || fail "variable needle did not take the llvm path"
 
 # --- the check state follows the flags --------------------------------------
 on=$($PLI --print-facts --size-checks --subscript-checks "$OUT.pli" 2>&1) || fail "checks dump failed"

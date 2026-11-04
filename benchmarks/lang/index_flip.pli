@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Index path flip (WS-K2): INDEX with a constant needle folds to a
+   compile-time membership table; INDEX with a variable needle uses the
+   LLVM memchr expansion. The per-call-site predicate chooses between
+   them, so one program takes both paths at different call sites. */
+index_flip: procedure options(main);
+   declare (i, n, pos, sum) fixed binary(63);
+   declare buffer character(100000) varying;
+   declare needle character(8) varying;
+
+   buffer = '';
+   do i = 1 to 2000;
+     buffer = buffer || 'abcdefghijklmnopqrstuvwxyz0123456789 ';
+   end;
+   buffer = buffer || 'ZZSENTINELZZ';
+
+   sum = 0;
+   n = 50000;
+
+   /* Constant needle -> table path */
+   do i = 1 to n;
+     pos = index(buffer, 'SENTINEL');
+     sum = sum + pos;
+   end;
+
+   /* Variable needle -> llvm path */
+   needle = 'SENTINEL';
+   do i = 1 to n;
+     pos = index(buffer, needle);
+     sum = sum + pos;
+   end;
+
+   put skip list(sum);
+end index_flip;

@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <functional>
 
 struct HProc;
 struct HProgram;
@@ -78,6 +79,12 @@ bool prefersLLVMLowering(const std::string& op);
 // The call-site decision (ADR-254). Pure: it inspects the call site and
 // returns a verdict; it emits no IR.
 InlineDecision decideInline(const std::string& op, const CallSite& site);
+
+// A per-builtin call-site predicate (WS-K2, ADR-254). Returns true when the
+// inline path should be taken for this operation at this call site, false when
+// the library call should be used. Returns nullptr when the built-in has no
+// per-call-site rule and the per-operation default should decide.
+std::function<bool(const CallSite&)> builtinPredicate(const std::string& op);
 
 // --- D1: the declared-precision range fact (ADR-365) ------------------------
 //
