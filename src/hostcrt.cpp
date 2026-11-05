@@ -28,8 +28,10 @@ EmbeddedSysrootMem materializeEmbeddedSysrootMem() {
     std::string err;
     std::string memPath = pli::createMemBlob(
         llvm::StringRef(reinterpret_cast<const char*>(files[i].data), files[i].len), err);
-    if (memPath.empty())
+    if (memPath.empty()) {
+      cleanupMaterializedSysrootMem(out);
       return EmbeddedSysrootMem();
+    }
     out.files[files[i].path] = memPath;
   }
   out.name = setName;

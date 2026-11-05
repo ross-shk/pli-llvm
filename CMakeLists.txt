@@ -288,7 +288,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         # Version string is the parent dir name; lexicographic compare works
         # because MSVC versions are zero-padded (14.39.33519 > 14.36.32532).
         get_filename_component(_dir_ver "${_dir}" DIRECTORY)
-        get_filename_component(_dir_ver "${_dir_ver}" DIRECTORY)
+        get_filename_component(_dir_ver "${_dir_ver}" NAME)
         if(NOT _pli_vc_best OR _dir_ver VERSION_GREATER _pli_vc_best_ver)
           set(_pli_vc_best "${_dir}")
           set(_pli_vc_best_ver "${_dir_ver}")
