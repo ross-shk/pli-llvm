@@ -104,6 +104,7 @@ jobs:
           mkdir -p zlib-root/lib
           cp zlib-build/zlibstatic.lib zlib-root/lib/zlibstatic.lib
           cp zlib-build/zlibstatic.lib zlib-root/lib/z.lib
+          cp zlib-build/zlibstatic.lib "$(cygpath -w "$HOME/pli-deps/lib/zlibstatic.lib")"
           echo "ZLIB_ROOT_DIR=$(cygpath -w "$(pwd)/zlib-root")" >> "$GITHUB_ENV"
           # Also expose zstd as bare name so lld-link finds zstd.lib via
           # target_link_directories (pli-deps ships zstd_static.lib).

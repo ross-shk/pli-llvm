@@ -46,7 +46,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # ZLIB (prefer static: the import lib would add a zlib.dll startup dependency)
   if(NOT TARGET ZLIB::ZLIB)
     find_file(ZLIB_LIB NAMES zlibstatic.lib zlib.lib
-      HINTS ${PLI_ZLIB_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
+      HINTS ${PLI_ZLIB_ROOT}/lib ${PLI_LLVM_STATIC_PREFIX}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZLIB_LIB)
       add_library(ZLIB::ZLIB STATIC IMPORTED)
