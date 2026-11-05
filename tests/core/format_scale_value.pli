@@ -1,0 +1,39 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* F scale factor (rules (50),(108)): scaling of values for editing. */
+ format_scale_value: procedure options(main);
+    declare buf char(20);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+    declare x fixed dec(7,2);
+    declare y fixed dec(7,2);
+
+    /* Positive scale: F(6,0,2) with 123 -> 12300. */
+    a = 123;
+    put string(buf) edit(a) (f(6, 0, 2));
+    get string(buf) edit(b) (f(6));
+    if b ^= 12300 then do;
+       put skip list('FAIL pos scale', b);
+       stop;
+    end;
+
+    /* Negative scale: F(6,2,-1) with 12345 -> 1234.5. */
+    x = 12345;
+    put string(buf) edit(x) (f(6, 2, -1));
+    /* Output should be 1234.50 */
+    get string(buf) edit(y) (f(6, 2));
+    if y ^= 1234.50 then do;
+       put skip list('FAIL neg scale', y);
+       stop;
+    end;
+
+    /* Input scale: GET EDIT(x) (F(6,2,1)) reading "12345 " -> x = 1234.5 */
+    buf = '   123';
+    get string(buf) edit(x) (f(6, 2, 1));
+    if x ^= 1230.00 then do;
+       put skip list('FAIL input scale', x);
+       stop;
+    end;
+
+    put skip list('PASS format_scale_value');
+ end format_scale_value;

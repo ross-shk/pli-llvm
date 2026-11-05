@@ -94,7 +94,17 @@ void pli_put_edit_fixed(long long v, long long scale, long long w, long long d) 
   rt_out_unlock();
 }
 
-/* F(w,d) on a FLOAT value: d fractional digits, right-justified in width w. */
+/* F(w,d) with scale factor: multiply value by 10^fscale before formatting. */
+void pli_put_edit_fixed_scaled(long long v, long long scale, long long fscale,
+                               long long w, long long d) {
+  if (fscale >= 0) {
+    for (long long i = 0; i < fscale; ++i) v *= 10;
+  } else {
+    scale -= fscale; /* scale += |fscale| */
+  }
+  if (scale < 0) scale = 0;
+  pli_put_edit_fixed(v, scale, w, d);
+}
 void pli_put_edit_float(double v, long long w, long long d) {
   if (d < 0) d = 0;
   if (d > 60) d = 60;
@@ -103,6 +113,16 @@ void pli_put_edit_float(double v, long long w, long long d) {
   rt_out_lock();
   put_field(buf, (size_t)n, w);
   rt_out_unlock();
+}
+
+/* F(w,d) with scale factor: multiply value by 10^fscale before formatting. */
+void pli_put_edit_float_scaled(double v, long long fscale, long long w, long long d) {
+  double factor = 1.0;
+  if (fscale >= 0)
+    for (long long i = 0; i < fscale; ++i) factor *= 10.0;
+  else
+    for (long long i = 0; i < -fscale; ++i) factor /= 10.0;
+  pli_put_edit_float(v * factor, w, d);
 }
 
 /* E(w,d) on a FLOAT value: scientific notation with one leading digit, d
@@ -138,6 +158,16 @@ void pli_put_edit_float_e(double v, long long w, long long d) {
   p += pli_snprintf(p, (size_t)(buf + sizeof buf - p), "%d", ex);
   put_field(buf, (size_t)(p - buf), w);
   rt_out_unlock();
+}
+
+/* E(w,d) with scale factor: multiply value by 10^fscale before formatting. */
+void pli_put_edit_float_e_scaled(double v, long long fscale, long long w, long long d) {
+  double factor = 1.0;
+  if (fscale >= 0)
+    for (long long i = 0; i < fscale; ++i) factor *= 10.0;
+  else
+    for (long long i = 0; i < -fscale; ++i) factor /= 10.0;
+  pli_put_edit_float_e(v * factor, w, d);
 }
 
 /* A(w): a character value right-justified in width w, truncated on the right
@@ -217,6 +247,17 @@ double pli_get_edit_num(long long w) {
   field[i] = '\0';
   rt_in_unlock();
   return pli_strtod(field, NULL);
+}
+
+/* F(w,d) with scale factor: read field then multiply by 10^fscale. */
+double pli_get_edit_num_scaled(long long w, long long fscale) {
+  double v = pli_get_edit_num(w);
+  double factor = 1.0;
+  if (fscale >= 0)
+    for (long long i = 0; i < fscale; ++i) factor *= 10.0;
+  else
+    for (long long i = 0; i < -fscale; ++i) factor /= 10.0;
+  return v * factor;
 }
 
 /* P(picture) input (rules (53),(146)-(148), ADR-291): read a w-character

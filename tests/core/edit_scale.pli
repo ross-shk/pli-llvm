@@ -10,8 +10,8 @@
     a = 123;
     put string(buf) edit(a) (f(6, 0, 2));
     get string(buf) edit(b) (f(6));
-    if b ^= 123 then do;
-       put skip list('FAIL edit_scale: expected 123, got', b);
+    if b ^= 12300 then do;
+       put skip list('FAIL edit_scale: expected 12300, got', b);
        stop;
     end;
    put skip list('PASS edit_scale');

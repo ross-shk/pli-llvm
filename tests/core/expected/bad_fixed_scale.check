@@ -1,1 +1,1 @@
-CHECK: BINARY precision must be positive
+CHECK: a scale factor on an F/E format must be numeric

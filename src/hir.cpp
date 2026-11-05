@@ -388,7 +388,9 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->edit = s->edit;
   // Data-directed transmission (rule (106)): carry the mode flag.
   h->data = s->data;
-  for (const auto& f : s->formats) {
+
+  // Helper to recursively lower a FormatItem to HFormatItem.
+  std::function<HFormatItem(const FormatItem&)> lowerFormatItem = [&](const FormatItem& f) -> HFormatItem {
     HFormatItem hf;
     hf.kind = static_cast<HFormatItem::Kind>(f.kind);
     hf.w = lowerExpr(f.w.get());
@@ -404,8 +406,16 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hs.s = lowerExpr(sb.s.get());
       hf.subs.push_back(std::move(hs));
     }
-    h->formats.push_back(std::move(hf));
-  }
+    if (f.kind == FormatItem::Repeat) {
+      hf.count = lowerExpr(f.count.get());
+      for (const auto& it : f.items)
+        hf.items.push_back(lowerFormatItem(it));
+    }
+    return hf;
+  };
+
+  for (const auto& f : s->formats)
+    h->formats.push_back(lowerFormatItem(f));
 
   // OPEN/CLOSE and the FILE ( f ) stream option (rules 100-103,105): carry the
   // resolved FILE symbol and the OPEN options across the lowering.

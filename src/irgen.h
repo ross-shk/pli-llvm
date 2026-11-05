@@ -331,7 +331,11 @@ private:
   // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
   // items in order.
   void emitPutEditItems(HStmt* s);
+  void emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
+                      llvm::Value* defW, llvm::Value* defD);
   void emitGetEditItems(HStmt* s);
+  void emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
+                      llvm::Value* defW);
   // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
   // and ";"-terminated; names are compile-time globals, values reuse the
   // list-directed printers.

@@ -14021,3 +14021,20 @@ parser/sema/irgen code. DEFERRED-WORK.md row D5 is served by this record
 **Rejected.** Building `INLIST`/`INARRAY` as an optimization (it is a language
 feature, not an optimization, plan §21); building it as TR 25.084 scope (it is
 not in the spec; no rule number).
+
+## ADR-371 — Format iteration (rule 47) and F scale factor (rules 50, 108)
+
+Context. Format repetition counts were compile-time integer literals unrolled
+at parse time, and the F/E scale factor `p` was evaluated for side effects only.
+
+Decision. A repetition count is now a scalar expression evaluated at runtime
+(rule 47): a nonpositive count skips the format group (the data item pairs
+with the next format). Constant non-negative counts are still unrolled at
+parse time as an optimization. The F/E scale factor `p` now effectively
+multiplies the internal data value by 10^p before editing, for both input and
+output (rules 50, 108), via runtime helpers `pli_put_edit_*_scaled` and
+`pli_get_edit_num_scaled`.
+
+Consequences. `format_repeat_live.pli`, `edit_scale.pli`, `format_scale_value.pli`
+cover the new behavior; `bad_edit_iter.pli` and `bad_fixed_scale.pli` pin
+diagnostics.

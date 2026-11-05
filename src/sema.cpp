@@ -5270,7 +5270,7 @@ static ExprP cloneFmtExpr(const Expr* e) {
   return c;
 }
 
- static FormatItem cloneFmtItem(const FormatItem& f) {
+static FormatItem cloneFmtItem(const FormatItem& f) {
    FormatItem c;
    c.kind = f.kind;
    c.w = cloneFmtExpr(f.w.get());
@@ -5278,10 +5278,13 @@ static ExprP cloneFmtExpr(const Expr* e) {
    c.s = cloneFmtExpr(f.s.get());
    c.pic = f.pic;
    c.remote = f.remote;
-  for (const auto& sb : f.subs)
-    c.subs.push_back(cloneFmtItem(sb));
-  return c;
-}
+   for (const auto& sb : f.subs)
+     c.subs.push_back(cloneFmtItem(sb));
+   c.count = cloneFmtExpr(f.count.get());
+   for (const auto& it : f.items)
+     c.items.push_back(cloneFmtItem(it));
+   return c;
+ }
 
 // Splice R(label) items with the referenced FORMAT lists (rules (44),(55)).
 // Nested R references expand recursively; cycles and unknown labels are
@@ -5290,7 +5293,7 @@ static ExprP cloneFmtExpr(const Expr* e) {
 bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
   std::unordered_set<std::string> active;
   std::function<bool(std::vector<FormatItem>&, int)> expand = [&](std::vector<FormatItem>& list,
-                                                                  int depth) -> bool {
+                                                                   int depth) -> bool {
     if (depth > 16) {
       d_.error(loc, "remote format nesting too deep (possible R cycle)", "(55)");
       return false;
@@ -5298,7 +5301,14 @@ bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
     std::vector<FormatItem> out;
     for (auto& f : list) {
       if (f.kind != FormatItem::Remote) {
-        out.push_back(cloneFmtItem(f));
+        if (f.kind == FormatItem::Repeat) {
+          FormatItem copy = cloneFmtItem(f);
+          if (!expand(copy.items, depth))
+            return false;
+          out.push_back(std::move(copy));
+        } else {
+          out.push_back(cloneFmtItem(f));
+        }
         continue;
       }
       auto it = formatMap_.find(f.remote);
@@ -5336,134 +5346,165 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     return;
   for (auto& it : s->items)
     typeExpr(it.get(), sc, p);
-  for (auto& f : s->formats) {
-    typeExpr(f.w.get(), sc, p);
-    typeExpr(f.d.get(), sc, p);
-    typeExpr(f.s.get(), sc, p);
-    for (auto& sb : f.subs) {
-      typeExpr(sb.w.get(), sc, p);
-      typeExpr(sb.d.get(), sc, p);
-      typeExpr(sb.s.get(), sc, p);
+  // First pass: type all format items including nested Repeat groups.
+  std::function<void(std::vector<FormatItem>&)> typeFormats = [&](std::vector<FormatItem>& fmts) {
+    for (auto& f : fmts) {
+      typeExpr(f.w.get(), sc, p);
+      typeExpr(f.d.get(), sc, p);
+      typeExpr(f.s.get(), sc, p);
+      for (auto& sb : f.subs) {
+        typeExpr(sb.w.get(), sc, p);
+        typeExpr(sb.d.get(), sc, p);
+        typeExpr(sb.s.get(), sc, p);
+      }
+      if (f.kind == FormatItem::Repeat) {
+        typeExpr(f.count.get(), sc, p);
+        // The repetition count must be an integer-compatible scalar (rule 47).
+        if (f.count && !f.count->ty.isNumeric() && !f.count->ty.isVoid())
+          d_.error(f.count->loc, "a format iteration count must be an integer expression", "(47)");
+        typeFormats(f.items);
+      }
+      // An F/E scale factor (rule (50)) is a numeric expression evaluated for
+      // its effects; formatting itself uses (w,d).
+      if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
+        d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
     }
-    // An F/E scale factor (rule (50)) is a numeric expression evaluated for
-    // its effects; formatting itself uses (w,d).
-    if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
-      d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
-  }
+  };
+  typeFormats(s->formats);
   // Aggregate items transmit element-wise; expansion runs before format
   // pairing so EDIT counts line up.
   if (!expandAggregateItems(s, sc, p, isGet))
     return;
   size_t dataIdx = 0;
-  for (auto& f : s->formats) {
-    if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-        f.kind == FormatItem::Line || f.kind == FormatItem::Column)
-      continue; // a control format consumes no data item
-    if (f.kind == FormatItem::Remote) {
-      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-      continue;
-    }
-    if (dataIdx >= s->items.size()) {
-      d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
-      break;
-    }
-    Expr* it = s->items[dataIdx].get();
-    if (f.kind == FormatItem::A && !it->ty.isChar())
-      d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
-    else if (f.kind == FormatItem::B && !it->ty.isBit())
-      d_.error(it->loc, "a B format requires a BIT item", "(52)");
-    else if (f.kind == FormatItem::C && !it->ty.isComplex())
-      d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
-    else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
-      const char* letter = f.kind == FormatItem::F ? "F" : "E";
-      const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
-      d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
-    }
-    if (f.kind == FormatItem::P && isGet) {
-      // Picture-directed input (ADR-291): the field width is the picture's
-      // output width and the value is scaled at its assumed point. The
-      // runtime parser handles digits, V/., comma and sign positions; other
-      // picture characters are not in this slice.
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
-      if (spec.sterling) {
-        if (!spec.valid || spec.width <= 0)
-          d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
-        else if (spec.intDigits > 18)
-          d_.error(it->loc,
-                   "sterling P input with more than 18 digit positions is not implemented in "
-                   "this stage",
-                   "(53)");
-      } else if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
-        d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
-      } else if (spec.width > 127) {
-        d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
-                 "(53)");
-      } else if (spec.intDigits + spec.fracDigits > 38) {
-        d_.error(it->loc,
-                 "P input with more than 38 digit positions is not implemented in this stage",
-                 "(53)");
-      } else {
-        for (char c : spec.expanded) {
-          if (std::string("9ZV.,+-S ").find(c) == std::string::npos) {
+  // Second pass: pair data formats with data items, skipping control formats
+  // and Repeat groups (which expand at runtime).
+  std::function<void(std::vector<FormatItem>&, size_t&)> pairFormats = [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
+    for (auto& f : fmts) {
+      if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+          f.kind == FormatItem::Line || f.kind == FormatItem::Column)
+        continue; // a control format consumes no data item
+      if (f.kind == FormatItem::Remote) {
+        d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+        continue;
+      }
+      if (f.kind == FormatItem::Repeat) {
+        size_t savedDi = dataIdx;
+        pairFormats(f.items, dataIdx);
+        dataIdx = savedDi;
+        continue;
+      }
+      if (dataIdx >= s->items.size()) {
+        d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+        break;
+      }
+      Expr* it = s->items[dataIdx].get();
+      if (f.kind == FormatItem::A && !it->ty.isChar())
+        d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+      else if (f.kind == FormatItem::B && !it->ty.isBit())
+        d_.error(it->loc, "a B format requires a BIT item", "(52)");
+      else if (f.kind == FormatItem::C && !it->ty.isComplex())
+        d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
+      else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+        const char* letter = f.kind == FormatItem::F ? "F" : "E";
+        const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+        d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
+      }
+      if (f.kind == FormatItem::P && isGet) {
+        // Picture-directed input (ADR-291): the field width is the picture's
+        // output width and the value is scaled at its assumed point. The
+        // runtime parser handles digits, V/., comma and sign positions; other
+        // picture characters are not in this slice.
+        const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+        const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
+        if (spec.sterling) {
+          if (!spec.valid || spec.width <= 0)
+            d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+          else if (spec.intDigits > 18)
             d_.error(it->loc,
-                     std::string("P input does not support the picture character '") + c +
-                         "' in this stage",
+                     "sterling P input with more than 18 digit positions is not implemented in "
+                     "this stage",
                      "(53)");
-            break;
+        } else if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
+          d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
+        } else if (spec.width > 127) {
+          d_.error(it->loc, "P input wider than 127 positions is not implemented in this stage",
+                   "(53)");
+        } else if (spec.intDigits + spec.fracDigits > 38) {
+          d_.error(it->loc,
+                   "P input with more than 38 digit positions is not implemented in this stage",
+                   "(53)");
+        } else {
+          for (char c : spec.expanded) {
+            if (std::string("9ZV.,+-S ").find(c) == std::string::npos) {
+              d_.error(it->loc,
+                       std::string("P input does not support the picture character '") + c +
+                           "' in this stage",
+                       "(53)");
+              break;
+            }
           }
         }
-      }
-      if (!it->ty.isNumeric() && !targetIsPicture)
-        d_.error(it->loc, "an input P format requires a numeric or PICTURE item", "(53)");
-    } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-      // A scaled FIXED BINARY is rescaled to the picture's decimal positions
-      // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
-      // fractional positions exceed its 64-bit decimal value.
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
-        d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
-      } else if (!isGet && spec.sterling &&
-                 (it->ty.scale != 0 || (it->ty.k == TK::FixedDec && it->ty.intBits() == 128))) {
-        d_.error(it->loc,
-                 "sterling PICTURE output requires a non-wide whole-pence value", "(53)");
-      } else if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
-        if (it->ty.scale >= 127)
+        if (!it->ty.isNumeric() && !targetIsPicture)
+          d_.error(it->loc, "an input P format requires a numeric or PICTURE item", "(53)");
+      } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+        // A scaled FIXED BINARY is rescaled to the picture's decimal positions
+        // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
+        // fractional positions exceed its 64-bit decimal value.
+        const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+        if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
+          d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
+        } else if (!isGet && spec.sterling &&
+                   (it->ty.scale != 0 || (it->ty.k == TK::FixedDec && it->ty.intBits() == 128))) {
           d_.error(it->loc,
-                   "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
-                   "(53)");
-        else if (spec.valid && spec.fracDigits > 18)
-          d_.error(it->loc,
-                   "PICTURE output of a scaled FIXED BINARY supports at most 18 "
-                   "fractional positions",
-                   "(53)");
+                   "sterling PICTURE output requires a non-wide whole-pence value", "(53)");
+        } else if (!isGet && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
+          if (it->ty.scale >= 127)
+            d_.error(it->loc,
+                     "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
+                     "(53)");
+          else if (spec.valid && spec.fracDigits > 18)
+            d_.error(it->loc,
+                     "PICTURE output of a scaled FIXED BINARY supports at most 18 "
+                     "fractional positions",
+                     "(53)");
+        }
+      } else if (f.kind == FormatItem::P) {
+        d_.error(it->loc, "a P format requires a numeric item", "(53)");
       }
-    } else if (f.kind == FormatItem::P) {
-      d_.error(it->loc, "a P format requires a numeric item", "(53)");
+      if (isGet) {
+        if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
+          d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                   "(53)");
+        bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                   it->kind == Expr::Subscript;
+        if (!ref)
+          d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
+        else if (it->ty.isStruct())
+          d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+        else
+          checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
+      } else if (it->ty.isVoid()) {
+        d_.error(it->loc, "invalid data list item", "(110)");
+      }
+      ++dataIdx;
     }
-    if (isGet) {
-      if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
-        d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
-                 "(53)");
-      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
-                 it->kind == Expr::Subscript;
-      if (!ref)
-        d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
-      else if (it->ty.isStruct())
-        d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
-      else
-        checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
-    } else if (it->ty.isVoid()) {
-      d_.error(it->loc, "invalid data list item", "(110)");
-    }
-    ++dataIdx;
-  }
+  };
+  pairFormats(s->formats, dataIdx);
   size_t dataFormats = 0;
-    for (auto& f : s->formats)
-     if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-         f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
-       ++dataFormats;
-  if (dataFormats < s->items.size())
+  bool hasRepeat = false;
+  std::function<void(std::vector<FormatItem>&)> countDataFormats = [&](std::vector<FormatItem>& fmts) {
+    for (auto& f : fmts) {
+      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
+        ++dataFormats;
+      else if (f.kind == FormatItem::Repeat) {
+        hasRepeat = true;
+        countDataFormats(f.items);
+      }
+    }
+  };
+  countDataFormats(s->formats);
+  if (!hasRepeat && dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
 

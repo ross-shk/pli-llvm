@@ -10104,135 +10104,213 @@ void IRGen::emitPutEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   llvm::Value* defD = i64(0);
   size_t di = 0;
-  // One real (F/E) part of a COMPLEX value (rule (51)): both parts are
-  // doubles, so F uses the float path and E the scientific path.
+  for (auto& f : s->formats) {
+    emitPutEditItem(f, s, di, defW, defD);
+  }
+}
+
+// Emit a single edit-directed format item (rule 108).
+void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
+                            llvm::Value* defW, llvm::Value* defD) {
   auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
     llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
     llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
-    if (sub.s)
-      (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
-    if (sub.kind == HFormatItem::E)
-      deferCall("pli_put_edit_float_e", {dbl, w, d});
-    else
-      deferCall("pli_put_edit_float", {dbl, w, d});
+    if (sub.s) {
+      llvm::Value* fscale = toI64(emitExpr(sub.s.get()));
+      if (sub.kind == HFormatItem::E)
+        deferCall("pli_put_edit_float_e_scaled", {dbl, fscale, w, d});
+      else
+        deferCall("pli_put_edit_float_scaled", {dbl, fscale, w, d});
+    } else {
+      if (sub.kind == HFormatItem::E)
+        deferCall("pli_put_edit_float_e", {dbl, w, d});
+      else
+        deferCall("pli_put_edit_float", {dbl, w, d});
+    }
   };
-  for (auto& f : s->formats) {
-    switch (f.kind) {
-    case HFormatItem::X: {
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferCall("pli_put_edit_x", {w});
+  switch (f.kind) {
+  case HFormatItem::X: {
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    deferCall("pli_put_edit_x", {w});
+    break;
+  }
+  case HFormatItem::Skip: {
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_skip", {n});
+    break;
+  }
+  case HFormatItem::Page:
+    deferCall("pli_put_edit_page", {});
+    break;
+  case HFormatItem::Line: {
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_line", {n});
+    break;
+  }
+  case HFormatItem::Column: {
+    // Column positioning (rule (48)): pad blanks to 1-based column n.
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_column", {n});
+    break;
+  }
+  case HFormatItem::Repeat: {
+    llvm::Function* fn = b_.GetInsertBlock()->getParent();
+    size_t savedDi = di;
+    size_t avail = (savedDi < s->items.size()) ? (s->items.size() - savedDi) : 0;
+    if (avail == 0) break;
+    llvm::Value* countVal = toI64(emitExpr(f.count.get()));
+    // Skip if count <= 0
+    llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
+    llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
+    llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
+    b_.CreateCondBr(pos, runBlock, skipBlock);
+    b_.SetInsertPoint(runBlock);
+    llvm::AllocaInst* iterSlot = entryAlloca(b_.getInt64Ty(), "repeat.iter");
+    b_.CreateStore(i64(0), iterSlot);
+    llvm::BasicBlock* iterCond = llvm::BasicBlock::Create(ctx_, "repeat.iter.cond", fn);
+    llvm::BasicBlock* iterBody = llvm::BasicBlock::Create(ctx_, "repeat.iter.body", fn);
+    llvm::BasicBlock* iterAfter = llvm::BasicBlock::Create(ctx_, "repeat.iter.after", fn);
+    b_.CreateBr(iterCond);
+    b_.SetInsertPoint(iterCond);
+    llvm::Value* iter = b_.CreateLoad(b_.getInt64Ty(), iterSlot, "repeat.iter.val");
+    llvm::Value* inRange = b_.CreateICmpSLT(iter, i64((long long)avail), "repeat.inrange");
+    llvm::Value* cont = b_.CreateICmpSLT(iter, countVal, "repeat.cont");
+    llvm::Value* both = b_.CreateAnd(inRange, cont, "repeat.both");
+    b_.CreateCondBr(both, iterBody, iterAfter);
+    b_.SetInsertPoint(iterBody);
+    // Switch on iter to select the data item
+    llvm::BasicBlock* swDefault = llvm::BasicBlock::Create(ctx_, "repeat.swdef", fn);
+    llvm::SwitchInst* sw = b_.CreateSwitch(iter, swDefault);
+    for (size_t i = 0; i < avail; ++i) {
+      llvm::BasicBlock* caseBB = llvm::BasicBlock::Create(ctx_, "repeat.case", fn);
+      sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i), caseBB);
+      b_.SetInsertPoint(caseBB);
+      size_t itemDi = savedDi + i;
+      size_t savedDi2 = di;
+      di = itemDi;
+      for (auto& item : f.items) {
+        emitPutEditItem(item, s, di, defW, defD);
+      }
+      di = savedDi2;
+      b_.CreateBr(swDefault);
+    }
+    b_.SetInsertPoint(swDefault);
+    // increment iter
+    llvm::Value* nextIter = b_.CreateAdd(iter, i64(1), "repeat.next");
+    b_.CreateStore(nextIter, iterSlot);
+    b_.CreateBr(iterCond);
+    b_.SetInsertPoint(iterAfter);
+    b_.CreateBr(skipBlock);
+    b_.SetInsertPoint(skipBlock);
+    di = savedDi;
+    break;
+  }
+  case HFormatItem::Remote:
+    d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+    break;
+  case HFormatItem::A: {
+    if (di >= s->items.size())
+      break;
+    HExpr* item = s->items[di++].get();
+    Val v = emitExpr(item);
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    deferCall("pli_put_edit_char", {v.ptr, v.len, w});
+    break;
+  }
+  case HFormatItem::B: {
+    // Bit-string output (rule (52)): materialize the packed big-endian
+    // bytes into a temp and write them as '0'/'1' right-justified in w.
+    if (di >= s->items.size())
+      break;
+    HExpr* item = s->items[di++].get();
+    Val v = emitExpr(item);
+    long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
+    long long nbytes = (nbits + 7) / 8;
+    llvm::Value* tmp =
+        entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
+    llvm::Value* ptr = b_.CreateInBoundsGEP(
+        llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
+    if (nbits == 1) {
+      llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
+      // BIT(1) travels as i1; the packed byte holds it in the low bit, but
+      // the runtime reads the top bit of each byte, so shift into place.
+      llvm::Value* top = b_.CreateShl(one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
+      b_.CreateStore(top, ptr);
+    } else {
+      b_.CreateStore(v.reg, tmp);
+    }
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
+    deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
+    break;
+  }
+  case HFormatItem::C: {
+    // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
+    // formats; a single sub serves both parts.
+    if (di >= s->items.size())
+      break;
+    HExpr* item = s->items[di++].get();
+    Val v = emitExpr(item);
+    llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
+    llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
+    if (f.subs.empty()) {
+      d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
       break;
     }
-    case HFormatItem::Skip: {
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_skip", {n});
+    putRealPart(re, f.subs[0]);
+    putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
+    break;
+  }
+  case HFormatItem::F: {
+    if (di >= s->items.size())
       break;
-    }
-    case HFormatItem::Page:
-      deferCall("pli_put_edit_page", {});
-      break;
-    case HFormatItem::Line: {
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_line", {n});
-      break;
-    }
-    case HFormatItem::Column: {
-      // Column positioning (rule (48)): pad blanks to 1-based column n.
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_column", {n});
-      break;
-    }
-    case HFormatItem::Remote:
-      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-      break;
-    case HFormatItem::A: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferCall("pli_put_edit_char", {v.ptr, v.len, w});
-      break;
-    }
-    case HFormatItem::B: {
-      // Bit-string output (rule (52)): materialize the packed big-endian
-      // bytes into a temp and write them as '0'/'1' right-justified in w.
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
-      long long nbytes = (nbits + 7) / 8;
-      llvm::Value* tmp =
-          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
-      llvm::Value* ptr = b_.CreateInBoundsGEP(
-          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
-      if (nbits == 1) {
-        llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
-        // BIT(1) travels as i1; the packed byte holds it in the low bit, but
-        // the runtime reads the top bit of each byte, so shift into place.
-        llvm::Value* top = b_.CreateShl(one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
-        b_.CreateStore(top, ptr);
+    HExpr* item = s->items[di++].get();
+    Val v = emitExpr(item);
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+    llvm::Value* fscale = f.s ? toI64(emitExpr(f.s.get())) : nullptr;
+    if (v.ty.k == TK::Float) {
+      if (fscale) {
+        // Apply F scale factor: multiply value by 10^fscale
+        deferCall("pli_put_edit_float_scaled", {v.reg, fscale, w, d});
       } else {
-        b_.CreateStore(v.reg, tmp);
-      }
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
-      break;
-    }
-    case HFormatItem::C: {
-      // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
-      // formats; a single sub serves both parts.
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
-      llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
-      if (f.subs.empty()) {
-        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
-        break;
-      }
-      putRealPart(re, f.subs[0]);
-      putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
-      break;
-    }
-    case HFormatItem::F: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
-      if (f.s)
-        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      if (v.ty.k == TK::Float) {
         deferCall("pli_put_edit_float", {v.reg, w, d});
-      } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
-        // F(w,d) needs the true value: a scaled binary is divided by 2^q
-        // first (ADR-284). The FLOAT path keeps the common d digits; a
-        // point-aware fixed formatter remains a B11 refinement.
-        Val fv = convert(v, Type::flt(6), item->loc);
-        deferCall("pli_put_edit_float", {fv.reg, w, d});
+      }
+    } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+      // F(w,d) needs the true value: a scaled binary is divided by 2^q
+      // first (ADR-284). The FLOAT path keeps the common d digits; a
+      // point-aware fixed formatter remains a B11 refinement.
+      Val fv = convert(v, Type::flt(6), item->loc);
+      if (fscale) {
+        deferCall("pli_put_edit_float_scaled", {fv.reg, fscale, w, d});
       } else {
-        llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
+        deferCall("pli_put_edit_float", {fv.reg, w, d});
+      }
+    } else {
+      llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
+      if (fscale) {
+        deferCall("pli_put_edit_fixed_scaled", {toI64(v), scale, fscale, w, d});
+      } else {
         deferCall("pli_put_edit_fixed", {toI64(v), scale, w, d});
       }
-      break;
     }
-    case HFormatItem::E: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = convert(emitExpr(item), Type::flt(6), item->loc);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
-      if (f.s)
-        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
+    break;
+  }
+  case HFormatItem::E: {
+    if (di >= s->items.size())
+      break;
+    HExpr* item = s->items[di++].get();
+    Val v = convert(emitExpr(item), Type::flt(6), item->loc);
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+    if (f.s) {
+      llvm::Value* fscale = toI64(emitExpr(f.s.get()));
+      deferCall("pli_put_edit_float_e_scaled", {v.reg, fscale, w, d});
+    } else {
       deferCall("pli_put_edit_float_e", {v.reg, w, d});
-      break;
     }
-    case HFormatItem::P: {
+    break;
+  }
+  case HFormatItem::P: {
       // P(picture): picture-directed output (rules (53),(146)-(148));
       // formats a numeric value via pli_put_edit_pic against the picture string.
       if (di >= s->items.size())
@@ -10348,7 +10426,6 @@ void IRGen::emitPutEditItems(HStmt* s) {
                 {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
       break;
     }
-    }
   }
 }
 
@@ -10358,59 +10435,108 @@ void IRGen::emitGetEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   size_t di = 0;
   for (auto& f : s->formats) {
-    switch (f.kind) {
-    case HFormatItem::X: {
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferCall("pli_get_edit_x", {w});
-      break;
+    emitGetEditItem(f, s, di, defW);
+  }
+}
+
+// Emit a single edit-directed format item on input (rule 108).
+void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
+                            llvm::Value* defW) {
+  switch (f.kind) {
+  case HFormatItem::X: {
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    deferCall("pli_get_edit_x", {w});
+    break;
+  }
+  case HFormatItem::Skip: {
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_get_edit_skip", {n});
+    break;
+  }
+  case HFormatItem::Page:
+  case HFormatItem::Line:
+    // Line control is not meaningful on input in this stage; ignored.
+    break;
+  case HFormatItem::Column: {
+    // Input positioning (rule (48)): skip forward to 1-based column n,
+    // opening a fresh line first when already past n.
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_get_edit_column", {n});
+    break;
+  }
+  case HFormatItem::Repeat: {
+    // Format iteration (rule 47): evaluate count at runtime, skip if <= 0.
+    llvm::Value* countVal = toI64(emitExpr(f.count.get()));
+    llvm::Function* fn = b_.GetInsertBlock()->getParent();
+    llvm::BasicBlock* loopBody = llvm::BasicBlock::Create(ctx_, "repeat.body", fn);
+    llvm::BasicBlock* loopAfter = llvm::BasicBlock::Create(ctx_, "repeat.after", fn);
+    llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
+    b_.CreateCondBr(pos, loopBody, loopAfter);
+    b_.SetInsertPoint(loopBody);
+    size_t savedDi = di;
+    llvm::AllocaInst* iterSlot = entryAlloca(b_.getInt64Ty(), "repeat.iter");
+    b_.CreateStore(i64(0), iterSlot);
+    llvm::BasicBlock* iterCond = llvm::BasicBlock::Create(ctx_, "repeat.iter.cond", fn);
+    llvm::BasicBlock* iterBody = llvm::BasicBlock::Create(ctx_, "repeat.iter.body", fn);
+    llvm::BasicBlock* iterAfter = llvm::BasicBlock::Create(ctx_, "repeat.iter.after", fn);
+    b_.CreateBr(iterCond);
+    b_.SetInsertPoint(iterCond);
+    llvm::Value* iter = b_.CreateLoad(b_.getInt64Ty(), iterSlot, "repeat.iter.val");
+    llvm::Value* continueCond = b_.CreateICmpSLT(iter, countVal, "repeat.iter.cont");
+    b_.CreateCondBr(continueCond, iterBody, iterAfter);
+    b_.SetInsertPoint(iterBody);
+    di = savedDi;
+    for (auto& item : f.items) {
+      emitGetEditItem(item, s, di, defW);
     }
-    case HFormatItem::Skip: {
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_get_edit_skip", {n});
+    llvm::Value* nextIter = b_.CreateAdd(iter, i64(1), "repeat.iter.next");
+    b_.CreateStore(nextIter, iterSlot);
+    b_.CreateBr(iterCond);
+    b_.SetInsertPoint(iterAfter);
+    b_.CreateBr(loopAfter);
+    b_.SetInsertPoint(loopAfter);
+    di = savedDi;
+    break;
+  }
+  case HFormatItem::Remote:
+    d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+    break;
+  case HFormatItem::A: {
+    if (di >= s->items.size())
       break;
-    }
-    case HFormatItem::Page:
-    case HFormatItem::Line:
-      // Line control is not meaningful on input in this stage; ignored.
+    HExpr* t = s->items[di++].get();
+    const Type& ty = t->ty;
+    SourceLoc loc = s->loc;
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
+    deferCall("pli_get_edit_char", {buf, i64(ty.len), w}, false,
+              [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                Val v;
+                v.ptr = buf;
+                // VARYING takes the field width; fixed stays padded to len.
+                v.len = t->ty.varying ? r[i] : i64(t->ty.len);
+                v.ty = t->ty;
+                storeGetTarget(t, v, loc);
+              });
+    break;
+  }
+  case HFormatItem::F:
+  case HFormatItem::E: {
+    if (di >= s->items.size())
       break;
-    case HFormatItem::Column: {
-      // Input positioning (rule (48)): skip forward to 1-based column n,
-      // opening a fresh line first when already past n.
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_get_edit_column", {n});
-      break;
-    }
-    case HFormatItem::Remote:
-      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-      break;
-    case HFormatItem::A: {
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      const Type& ty = t->ty;
-      SourceLoc loc = s->loc;
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gech");
-      deferCall("pli_get_edit_char", {buf, i64(ty.len), w}, false,
-                [this, t, buf, loc](const std::vector<llvm::Value*>& r, size_t i) {
+    HExpr* t = s->items[di++].get();
+    SourceLoc loc = s->loc;
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    if (f.s) {
+      llvm::Value* fscale = toI64(emitExpr(f.s.get()));
+      deferCall("pli_get_edit_num_scaled", {w, fscale}, false,
+                [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   Val v;
-                  v.ptr = buf;
-                  // VARYING takes the field width; fixed stays padded to len.
-                  v.len = t->ty.varying ? r[i] : i64(t->ty.len);
-                  v.ty = t->ty;
+                  v.reg = r[i];
+                  v.ty = Type::flt(6);
                   storeGetTarget(t, v, loc);
                 });
-      break;
-    }
-    case HFormatItem::F:
-    case HFormatItem::E: {
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      SourceLoc loc = s->loc;
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      if (f.s)
-        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
+    } else {
       deferCall("pli_get_edit_num", {w}, false,
                 [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   Val v;
@@ -10418,61 +10544,75 @@ void IRGen::emitGetEditItems(HStmt* s) {
                   v.ty = Type::flt(6);
                   storeGetTarget(t, v, loc);
                 });
+    }
+    break;
+  }
+  case HFormatItem::B: {
+    // Bit-string input (rule (52)): read a w-character '0'/'1' field into
+    // a temp packed buffer, then store through the normal BIT path.
+    if (di >= s->items.size())
+      break;
+    HExpr* t = s->items[di++].get();
+    SourceLoc loc = s->loc;
+    long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
+    long long nbytes = (nbits + 7) / 8;
+    llvm::Value* tmp =
+        entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "gebit");
+    llvm::Value* ptr = b_.CreateInBoundsGEP(
+        llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "gebitp");
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
+    deferCall("pli_get_edit_bit", {ptr, i64(nbits), w}, false,
+              [this, t, tmp, ptr, nbits, nbytes, loc](const std::vector<llvm::Value*>&, size_t) {
+                Val v;
+                v.ty = Type::bit((int)nbits);
+                if (nbits == 1) {
+                  // The runtime packs into the top bit; BIT(1) travels as the low bit.
+                  llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
+                  llvm::Value* low =
+                      b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
+                  v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
+                } else {
+                  v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
+                                        tmp, "gb");
+                }
+                storeGetTarget(t, v, loc);
+              });
+    break;
+  }
+  case HFormatItem::C: {
+    // Complex input (rule (51)): read the real/imaginary parts through the
+    // inner real widths, then store the {double,double} pair.
+    if (di >= s->items.size())
+      break;
+    HExpr* t = s->items[di++].get();
+    SourceLoc loc = s->loc;
+    if (f.subs.empty()) {
+      d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
       break;
     }
-    case HFormatItem::B: {
-      // Bit-string input (rule (52)): read a w-character '0'/'1' field into
-      // a temp packed buffer, then store through the normal BIT path.
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      SourceLoc loc = s->loc;
-      long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
-      long long nbytes = (nbits + 7) / 8;
-      llvm::Value* tmp =
-          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "gebit");
-      llvm::Value* ptr = b_.CreateInBoundsGEP(
-          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "gebitp");
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      deferCall("pli_get_edit_bit", {ptr, i64(nbits), w}, false,
-                [this, t, tmp, ptr, nbits, nbytes, loc](const std::vector<llvm::Value*>&, size_t) {
+    const HFormatItem& s1 = f.subs[0];
+    const HFormatItem& s2 = f.subs.size() > 1 ? f.subs[1] : f.subs[0];
+    llvm::Value* w1 = s1.w ? toI64(emitExpr(s1.w.get())) : defW;
+    llvm::Value* w2 = s2.w ? toI64(emitExpr(s2.w.get())) : defW;
+    llvm::Value* fs1 = s1.s ? toI64(emitExpr(s1.s.get())) : nullptr;
+    llvm::Value* fs2 = s2.s ? toI64(emitExpr(s2.s.get())) : nullptr;
+    // The two halves are read in order; the store waits for the second one.
+    if (fs1)
+      deferCall("pli_get_edit_num_scaled", {w1, fs1});
+    else
+      deferCall("pli_get_edit_num", {w1});
+    if (fs2)
+      deferCall("pli_get_edit_num_scaled", {w2, fs2}, false,
+                [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                  llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+                  cpx = b_.CreateInsertValue(cpx, r[i - 1], 0, "cpx.re");
+                  cpx = b_.CreateInsertValue(cpx, r[i], 1, "cpx.im");
                   Val v;
-                  v.ty = Type::bit((int)nbits);
-                  if (nbits == 1) {
-                    // The runtime packs into the top bit; BIT(1) travels as the low bit.
-                    llvm::Value* byte = b_.CreateLoad(b_.getInt8Ty(), ptr, "gb8");
-                    llvm::Value* low =
-                        b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
-                    v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
-                  } else {
-                    v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
-                                          tmp, "gb");
-                  }
+                  v.cpx = cpx;
+                  v.ty = Type::complexTy();
                   storeGetTarget(t, v, loc);
                 });
-      break;
-    }
-    case HFormatItem::C: {
-      // Complex input (rule (51)): read the real/imaginary parts through the
-      // inner real widths, then store the {double,double} pair.
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      SourceLoc loc = s->loc;
-      if (f.subs.empty()) {
-        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
-        break;
-      }
-      const HFormatItem& s1 = f.subs[0];
-      const HFormatItem& s2 = f.subs.size() > 1 ? f.subs[1] : f.subs[0];
-      llvm::Value* w1 = s1.w ? toI64(emitExpr(s1.w.get())) : defW;
-      llvm::Value* w2 = s2.w ? toI64(emitExpr(s2.w.get())) : defW;
-      if (s1.s)
-        (void)toI64(emitExpr(s1.s.get()));
-      if (s2.s)
-        (void)toI64(emitExpr(s2.s.get()));
-      // The two halves are read in order; the store waits for the second one.
-      deferCall("pli_get_edit_num", {w1});
+    else
       deferCall("pli_get_edit_num", {w2}, false,
                 [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
@@ -10483,60 +10623,59 @@ void IRGen::emitGetEditItems(HStmt* s) {
                   v.ty = Type::complexTy();
                   storeGetTarget(t, v, loc);
                 });
+    break;
+  }
+  case HFormatItem::P: {
+    // P input (ADR-291): read the picture-width field and return the value
+    // at the picture's assumed decimal point; the normal conversion path
+    // then rescales it into a numeric target or formats a PICTURE target.
+    if (di >= s->items.size())
+      break;
+    HExpr* t = s->items[di++].get();
+    SourceLoc loc = s->loc;
+    const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+    if (!spec.valid || spec.width <= 0) {
+      d_.error(loc, "invalid PICTURE format for input", "(53)");
       break;
     }
-    case HFormatItem::P: {
-      // P input (ADR-291): read the picture-width field and return the value
-      // at the picture's assumed decimal point; the normal conversion path
-      // then rescales it into a numeric target or formats a PICTURE target.
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      SourceLoc loc = s->loc;
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      if (!spec.valid || spec.width <= 0) {
-        d_.error(loc, "invalid PICTURE format for input", "(53)");
-        break;
-      }
-      if (spec.sterling) {
-        deferCall("pli_get_edit_pic_sterling",
-                  {i64(spec.width), globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())},
-                  false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+    if (spec.sterling) {
+      deferCall("pli_get_edit_pic_sterling",
+                {i64(spec.width), globalString(spec.expanded),
+                 i64((long long)spec.expanded.size())},
+                false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+                  Val v;
+                  v.reg = r[i];
+                  int p = spec.intDigits > 0 ? spec.intDigits : 1;
+                  v.ty = Type::fixedDec(p, 0);
+                  storeGetTarget(t, v, loc);
+                });
+      break;
+    }
+    {
+      int p = spec.intDigits + spec.fracDigits;
+      if (p > 18) {
+        // Wide P input writes the 128-bit value through a temp (B1).
+        llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
+        deferCall("pli_get_edit_pic_wide", {i64(spec.width), i64(spec.fracDigits), slot},
+                  false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
                     Val v;
-                    v.reg = r[i];
-                    int p = spec.intDigits > 0 ? spec.intDigits : 1;
-                    v.ty = Type::fixedDec(p, 0);
+                    v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
+                    int prec = spec.intDigits + spec.fracDigits;
+                    v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
                     storeGetTarget(t, v, loc);
                   });
-        break;
+      } else {
+        deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
+                  [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
+                    Val v;
+                    v.reg = r[i];
+                    v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
+                    storeGetTarget(t, v, loc);
+                  });
       }
-      {
-        int p = spec.intDigits + spec.fracDigits;
-        if (p > 18) {
-          // Wide P input writes the 128-bit value through a temp (B1).
-          llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
-          deferCall("pli_get_edit_pic_wide", {i64(spec.width), i64(spec.fracDigits), slot},
-                    false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
-                      Val v;
-                      v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
-                      int prec = spec.intDigits + spec.fracDigits;
-                      v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
-                      storeGetTarget(t, v, loc);
-                    });
-        } else {
-          deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
-                    [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
-                      Val v;
-                      v.reg = r[i];
-                      v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
-                      storeGetTarget(t, v, loc);
-                    });
-        }
-      }
-      break;
     }
-    }
+    break;
+  }
   }
 }
 

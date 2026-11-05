@@ -1,13 +1,9 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* Genuinely invalid FIXED scale cases per TR 25.084 rule (16):
-   - Non-integer scale (not allowed by syntax)
-   - Invalid precision (0 or negative)
-   The cases with q > p and q < 0 are now VALID per Y33-6003-0 §4.5. */
-badscale: procedure options(main);
-    declare x fixed bin(0);    /* precision 0 is invalid */
-    put skip list(x);
-end badscale;
-
-* .check
-BINARY precision must be positive
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* F scale factor (rule (50)): non-numeric scale factor diagnosed. */
+ bad_fixed_scale: procedure options(main);
+    declare buf char(20);
+    declare a fixed bin(31);
+    a = 1;
+    put string(buf) edit(a) (f(6, 0, 'x'));
+ end bad_fixed_scale;

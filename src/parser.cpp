@@ -3901,24 +3901,26 @@ static FormatItem cloneFormatItem(const FormatItem& f) {
   c.d = cloneFormatExpr(f.d.get());
   c.s = cloneFormatExpr(f.s.get());
   c.remote = f.remote;
+  c.pic = f.pic;
   for (const auto& sb : f.subs)
     c.subs.push_back(cloneFormatItem(sb));
+  c.count = cloneFormatExpr(f.count.get());
+  for (const auto& it : f.items)
+    c.items.push_back(cloneFormatItem(it));
   return c;
 }
 
 bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
   if (cur().kind == Tok::LParen) {
+    SourceLoc lparenLoc = cur().loc;
     advance();
-    if (cur().kind != Tok::Number || cur().isFloat) {
-      d_.error(cur().loc, "a format repetition count must be an integer literal", "(48)");
-      return false;
-    }
-    int n = boundedNonNeg(cur().text, cur().loc, d_, "repetition count", "(48)");
-    advance();
-    if (!expect(Tok::RParen, "(48)"))
+    // Parse the repetition count as an expression (rule 47).
+    // A literal integer is still allowed and will be unrolled at parse time.
+    ExprP count = parseExpr();
+    if (!expect(Tok::RParen, "(47)"))
       return false;
     if (!eat(Tok::LParen)) {
-      d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
+      d_.error(cur().loc, "expected '(' to open the repeated format group", "(47)");
       return false;
     }
     std::vector<FormatItem> group;
@@ -3930,11 +3932,22 @@ bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
           break;
       }
     }
-    if (!expect(Tok::RParen, "(48)"))
+    if (!expect(Tok::RParen, "(47)"))
       return false;
-    for (int i = 0; i < n; ++i)
-      for (const FormatItem& gi : group)
-        out.push_back(cloneFormatItem(gi));
+    // If the count is a non-negative integer literal, unroll at parse time.
+    // Otherwise, create a Repeat node for runtime evaluation.
+    if (count->kind == Expr::IntLit && count->ival >= 0) {
+      long long n = count->ival;
+      for (long long i = 0; i < n; ++i)
+        for (const FormatItem& gi : group)
+          out.push_back(cloneFormatItem(gi));
+    } else {
+      FormatItem fi;
+      fi.kind = FormatItem::Repeat;
+      fi.count = std::move(count);
+      fi.items = std::move(group);
+      out.push_back(std::move(fi));
+    }
     return true;
   }
   FormatItem fi;
