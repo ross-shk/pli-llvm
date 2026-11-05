@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* EXTERNAL STATIC shared across modules (rules 23, 42) */
+/* Main program */
+static_external: procedure options(main);
+    dcl counter fixed bin(31) external static initial(0);
+    dcl increment entry external;
+    put skip list('main: counter =', counter);
+    call increment();
+    put skip list('main after call: counter =', counter);
+    /* Should be 1 (incremented in other module) */
+    if counter = 1 then put skip list('PASS static_external');
+    else put skip list('FAIL static_external');
+end static_external;

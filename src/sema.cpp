@@ -1779,9 +1779,27 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // A STATIC AREA (rule (20)) is real static storage: its region lives for
         // the whole program. AREA(*) inherits the argument's region, so the
         // storage attribute cannot apply to it.
-        bool staticItem = isStatic || (item.area && item.sawStatic && !item.areaStar);
+        // STATIC storage class (rule 23): applies to any variable, not just AREA.
+        // Non-AREA STATIC variables get true static storage (LLVM global).
+        // AREA STATIC already handled; EXTERNAL handled separately below.
+        bool staticItem = item.sawStatic && !item.areaStar;
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, staticItem);
         item.sym->owner = p; // which procedure's frame holds this variable
+        // STATIC on invalid targets (rule 23)
+        if (item.sawStatic) {
+          if (!item.basedBase.empty()) {
+            d_.error(item.loc, "STATIC attribute not allowed on BASED variable", "(23)");
+          }
+          if (!item.definedBase.empty()) {
+            d_.error(item.loc, "STATIC attribute not allowed on DEFINED variable", "(23)");
+          }
+          if (item.controlled && !(p && p->isPackage)) {
+            d_.error(item.loc, "STATIC attribute not allowed on CONTROLLED variable", "(23)");
+          }
+          if (item.fileAttr) {
+            d_.error(item.loc, "STATIC attribute not allowed on FILE variable", "(23)");
+          }
+        }
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
           // common global, so every module resolves the same symbol.
@@ -2229,6 +2247,19 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "a parameter has no storage of its own, so STATIC cannot apply",
                      "(20)");
         }
+        // STATIC on any parameter is invalid (rule 23)
+        // Recompute isParam for non-AREA items
+        if (item.sawStatic) {
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
+          if (isParam)
+            d_.error(item.loc, "STATIC attribute not allowed on parameter", "(23)");
+        }
         // OFFSET (rule (22)): an opaque locator into an AREA. The optional
         // reference names the associated AREA; it is validated here and used to
         // check the ALLOCATE/FREE ... IN(area) option.
@@ -2408,9 +2439,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // CONTROLLED keeps generation-stack storage even at package scope,
           // so its member INITIAL assigns per allocation (SC26-3114), never
           // as a static global initializer.
-          if (item.sym->isStatic && !item.sym->controlled) {
-            d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
-                     "(26)");
+          // STATIC structures with INITIAL are now supported (rule 26): they
+          // get constant-folded global initializers in emitGlobals().
+          if (item.sym->controlled) {
+            // CONTROLLED: per-allocation initialization handled at runtime
+            if (hasDynamicMember(item.ty)) {
+              d_.error(item.loc,
+                       "INITIAL on a CONTROLLED structure with a dynamic member is "
+                       "not implemented in this stage",
+                       "(26)");
+            }
           } else if (hasDynamicMember(item.ty)) {
             // INITIAL covering a dynamic member (rules (13),(26), ADR-092):
             // only a trailing top-level dynamic array member is served — the
@@ -2572,13 +2610,18 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             item.sym->initExpr = folded; // consumed by code generation
         }
         if (item.initCall) {
-          // INITIAL(CALL f(...)) (rule 27): type-check the call — this resolves
-          // the function, its arguments, and its return type. Store the call on
-          // the symbol only when it returns a value; a non-function (void) call
-          // was already diagnosed in typeExpr.
-          typeExpr(item.initCall.get(), sc, p);
-          if (!item.initCall->ty.isVoid())
-            item.sym->initCall = item.initCall.get(); // consumed by codegen
+          // INITIAL(CALL f(...)) (rule 27): not allowed on STATIC variables.
+          if (item.sawStatic) {
+            d_.error(item.loc, "INITIAL CALL not allowed on STATIC variable", "(27)");
+          } else {
+            // INITIAL(CALL f(...)) (rule 27): type-check the call — this resolves
+            // the function, its arguments, and its return type. Store the call on
+            // the symbol only when it returns a value; a non-function (void) call
+            // was already diagnosed in typeExpr.
+            typeExpr(item.initCall.get(), sc, p);
+            if (!item.initCall->ty.isVoid())
+              item.sym->initCall = item.initCall.get(); // consumed by codegen
+          }
         }
         if (item.valueInit) {
           // VALUE(const) (extension, ADR-108): a scalar named constant. It

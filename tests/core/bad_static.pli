@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC attribute on invalid targets (rule 23) */
+bad_static: procedure options(main);
+
+    /* STATIC on PARAMETER — diagnosed */
+    dcl p fixed bin(31) static; /* ERROR (23) - not a parameter, just a variable */
+
+    /* STATIC on procedure parameter — diagnosed */
+    call test_param_static(0);
+
+    /* STATIC on BASED — diagnosed */
+    dcl ptr pointer;
+    dcl b fixed bin(31) based(ptr) static; /* ERROR (23) */
+
+    /* STATIC on DEFINED — diagnosed */
+    dcl x fixed bin(31);
+    dcl y fixed bin(31) defined x static; /* ERROR (23) */
+
+    /* STATIC on CONTROLLED (non-package) — diagnosed */
+    dcl c fixed bin(31) controlled static; /* ERROR (23) */
+
+    /* STATIC on FILE — diagnosed */
+    dcl f file static; /* ERROR (23) */
+
+    /* INITIAL CALL on STATIC — diagnosed (rule 27) */
+    dcl func entry returns(fixed bin(31));
+    dcl s fixed bin(31) static initial(call func()); /* ERROR (27) */
+
+    put skip list('PASS bad_static'); /* Should not reach here if all diagnosed */
+end bad_static;
+
+test_param_static: proc(p) options(bypass);
+    dcl p fixed bin(31) static; /* ERROR (23) - STATIC on parameter */
+    return;
+end test_param_static;

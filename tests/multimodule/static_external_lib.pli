@@ -1,0 +1,12 @@
+/* static_external_lib.pli - companion module */
+/* SPDX-License-Identifier: Apache-2.0 */
+static_lib: package exports(increment);
+
+dcl counter fixed bin(31) external static;
+
+increment: proc options(bypass);
+    counter = counter + 1;
+    return;
+end increment;
+
+end static_lib;

@@ -4739,9 +4739,21 @@ void IRGen::emitGlobals() {
         ginit = llvm::ConstantAggregateZero::get(gt);
       }
     } else {
-      ginit = scalarInitConstant(t, s->initExpr);
-      if (!ginit)
-        ginit = llvm::ConstantAggregateZero::get(gt); // STRUCT (rule 11)
+      // Handle structures with INITIAL (initElems) — same as arrays
+      if (!s->initElems.empty() && t.isStruct()) {
+        std::vector<llvm::Constant*> els;
+        for (Expr* e : s->initElems)
+          // Each initElem is a folded constant with its leaf type in e->ty
+          els.push_back(scalarInitConstant(e->ty, e));
+        // Build ConstantStruct from leaf values in declaration order.
+        // The LLVM struct type has one field per leaf member (flattened).
+        llvm::StructType* sty = llvm::cast<llvm::StructType>(gt);
+        ginit = llvm::ConstantStruct::get(sty, els);
+      } else {
+        ginit = scalarInitConstant(t, s->initExpr);
+        if (!ginit)
+          ginit = llvm::ConstantAggregateZero::get(gt); // STRUCT (rule 11) or unsupported
+      }
     }
     // EXTERNAL (rule (42)) uses common linkage so every translation unit
     // shares one definition at link time; STATIC stays module-private.
@@ -5074,6 +5086,9 @@ void IRGen::emitInitials(HProc* p) {
   for (HStmt* st : decls) {
     for (auto& item : st->decls) {
       Symbol* sym = item.sym;
+      // Skip STATIC — already initialized via global initializer in emitGlobals()
+      if (sym && sym->isStatic)
+        continue;
       // CONTROLLED INITIAL assigns per allocation (rules (15),(26),
       // SC26-3114), not at block entry: implicit/explicit/package paths emit
       // it after each pli_ctl_alloc via emitCtlInit. Skip here so the store

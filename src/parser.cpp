@@ -2700,10 +2700,6 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.areaSize = std::move(bag.areaSize);
   item.areaStar = bag.areaStar;
   item.sawStatic = bag.staticAttr;
-  // A static AREA is real storage; every other STATIC is still automatic
-  // (rule (15)), so the no-op warning is emitted here.
-  if (bag.staticAttr && !item.area)
-    d_.warn(staticLoc, "attribute STATIC is accepted but has no effect in this stage", "(15)");
   item.offset = bag.offset;
   item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
