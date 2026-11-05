@@ -574,12 +574,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   endif()
   # zlib/zstd static libs (PLI_ZLIB_ROOT / PLI_ZSTD_ROOT) are referenced as
   # bare library names (z, zstd) in llvm_libs_core on Windows; make sure
-  # lld-link finds them via /LIBPATH.
+  # lld-link finds them via /LIBPATH. Also search the static LLVM prefix
+  # (pli-deps ships zstd_static.lib) as a fallback.
   if(PLI_ZLIB_ROOT)
     target_link_directories(pli PRIVATE "${PLI_ZLIB_ROOT}/lib")
   endif()
   if(PLI_ZSTD_ROOT)
     target_link_directories(pli PRIVATE "${PLI_ZSTD_ROOT}/lib")
+  endif()
+  if(PLI_LLVM_STATIC_PREFIX)
+    target_link_directories(pli PRIVATE "${PLI_LLVM_STATIC_PREFIX}/lib")
   endif()
   foreach(_sdk_lib
       "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22000.0/um/x64"
