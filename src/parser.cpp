@@ -22,6 +22,19 @@ static int boundedNonNeg(const std::string& text, SourceLoc loc, Diags& d, const
   return (int)v;
 }
 
+// Like boundedNonNeg but allows negative values (for FIXED scale factor q).
+static int boundedInt(const std::string& text, SourceLoc loc, Diags& d, const char* what,
+                      const char* rule) {
+  errno = 0;
+  char* end = nullptr;
+  long v = strtol(text.c_str(), &end, 10);
+  if (errno == ERANGE || end == text.c_str() || *end != '\0' || v < INT_MIN || v > INT_MAX) {
+    d.error(loc, std::string(what) + " is out of range", rule);
+    return 0;
+  }
+  return (int)v;
+}
+
 // A dimension bound must fit the int a Dim carries (rules (12),(13)): a
 // 64-bit bound truncated to int silently declared a zero-element array. The
 // bound itself may be negative (a(-3:3) is a valid axis); only the range
@@ -1612,10 +1625,14 @@ StmtP Parser::parseDeclare() {
 // q < p binary digits (the sign bit takes one of the p). A scale wider than
 // the precision cannot be represented, and the runtime's fixed-point
 // formatters sized their buffers from the scale alone.
+// Y33-6003-0 §4.5 (lines 10590-10603) allows negative scale and scale > precision:
+// - Negative scale (-q): integer with implied decimal point q places to the right
+// - Scale > precision: fraction with implied decimal point to the left of digits
 bool Parser::fixedScaleFits(const AttrBag& bag, bool binary) {
   if (bag.prec <= 0)
     return true;
-  return binary ? bag.scale < bag.prec : bag.scale <= bag.prec;
+  // Y33-6003-0: All scale values accepted; sema/IRGen handle semantics
+  return true;
 }
 
 // Consume one scalar computational attribute word into `bag`. Shared by
@@ -1632,9 +1649,15 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       n1 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
       advance();
     }
-    if (eat(Tok::Comma) && at(Tok::Number)) {
-      n2 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
-      advance();
+    if (eat(Tok::Comma)) {
+      bool neg = eat(Tok::Minus);
+      eat(Tok::Plus);  // consume optional '+' if present
+      if (at(Tok::Number)) {
+        n2 = boundedInt(cur().text, cur().loc, d_, "scale factor", rule);
+        if (neg)
+          n2 = -n2;
+        advance();
+      }
     }
     expect(Tok::RParen, rule);
     return true;
@@ -1645,7 +1668,9 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     if (at(Tok::LParen)) {
       parenNums(a, b);
-      if (a > 0) {
+      if (a <= 0) {
+        d_.error(cur().loc, "FIXED precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }
@@ -1657,8 +1682,11 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     if (at(Tok::LParen)) {
       parenNums(a, b);
-      if (a > 0)
+      if (a <= 0) {
+        d_.error(cur().loc, "FLOAT precision must be positive", "(16)");
+      } else {
         bag.prec = a;
+      }
     }
     return true;
   }
@@ -1667,7 +1695,9 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     if (at(Tok::LParen)) {
       parenNums(a, b);
-      if (a > 0) {
+      if (a <= 0) {
+        d_.error(cur().loc, "BINARY precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }
@@ -1679,7 +1709,9 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     if (at(Tok::LParen)) {
       parenNums(a, b);
-      if (a > 0) {
+      if (a <= 0) {
+        d_.error(cur().loc, "DECIMAL precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }

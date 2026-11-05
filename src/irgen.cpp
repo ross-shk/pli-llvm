@@ -101,6 +101,8 @@ static PliI128 decLitRescaled128(const Expr* e, const Type& t) {
 // Stored integer of an INITIAL/VALUE literal for a FIXED BINARY(p,q)
 // target (ADR-284): value * 2^q, with a decimal literal's fraction
 // truncated toward zero — the same rule convert() applies at run time.
+// Y33-6003-0: negative scale means divide by 2^|q|; scale > precision
+// means multiply by 2^q where q > p.
 static PliI128 binLitRescaled(const Expr* e, const Type& t) {
   if (!e)
     return 0;
@@ -109,6 +111,8 @@ static PliI128 binLitRescaled(const Expr* e, const Type& t) {
   PliI128 v = e->kind == Expr::DecLit ? e->wideIval : pli_from_i64(e->ival);
   if (t.scale > 0)
     v = v * pli_from_i64(1LL << t.scale);
+  else if (t.scale < 0)
+    v = v / pli_from_i64(1LL << -t.scale);  // Negative scale: divide by 2^|q|
   if (e->kind == Expr::DecLit && e->decScale > 0)
     v = v / pliPow10_128(e->decScale);
   return v;
@@ -12838,15 +12842,27 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
   if (!srcFloat && dstFloat) {
     // A FIXED DECIMAL source holds the value scaled by 10^q, a FIXED BINARY
     // source by 2^q; divide back to the true value before converting.
+    // Y33-6003-0 §4.5: negative scale means the stored value = logical / base^|q|
     llvm::Value* f = b_.CreateSIToFP(v.reg, b_.getDoubleTy(), "cvt");
-    if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
-      double sc = v.ty.scale <= 18 ? (double)pliPow10(v.ty.scale)
-                                   : pli_to_double(pliPow10_128(v.ty.scale));
-      f = b_.CreateFDiv(f, flt(sc), "fds");
-    } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0)
-      // A power of two is exact, so the multiply is the C5 exponent patch
-      // (2^-q) rather than a divide (ADR-284, closing D2).
-      f = b_.CreateFMul(f, flt(std::ldexp(1.0, -v.ty.scale)), "fds");
+    if (v.ty.k == TK::FixedDec) {
+      if (v.ty.scale > 0) {
+        double sc = v.ty.scale <= 18 ? (double)pliPow10(v.ty.scale)
+                                     : pli_to_double(pliPow10_128(v.ty.scale));
+        f = b_.CreateFDiv(f, flt(sc), "fds");
+      } else if (v.ty.scale < 0) {
+        double sc = -v.ty.scale <= 18 ? (double)pliPow10(-v.ty.scale)
+                                      : pli_to_double(pliPow10_128(-v.ty.scale));
+        f = b_.CreateFMul(f, flt(sc), "fds");
+      }
+    } else if (v.ty.k == TK::FixedBin) {
+      if (v.ty.scale > 0)
+        // A power of two is exact, so the multiply is the C5 exponent patch
+        // (2^-q) rather than a divide (ADR-284, closing D2).
+        f = b_.CreateFMul(f, flt(std::ldexp(1.0, -v.ty.scale)), "fds");
+      else if (v.ty.scale < 0)
+        // Negative scale: stored = logical / 2^|q|, so multiply by 2^|q|
+        f = b_.CreateFMul(f, flt(std::ldexp(1.0, -v.ty.scale)), "fds");
+    }
     out.reg = f;
     return out;
   }
@@ -12932,23 +12948,31 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         // Wide DECIMAL source: raw*2^q can exceed i128, so apply the target
         // scale in i256 and divide by 10^s there; truncation matches the
         // narrow path (ADR-289).
+        // Y33-6003-0 §4.5: negative scale means multiply by 10^|q|
         llvm::Type* wide = b_.getIntNTy(256);
         llvm::Value* r = b_.CreateSExt(v.reg, wide, "res");
         if (dst.scale > 0)
           r = b_.CreateMul(r, intPowConst(wide, 2, dst.scale), "res");
         if (v.ty.scale > 0)
           r = b_.CreateSDiv(r, intPowConst(wide, 10, v.ty.scale), "res");
+        else if (v.ty.scale < 0)
+          r = b_.CreateMul(r, intPowConst(wide, 10, -v.ty.scale), "res");
         r = fixedBinPrecTrap(r, dst.prec);
         out.reg = fitFixed(r);
         return out;
       }
       // value*2^q: a non-wide DECIMAL's raw integer times 2^q fits i128
       // (< 10^18 * 2^62).
+      // Y33-6003-0 §4.5: negative scale means multiply by 10^|q| or divide by 2^|q|
       llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt128Ty(), "res");
       if (dst.scale > 0)
         r = b_.CreateMul(r, i128(pli_from_i64(1LL << dst.scale)), "res");
+      else if (dst.scale < 0)
+        r = b_.CreateSDiv(r, i128(pli_from_i64(1LL << -dst.scale)), "res");
       if (v.ty.scale > 0)
         r = b_.CreateSDiv(r, i128(pliPow10_128(v.ty.scale)), "res");
+      else if (v.ty.scale < 0)
+        r = b_.CreateMul(r, i128(pliPow10_128(-v.ty.scale)), "res");
       r = fixedBinPrecTrap(r, dst.prec);
       out.reg = fitFixed(r);
       return out;
@@ -12959,6 +12983,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         // Wide DECIMAL target: raw*10^s can exceed i128, so scale in i256,
         // round half away from zero (Y33-6003), trap at the declared
         // precision, then narrow (ADR-289).
+        // Y33-6003-0 §4.5: negative scale means multiply by 2^|q|
         llvm::Type* wide = b_.getIntNTy(256);
         llvm::Value* r = b_.CreateSExt(v.reg, wide, "res");
         if (dst.scale > 0)
@@ -12971,6 +12996,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
               llvm::ConstantInt::get(wide, -1), llvm::ConstantInt::get(wide, 1));
           llvm::Value* adj = b_.CreateMul(intPowConst(wide, 2, q - 1), sign, "adj");
           r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        } else if (q < 0) {
+          r = b_.CreateMul(r, intPowConst(wide, 2, -q), "res");
         }
         wideMagTrap(r, dst.prec);
         out.reg = fitFixed(r);
@@ -12978,24 +13005,30 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       }
       // value*10^s = raw*10^s/2^q; the target rounds half away from zero
       // (Y33-6003).
+      // Y33-6003-0 §4.5: negative scale means multiply by 2^|q|
       llvm::Value* r = b_.CreateSExt(v.reg, b_.getInt128Ty(), "res");
       if (dst.scale > 0)
         r = b_.CreateMul(r, i128(pli_from_i64(pliPow10(dst.scale))), "res");
+      else if (dst.scale < 0)
+        r = b_.CreateSDiv(r, i128(pli_from_i64(pliPow10(-dst.scale))), "res");
       int q = v.ty.scale;
       if (q > 0) {
         llvm::Value* div = i128(pli_from_i64(1LL << q));
         llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
         llvm::Value* adj = b_.CreateMul(i128(pli_from_i64(1LL << (q - 1))), sign, "adj");
         r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+      } else if (q < 0) {
+        r = b_.CreateMul(r, i128(pli_from_i64(1LL << -q)), "res");
       }
       if (needDec)
         magTrap(r, limit);
       out.reg = fitFixed(r);
       return out;
-    }
-
+}
+    
     // DECIMAL -> DECIMAL. dq > 0 multiplies by 10^dq; dq < 0 rounds half
-    // away from zero (ADR-006).
+    // away from zero (ADR-006), EXCEPT when the destination has negative scale
+    // (Y33-6003-0 §4.5): truncation is used for negative scale.
     bool wide = std::max(v.ty.intBits(), dst.intBits()) == 128;
     llvm::Value* r = b_.CreateSExt(v.reg, wide ? b_.getInt128Ty() : b_.getInt64Ty(), "res");
     if (dqDec > 0) {
@@ -13004,16 +13037,25 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       r = checkedArith(Tok::Star, r, wide ? i128(pliPow10_128(dqDec)) : i64(pliPow10(dqDec)));
     } else if (dqDec < 0) {
       int k = -dqDec;
-      if (wide) {
-        llvm::Value* div = i128(pliPow10_128(k));
-        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
-        llvm::Value* adj = b_.CreateMul(i128(pliPow10_128(k - 1) * 5), sign, "adj");
-        r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+      if (dst.scale < 0) {
+        // Destination has negative scale: truncate toward zero (Y33-6003-0 §4.5)
+        if (wide)
+          r = b_.CreateSDiv(r, i128(pliPow10_128(k)), "res");
+        else
+          r = b_.CreateSDiv(r, i64(pliPow10(k)), "res");
       } else {
-        llvm::Value* div = i64(pliPow10(k));
-        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i64(0), "sgn"), i64(-1), i64(1));
-        llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
-        r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        // Normal case: round half away from zero (ADR-006)
+        if (wide) {
+          llvm::Value* div = i128(pliPow10_128(k));
+          llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
+          llvm::Value* adj = b_.CreateMul(i128(pliPow10_128(k - 1) * 5), sign, "adj");
+          r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        } else {
+          llvm::Value* div = i64(pliPow10(k));
+          llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i64(0), "sgn"), i64(-1), i64(1));
+          llvm::Value* adj = b_.CreateMul(i64(pliPow10(k - 1) * 5), sign, "adj");
+          r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        }
       }
     }
     if (needDec)

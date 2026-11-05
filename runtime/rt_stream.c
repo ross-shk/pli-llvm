@@ -551,20 +551,38 @@ static size_t pli_fmt_u64(char *buf, unsigned long long v) {
 /* FIXED DECIMAL output (QR1.2): the stored integer holds value * 10^q, so
  * print exactly q fraction digits. The buffer is caller-sized: the number of
  * fraction digits is bounded by the room left, and 10^i is never formed past
- * i = 18 (10^19 does not fit an i64). */
+ * i = 18 (10^19 does not fit an i64).
+ * Y33-6003-0 §4.5: q can be negative (integer with implied decimal point
+ * to the right) or exceed precision (fraction with implied decimal point
+ * to the left). */
 void rt_format_decfixed(char *buf, size_t cap, long long v, long long q) {
   char *p = buf;
   size_t room = cap;
   /* Negate through an unsigned magnitude: -LLONG_MIN is undefined. */
   unsigned long long mag = v < 0 ? (unsigned long long)(-(v + 1)) + 1ULL
-                                 : (unsigned long long)v;
+                                   : (unsigned long long)v;
   if (v < 0) {
     if (room < 2)
       goto done;
     *p++ = '-';
     --room;
   }
-  {
+  
+  if (q < 0) {
+    /* Negative scale: stored value v represents logical v * 10^|q|.
+     * Print v * 10^|q| as integer. */
+    long long abs_q = -q;
+    if (abs_q > 18) abs_q = 18;  /* 10^19 doesn't fit i64 */
+    unsigned long long factor = 1;
+    for (long long i = 0; i < abs_q; ++i)
+      factor *= 10;
+    char digits[24];
+    size_t n = pli_fmt_u64(digits, mag * factor);
+    for (size_t i = 0; i < n && room > 1; ++i) {
+      *p++ = digits[i];
+      --room;
+    }
+  } else {
     /* 10^18 is the largest power of ten an i64 holds; a wider scale cannot
      * be represented by the stored integer anyway. */
     long long fdigits = q < 18 ? q : 18;
@@ -714,13 +732,31 @@ static unsigned long long pli_shr128(PliU128 v, int scale) {
 #endif
 
 /* Format the value v/2^scale into buf; returns the length. The fractional
- * part of a dyadic rational terminates, so the digit loop is exact. */
+ * part of a dyadic rational terminates, so the digit loop is exact.
+ * Y33-6003-0 §4.5: scale can be negative (integer with implied decimal
+ * point to the right) or exceed precision (fraction with implied decimal
+ * point to the left). */
 static size_t format_fixed_scaled(char *buf, size_t cap, long long v, long long scale) {
   char *p = buf;
-  if (scale <= 0)  /* no binary fraction */
+  if (scale == 0)  /* no scaling */
     return (size_t)pli_snprintf(buf, cap, "%lld", v);
-  /* 1LL << 63 is undefined; a binary scale above 62 cannot be represented
-   * by the stored integer anyway. */
+  
+  if (scale < 0) {
+    /* Negative scale: stored value v represents logical v * 2^|scale|.
+     * Print v * 2^|scale| as integer. */
+    long long abs_scale = -scale;
+    if (abs_scale > 62) abs_scale = 62;  /* 1LL << 63 is undefined */
+    unsigned long long factor = 1ULL << (unsigned)abs_scale;  /* 2^|scale| */
+    unsigned long long mag = v < 0 ? (unsigned long long)(-(v + 1)) + 1ULL : (unsigned long long)v;
+    if (v < 0) {
+      *p++ = '-';
+    }
+    int n = pli_snprintf(p, cap - (size_t)(p - buf), "%llu", mag * factor);
+    return (size_t)(p - buf + n);
+  }
+  
+  /* Positive scale: stored value v represents logical v / 2^scale.
+   * Print v / 2^scale exactly as a decimal fraction. */
   if (scale > 62) scale = 62;
   if (v < 0) { *p++ = '-'; v = -v; }
   unsigned long long factor = 1ULL << (unsigned)scale;  /* 2^scale */

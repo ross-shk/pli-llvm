@@ -1,0 +1,50 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Fixed-point scale edge cases (rules 16,17,135-139): negative scale
+    and scale > precision per Y33-6003-0:10590-10603. */
+ fixed_scale_edges: procedure options(main);
+     /* Negative scale: stored value = logical / 2^|q| (BINARY) or / 10^|q| (DECIMAL)
+        The represented value is stored * 2^q (or 10^q). */
+     declare n2 fixed bin(15,-2);   /* scale -2: stored = logical / 4 */
+     declare n4 fixed dec(5,-3);    /* scale -3: stored = logical / 1000 */
+     
+     /* Scale > precision: fraction with implied decimal point left of digits
+        FIXED BINARY(3,5): precision 3 bits, scale 5. Max value = 7 * 2^-5 = 0.21875
+        FIXED DECIMAL(2,4): precision 2 digits, scale 4. Max value = 99 * 10^-4 = 0.0099 */
+     declare f2 fixed bin(3,5);     /* precision 3, scale 5 */
+     declare f4 fixed dec(2,4);     /* precision 2, scale 4 */
+     
+     /* Test negative scale storage and arithmetic */
+     n2 = 5;        /* stored = 5/4 = 1 (truncated), represents 1 * 4 = 4 */
+     if n2 ^= 4 then do;            /* logical value retrieved is 4 */
+        put skip list('FAIL n2: expected 4, got', n2);
+        stop;
+     end;
+     n4 = 2500;     /* stored = 2500/1000 = 2, represents 2 * 1000 = 2000 */
+     if n4 ^= 2000 then do;
+        put skip list('FAIL n4: expected 2000, got', n4);
+        stop;
+     end;
+     
+     /* Test scale > precision (fractional values) */
+     f2 = 0.125;    /* 0.125 * 32 = 4, fits in 3 bits (100b) */
+     if f2 ^= 0.125 then do;
+        put skip list('FAIL f2: expected 0.125, got', f2);
+        stop;
+     end;
+     f4 = 0.005;    /* 0.005 * 10000 = 50, fits in 2 digits */
+     if f4 ^= 0.005 then do;
+        put skip list('FAIL f4: expected 0.005, got', f4);
+        stop;
+     end;
+     
+     /* Test overflow on scale > precision (SIZE condition) */
+     declare f2_over fixed bin(3,5);
+     on size begin;
+        put skip list('SIZE condition caught');
+     end;
+     f2_over = 0.25;  /* 0.25 * 32 = 8, exceeds 3-bit max (7) -> SIZE */
+     /* If we reach here, SIZE was handled and value wrapped */
+     
+     put skip list('PASS fixed_scale_edges');
+ end fixed_scale_edges;
