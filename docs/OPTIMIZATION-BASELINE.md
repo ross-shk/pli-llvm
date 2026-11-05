@@ -1317,7 +1317,7 @@ C twin is unchanged at 0.87x, since the program was already ahead of C.
 
 Rejected by the plan's §21 as an *optimization* — it changes which conditions
 a program raises, so it belongs to the extension track (its own ADR, a
-`GRAMMAR-COVERAGE.md` extensions row). ADR-259 stays unwritten.
+`GRAMMAR-COVERAGE.md` extensions row). ADR-259 records the decision; not built.
 
 ### 12.7 K10 — `SELECT` via binary search: closed
 
@@ -1340,9 +1340,9 @@ A binary-search lowering would make this program *slower*.
 
 ### 12.8 K11 — `INLIST` / `INARRAY`: recorded, not built
 
-Rejected by §21 (a language feature, not an optimization). The transferable
-idea — a `CHAR(n≤4)` comparison as one word compare — belongs to the string
-path.
+Rejected by §21 (a language feature, not an optimization). ADR-369 records the
+decision; not built. The transferable idea — a `CHAR(n≤4)` comparison as one
+word compare — belongs to the string path.
 
 ---
 

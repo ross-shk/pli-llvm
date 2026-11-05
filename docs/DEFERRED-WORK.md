@@ -130,7 +130,7 @@ measurement recorded, as `OB` already does for `I1`, `K5` and `K10`.
 | D2 | `C5` exponent patch: `sitofp` followed by a multiply by 2^-q | done | Served by ADR-284 in the A3 change: `convert()` lowers `FIXED BINARY -> FLOAT` as `sitofp` then `fmul 2^-q` (factor from `std::ldexp(1.0, -q)`), not a divide; ADR-244 is released (`OB §9.4`) | S | A3 |
 | D3 | `E5` narrow-type codegen: add a 32-bit target benchmark first | gated | narrow-integer workload (`benchmarks/lang/narrow_int.pli`) added; `-emit-llvm` audit on arm64 macOS host shows `FIXED BINARY(15)` arithmetic stays at `i32` end-to-end — no unnecessary i32→i64 widening found on the host. Target-specific measurement (32-bit/embedded) cannot be performed locally; D3 remains `gated` until a 32-bit target is available (`OB §10.3`). | S–M | measurement |
 | D4 | `I2` loop fusion: add the workload first | gated | a measured multi-pass array pattern exists; LLVM's loop-fusion pass is not in the default pipeline (`OB §11.2`) | M | measurement |
-| D5 | Extension track: `RESEXP` and `INLIST`/`INARRAY` | gated | own ADR each plus an `Extensions (not in TR 25.084)` row; rejected as optimizations because they change which conditions a program raises (`OB §12.6`, §12.8); ADR-259 is reserved for `RESEXP` | M | ADR accepted |
+| D5 | Extension track: `RESEXP` and `INLIST`/`INARRAY` | done | Served by ADR-259 (`RESEXP`, rejected/recorded, reserved number honored) and ADR-369 (`INLIST`/`INARRAY`, rejected/recorded, next free number at time of writing). Both are explicit rejections recorded in `GRAMMAR-COVERAGE.md`'s "Extensions (not in TR 25.084)" table, never as spec scope; no parser/sema/irgen code, no tests. `OB §12.6`/`§12.8` cross-reference the ADRs | `GRAMMAR-COVERAGE.md` gains the two extension rows, neither marked "served"; ADR-259/ADR-369 appended to `DESIGN-DECISIONS.md`; `OB §12.6`/`§12.8` updated | M | ADR accepted |
 | D6 | P2 architectural items 11 and 12: SSA promotion in `IRGen`, `llvm.assume` overflow-narrowing hints | gated | close unless a benchmark regresses; parity targets are already met (`benchmarks/OPTIMIZATION-PLAN.md:7-10`) | S | measurement |
 | D7 | LLM orchestration rows above 1.0x at `-O2` (P7 full run, `OB` §17): `llm_sample` 1.31x, `llm_expert_tier` 1.26x, `llm_grammar` 1.20x, `llm_kvcache` 1.11x; `llm_tokenize` (0.77x) and `llm_lookup` (0.99x) are out. `llm_sample` and `llm_expert_tier` scan `bit(1)` flags: the array is one byte per element on both sides (`[N x i8]`), but every PL/I test is a load plus `trunc i8 -> i1`, an extra mask per element in the top-k scan and the expert swap scan. `llm_grammar` has no flag array; its gap sits in the DFA walk's index arithmetic | gated | the rows are measured in a full run (done); promote when a pass folds the mask or the scans are restructured, then re-measure and record in `OB` §17 | S–M | measurement |
 
@@ -184,14 +184,7 @@ Do not re-open these without a new record.
   column 2, nothing past column 72.
 - Run the smoke group plus the new test per change; the full suite only at band
   boundaries, because it is expensive.
-- ADRs are append-only. Claim a number **before** writing: 259 is reserved for
-  `RESEXP`; 244 was released when ADR-284 served `C5`. ADR-350 served A7,
-  ADR-351 served A8, ADR-352 served A9, ADR-353 served A10, ADR-354 served
-  B14, ADR-355 served B15, ADR-356 served C6, ADR-357 served C7 and ADR-358
-  served B0; ADR-360 served the in-memory link, ADR-361/362 served B11's
-  FIXED division, ADR-363 served character exponent text, ADR-364 served
-  B11's IMAGINARY and ADR-365 served D1, so 366 is now the next free number.
-  Collisions happen: 192/194 and
+- ADRs are append-only. Claim a number **before** writing: `259` served `RESEXP` (rejected, recorded), `369` served `INLIST`/`INARRAY` (rejected, recorded), `368` served `GENERIC` (B10), so `370` is now the next free number. Collisions happen: 192/194 and
   239 were renumbered (ADR-232, ADR-279),
   the fiber-stack entry that repeated the ABNORMAL/NORMAL ADR-308 was
   renumbered to ADR-313, and the ASan ADR is now 341 after the GET branch took

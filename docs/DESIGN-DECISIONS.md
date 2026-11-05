@@ -13955,3 +13955,45 @@ both simpler and faster); partial silent-wrong-answer GENERIC (invariant 2:
 gaps are diagnosed, never silently accepted); matching on exact precision or
 length (contrary to PL/I GENERIC semantics, where selectors describe attribute
 classes).
+
+## ADR-259 — RESEXP (condition-raising opt-in; reserved number)
+
+**Context.** Band D row D5 (DEFERRED-WORK.md) defers the extension track: `RESEXP`
+and `INLIST`/`INARRAY` each need their own ADR plus an "Extensions (not in
+TR 25.084)" row in GRAMMAR-COVERAGE.md, never as TR 25.084 scope. `RESEXP` is
+OB §12.6 / WS-K9: an opt-in that "changes which conditions a program raises".
+Rejected by plan §21 as an optimization, so it belongs to the extension track.
+ADR-259 was reserved for it and left unwritten.
+
+**Decision.** `RESEXP` is not built and no surface syntax or semantics are
+accepted into the tree. It is recorded as a rejected extension in
+GRAMMAR-COVERAGE.md's "Extensions (not in TR 25.084)" table. ADR-259 names this
+decision; the number is not reused for anything else.
+
+**Consequences.** GRAMMAR-COVERAGE.md gains an extensions row for `RESEXP`
+marked "rejected / not built — recorded". No tests, no parser/sema/irgen code.
+DEFERRED-WORK.md row D5 is served by this record.
+
+**Rejected.** Building `RESEXP` as an optimization (it changes condition-raising,
+plan §21); building it as a language feature (not TR 25.084 scope; no spec).
+
+## ADR-369 — INLIST / INARRAY (membership operators; next free number)
+
+**Context.** Band D row D5 (DEFERRED-WORK.md) defers the extension track.
+`INLIST`/`INARRAY` is OB §12.8 / K11: membership operators `x INLIST (a, b, ...)`
+and `x INARRAY arr`. Rejected by plan §21 as "a language feature, not an
+optimization". The transferable optimization idea — a `CHAR(n≤4)` comparison as
+one word compare — belongs to the string path and is not exposed as a PL/I
+operator.
+
+**Decision.** `INLIST` and `INARRAY` are not built and no surface syntax or
+semantics are accepted into the tree. ADR-369 names this decision.
+
+**Consequences.** GRAMMAR-COVERAGE.md gains an extensions row for `INLIST` /
+`INARRAY` marked "rejected / not built — recorded". No tests, no
+parser/sema/irgen code. DEFERRED-WORK.md row D5 is served by this record
+(`ADR-369` is the second ADR for D5).
+
+**Rejected.** Building `INLIST`/`INARRAY` as an optimization (it is a language
+feature, not an optimization, plan §21); building it as TR 25.084 scope (it is
+not in the spec; no rule number).
