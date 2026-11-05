@@ -568,7 +568,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   # compiler-rt builtins (clang_rt.builtins-*.lib) are referenced as bare
   # library names on Windows; make sure lld-link finds them via /LIBPATH.
   if(PLI_LLVM_STATIC_PREFIX)
-    target_link_directories(pli PRIVATE "${PLI_LLVM_STATIC_PREFIX}/lib/windows")
+    target_link_directories(pli PRIVATE
+      "${PLI_LLVM_STATIC_PREFIX}/lib"
+      "${PLI_LLVM_STATIC_PREFIX}/lib/windows")
+  endif()
+  # zlib/zstd static libs (PLI_ZLIB_ROOT / PLI_ZSTD_ROOT) are referenced as
+  # bare library names (z, zstd) in llvm_libs_core on Windows; make sure
+  # lld-link finds them via /LIBPATH.
+  if(PLI_ZLIB_ROOT)
+    target_link_directories(pli PRIVATE "${PLI_ZLIB_ROOT}/lib")
+  endif()
+  if(PLI_ZSTD_ROOT)
+    target_link_directories(pli PRIVATE "${PLI_ZSTD_ROOT}/lib")
   endif()
   foreach(_sdk_lib
       "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22000.0/um/x64"
