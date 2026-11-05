@@ -92,13 +92,26 @@ jobs:
             "Expand-Archive -Force '$(cygpath -w ninja.zip)' '$(cygpath -w .)'"
           echo "$(cygpath -w .)" >> "$GITHUB_PATH"
 
+      - name: Build zlib (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # The static LLVM stash ships zstd but not zlib; the prebuilt LLVM
+          # libs reference zlib symbols (adler32, compress2, ...), so build it.
+          curl -fL --retry 3 -o zlib.tar.xz "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz"
+          tar -xf zlib.tar.xz
+          cmake -S zlib-1.3.1 -B zlib-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DZLIB_BUILD_STATIC=ON
+          cmake --build zlib-build -j$NUMBER_OF_PROCESSORS
+          mkdir -p zlib-root/lib
+          cp zlib-build/zlibstatic.lib zlib-root/lib/zlibstatic.lib
+          echo "ZLIB_ROOT_DIR=$(cygpath -w "$(pwd)/zlib-root")" >> "$GITHUB_ENV"
+
       - name: Configure (CMake + Ninja, static prefix)
         run: |
           # Prerequisite: the llvm-deps stash must be promoted first
           # (.github/workflows/llvm-deps.yml, workflow_dispatch); the pins
           # carry its checksums (scripts/llvm_static.pins).
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DPLI_ZSTD_ROOT="$HOME/pli-deps" -DPLI_ZLIB_ROOT="$ZLIB_ROOT_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
             cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release
           fi
