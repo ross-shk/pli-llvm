@@ -235,13 +235,22 @@ find_library(LLD_COMMON_LIB NAMES lldCommon)
 # ADR-225: in-process lld is the ONLY link — every lld driver library is a
 # hard requirement (the old soft gate + clang fallback are gone).
 # ADR-227 adds the MinGW driver (vendored-mingw sysroot links need it).
+# lldMachO (Mach-O linker) is macOS-only; it does not exist on Windows.
 foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_MINGW_LIB LLD_COMMON_LIB)
   if(NOT ${_lld_lib} OR "${${_lld_lib}}" MATCHES "-NOTFOUND$")
-    message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND "${_lld_lib}" STREQUAL "LLD_MACHO_LIB")
+      # Mach-O linker doesn't exist on Windows — skip.
+    else()
+      message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
+    endif()
   endif()
 endforeach()
 set(PLI_HAVE_LLD 1)
-set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
+# lldMachO is macOS-only; omit it from LLD_LIBRARIES on Windows.
+set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  list(APPEND LLD_LIBRARIES ${LLD_MACHO_LIB})
+endif()
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
 add_library(pli_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
@@ -603,7 +612,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   target_link_options(pli PRIVATE
     /WHOLEARCHIVE:${LLD_ELF_LIB}
-    /WHOLEARCHIVE:${LLD_MACHO_LIB}
     /WHOLEARCHIVE:${LLD_COFF_LIB})
 else()
   target_link_options(pli PRIVATE

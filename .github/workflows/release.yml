@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
             asset: pli-linux-x86_64
@@ -34,6 +34,9 @@ jobs:
           - os: macos-latest
             asset: pli-darwin-arm64
             platdir: darwin-arm64
+          - os: windows-latest
+            asset: pli-windows-x86_64
+            platdir: windows-x86_64
     runs-on: ${{ matrix.os }}
 
     steps:
