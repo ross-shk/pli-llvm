@@ -3,12 +3,15 @@
 // memfd.cpp — anonymous-fd blob seam for the in-process lld link.
 #include "memfd.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <string>
+#include <system_error>
 
 #if !defined(_WIN32)
 #include <sys/mman.h>
@@ -74,22 +77,51 @@ std::string createMemBlob(llvm::StringRef bytes, std::string& err) {
   std::string path = "/proc/self/fd/" + std::to_string(fd);
   memFdTable()[path] = fd;
   return path;
+#elif defined(_WIN32)
+  // Windows has no anonymous-fd path that lld can reopen by name, so fall back
+  // to a uniquely named temp file; closeMemBlob removes it after the link.
+  std::error_code ec;
+  fs::path dir = fs::temp_directory_path(ec);
+  if (ec) {
+    err = "temp_directory_path failed";
+    return "";
+  }
+  llvm::SmallString<128> path;
+  std::string model = (dir / "pli-mem-%%%%%%").string();
+  ec = llvm::sys::fs::createUniqueFile(model, path);
+  if (ec) {
+    err = "create temp blob failed: " + ec.message();
+    return "";
+  }
+  std::ofstream os(std::string(path), std::ios::binary | std::ios::trunc);
+  os.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  os.close();
+  if (!os) {
+    llvm::sys::fs::remove(path);
+    err = "write to mem blob failed";
+    return "";
+  }
+  std::string p(path.str());
+  memFdTable()[p] = -1;
+  return p;
 #else
-  // Windows/COFF: no /proc/self/fd or /dev/fd; keep the disk form.
   err = "in-memory blob not supported on this platform";
   return "";
 #endif
 }
 
 void closeMemBlob(const std::string& path) {
-#if defined(_WIN32)
-  return;
-#else
   auto it = memFdTable().find(path);
   if (it == memFdTable().end())
     return;
   int fd = it->second;
   memFdTable().erase(it);
+#if defined(_WIN32)
+  // The blob is a temp file: delete it now that lld no longer needs it.
+  (void)fd;
+  std::error_code ec;
+  fs::remove(fs::path(path), ec);
+#else
   if (fd >= 0)
     ::close(fd);
 #endif

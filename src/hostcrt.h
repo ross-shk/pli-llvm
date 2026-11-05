@@ -27,11 +27,11 @@ EmbeddedSysroot materializeEmbeddedSysroot();
 void cleanupMaterializedSysroot(const std::string& dir);
 
 // In-memory sysroot: each embedded blob mapped to an anonymous-fd path, so no
-// named file is written for the link inputs. name is one of "musl", "mingw",
-// "sdk"; empty when this platform has no in-memory sysroot support (Windows) —
-// the caller falls back to materializeEmbeddedSysroot(). files maps each
-// logical path (e.g. "crt1.o", "usr/lib/libSystem.tbd") to its mem path.
-// Close the fds with cleanupMaterializedSysrootMem once the link is done.
+// named file is written for the link inputs (Windows falls back to temp files
+// through createMemBlob). name is one of "musl", "mingw", "sdk"; empty when
+// materialization fails — the caller falls back to materializeEmbeddedSysroot().
+// files maps each logical path (e.g. "crt1.o", "usr/lib/libSystem.tbd") to its
+// blob path. Close the blobs with cleanupMaterializedSysrootMem once linked.
 struct EmbeddedSysrootMem {
   std::string name;
   std::map<std::string, std::string> files; // logicalPath -> memPath

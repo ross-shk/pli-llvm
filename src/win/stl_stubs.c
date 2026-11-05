@@ -294,25 +294,31 @@ const void *__std_min_element_d(const void *first, const void *last, int unused)
     return best;
 }
 
-/* ---- __std_rotate: rotate [first, middle, last) so middle becomes first ----
- * New STL rotates by swapping blocks (verified: lld passes pointer triples). */
-void *__std_rotate(void *first, void *middle, void *last, size_t elem_size) {
+/* ---- __std_rotate: rotate byte range [first, last) so middle becomes first ----
+ * MSVC STL declares __std_rotate(void*, void*, void*) and treats the range as
+ * bytes; the element size is not passed (verified against xutility/algorithm
+ * and the call site in MachineBlockPlacement). */
+void __std_rotate(void *first, void *middle, void *last) {
     uint8_t *f = (uint8_t *)first, *m = (uint8_t *)middle, *l = (uint8_t *)last;
-    while (f != m) {
-        uint8_t *next = m;
-        uint8_t *it = f;
-        while (it != next) {
-            uint8_t tmp[8];
-            memcpy(tmp, it, elem_size);
-            memcpy(it, next, elem_size);
-            memcpy(next, tmp, elem_size);
-            it += elem_size;
-            next += elem_size;
-            if (next == l) next = m;
-            if (it == m) m = next;
-        }
+    /* An empty left or right part already is the rotation. */
+    if (f == m || m == l)
+        return;
+    /* Reverse [f,m), then [m,l), then the whole range: a rotation. */
+    for (uint8_t *a = f, *b = m - 1; a < b; ++a, --b) {
+        uint8_t tmp = *a;
+        *a = *b;
+        *b = tmp;
     }
-    return first;
+    for (uint8_t *a = m, *b = l - 1; a < b; ++a, --b) {
+        uint8_t tmp = *a;
+        *a = *b;
+        *b = tmp;
+    }
+    for (uint8_t *a = f, *b = l - 1; a < b; ++a, --b) {
+        uint8_t tmp = *a;
+        *a = *b;
+        *b = tmp;
+    }
 }
 
 /* ---- __std_min_element_4/8: pointer to first minimal int/uint ----

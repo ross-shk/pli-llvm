@@ -1005,14 +1005,19 @@ int main(int argc, char** argv) {
   {
     llvm::Triple llt(triple);
     const pli::TargetDesc& desc = pli::getTargetDesc(llt);
+    const llvm::Triple::ObjectFormatType objFmt = llt.getObjectFormat();
+    const bool isMachO = objFmt == llvm::Triple::MachO;
+    const bool isCOFF = objFmt == llvm::Triple::COFF;
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
       // Resolve the embedded sysroot once: in-memory (anonymous fds, no named
       // file) when the platform supports it (Linux/macOS); disk materialization
-      // otherwise (Windows/COFF, out of scope for in-memory). The recipe below
-      // passes every vendored sysroot artifact as an explicit path argument and
-      // drops the vendored -L/-syslibroot directory flags.
-      pli::EmbeddedSysrootMem embMem = pli::materializeEmbeddedSysrootMem();
+      // otherwise (COFF, whose recipe needs a real -L directory). The recipe
+      // below passes every vendored sysroot artifact as an explicit path
+      // argument and drops the vendored -L/-syslibroot directory flags.
+      pli::EmbeddedSysrootMem embMem;
+      if (!isCOFF)
+        embMem = pli::materializeEmbeddedSysrootMem();
       const bool useMemSysroot = !embMem.name.empty() && !embMem.files.empty();
       pli::EmbeddedSysroot emb;
       if (!useMemSysroot) {
@@ -1054,10 +1059,6 @@ int main(int argc, char** argv) {
       }
 
       std::vector<std::string> argStore = {"ld.lld"};
-      const llvm::Triple::ObjectFormatType objFmt = llt.getObjectFormat();
-      const bool isMachO = objFmt == llvm::Triple::MachO;
-      const bool isCOFF = objFmt == llvm::Triple::COFF;
-
       if (isMachO) {
         // macOS: .tbd stubs passed as direct file args (no -syslibroot dir).
         argStore.push_back("-arch");
