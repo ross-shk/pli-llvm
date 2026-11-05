@@ -59,7 +59,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   endif()
   # zstd
   if(NOT TARGET zstd::libzstd_static)
-    find_file(ZSTD_LIB NAMES libzstd_static.lib zstd.lib
+    find_file(ZSTD_LIB NAMES libzstd_static.lib zstd_static.lib zstd.lib
       HINTS ${PLI_ZSTD_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZSTD_LIB)
@@ -593,6 +593,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
     kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib
     advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib
     libcpmt.lib)
+  # Link the zlib/zstd imported targets so CMake passes their full paths to
+  # lld-link (bare names z/zstd in llvm_libs_core would look for z.lib/zstd.lib,
+  # but the actual files are zlibstatic.lib/zstd_static.lib).
+  if(TARGET ZLIB::ZLIB)
+    target_link_libraries(pli PRIVATE ZLIB::ZLIB)
+  endif()
+  if(TARGET zstd::libzstd_static)
+    target_link_libraries(pli PRIVATE zstd::libzstd_static)
+  endif()
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
   # Compiled from src/win/stl_stubs.c as part of the build. The hermetic stash
