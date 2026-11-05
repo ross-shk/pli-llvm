@@ -81,6 +81,17 @@ jobs:
           sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
           echo "$(cygpath -w "$HOME/pli-deps/bin")" >> "$GITHUB_PATH"
 
+      - name: Install ninja (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # ninja is not preinstalled on GitHub Actions Windows runners
+          # (unlike Linux/macOS). Download it so cmake --build -G Ninja works.
+          NIR_VER=1.11.1
+          curl -fL --retry 3 -o ninja.zip "https://github.com/ninja-build/ninja/releases/download/v$NIR_VER/ninja-win.zip"
+          powershell -NoProfile -Command \
+            "Expand-Archive -Force '$(cygpath -w ninja.zip)' '$(cygpath -w .)'"
+          echo "$(cygpath -w .)" >> "$GITHUB_PATH"
+
       - name: Configure (CMake + Ninja, static prefix)
         run: |
           # Prerequisite: the llvm-deps stash must be promoted first
