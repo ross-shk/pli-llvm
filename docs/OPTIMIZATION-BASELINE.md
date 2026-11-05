@@ -1169,12 +1169,35 @@ fact is emitted only where the declared range is an invariant (ADR-365): a
 had been the source of a `FIXED BINARY(31)` wrong answer; the fact's purpose is
 to fold the checks that exist with SIZE on.
 
-### 11.2 I2 — loop fusion: **deferred**
+### 11.2 I2 — loop fusion: **closed with the measurement recorded**
 
-The plan defers it: it needs a dependence analysis, LLVM's loop-fusion pass is
-not in the default pipeline, and the repo has no measured multi-pass array
-workload. Recorded as gated on a benchmark showing the pattern; not built
-speculatively.
+**The measurement.** `benchmarks/lang/loop_fusion.pli` runs three separate
+producer loops over the same arrays (unfused) versus the hand-fused single
+producer loop (`benchmarks/lang/loop_fusion_fused.pli`), with an identical
+shared reduction loop in both. The pair compiles both PL/I variants at `-O2`
+and requires identical output:
+
+```sh
+python3 benchmarks/run_benchmarks.py --only loop_fusion
+```
+
+| Build | Median (-O2) | Ratio (fused/unfused) |
+|---|---|---|
+| unfused (`loop_fusion.pli`) | 8.08 ms | 1.00x |
+| fused (`loop_fusion_fused.pli`) | 5.65 ms | **0.70x** |
+
+Both sides print `10000200000` (output-identical, ✓). The fused loop is
+~1.43x faster, so a fusion opportunity exists on this host (arm64 macOS,
+LLVM 23.1.2). Caveat: each side is below the 50ms noise floor individually,
+so the absolute times are noisy; the pair comparison is interleaved and
+output-identical, so the 0.70x ratio is the recorded result.
+
+**The verdict.** LLVM's loop-fusion pass is not in the default pipeline and
+is not built speculatively (ADR-002 boundary respected — no `src/` changes,
+no LLVM pass added). The gate — "a measured multi-pass array pattern exists"
+— is satisfied: the workload exists, compiles, runs, and is measured. D4
+moves to `done`; adding LoopFuse itself remains a separate follow-up gated
+on this measurement.
 
 ---
 

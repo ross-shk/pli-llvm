@@ -1,0 +1,23 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Loop fusion (I2/D4): three separate producer loops over the same arrays
+    (unfused, what LLVM emits today without a loop-fusion pass) plus a shared
+    reduction loop identical in both versions, so the reduction cancels out
+    of the unfused-vs-fused comparison. */
+ loop_fusion: procedure options(main);
+    declare a(100000) fixed bin(31);
+    declare b(100000) fixed bin(31);
+    declare c(100000) fixed bin(31);
+    declare (i, k) fixed bin(31);
+    declare s fixed bin(63);
+
+    s = 0;
+    do k = 1 to 100;
+       do i = 1 to 100000; a(i) = i; end;
+       do i = 1 to 100000; b(i) = a(i) * 2; end;
+       do i = 1 to 100000; c(i) = b(i) + 1; end;
+    end;
+    do i = 1 to 100000; s = s + c(i); end;
+
+    put skip list(s);
+ end loop_fusion;

@@ -104,6 +104,12 @@ LANG_BENCHMARKS = [
     # table; INDEX with a variable needle uses the LLVM memchr expansion.
     # The per-call-site predicate flips the path between the two call sites.
     ("index_flip",    "lang/index_flip.pli",    "lang/baseline/index_flip_c.c"),
+    # D4 (DEFERRED-WORK D4 / OB §11.2): a measured multi-pass array workload.
+    # LLVM's loop-fusion pass is not in the default pipeline; this benchmarks
+    # three separate producer loops vs one hand-fused loop over the same
+    # arrays, paired PL/I-vs-PL/I so the C twin cannot price the fusion
+    # opportunity.
+    ("loop_fusion",   "lang/loop_fusion.pli",   "lang/baseline/loop_fusion_c.c"),
 ]
 
 # WS-A2 (ADR-267): a benchmark whose callee lives in another compilation unit
@@ -196,6 +202,11 @@ PAIRS = [
     # the decision layer has nothing to buy.
     ("string_search", "inline", [], "library",
      ["--experimental-lowering=runtime"]),
+    # D4 (DEFERRED-WORK D4 / OB §11.2): unfused vs hand-fused multi-pass
+    # producer loop. The two sides are different programs; side B sources
+    # the fused variant. Identical output is required (a mismatch is a bug).
+    ("loop_fusion", "unfused", [], "fused", [],
+     ["lang/loop_fusion_fused.pli"]),
 ]
 
 
@@ -322,6 +333,7 @@ CHECKS = {
     "by_name":          {"min_ms_O2": 50, "float_tol": False},
     "select_chain":     {"min_ms_O2": 50, "float_tol": False},
     "index_flip":       {"min_ms_O2": 50, "float_tol": False},
+    "loop_fusion":      {"min_ms_O2": 50, "float_tol": False},
 }
 
 # Benchmarks whose C twin is a *descriptive* reference, not a parity twin: the
