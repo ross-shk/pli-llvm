@@ -1102,6 +1102,7 @@ int main(int argc, char** argv) {
           return 1;
         }
         argStore.push_back("-static");
+        wantPIE = false;
         argStore.push_back(crt1);
         argStore.push_back(crti);
         for (const std::string& o : objs)
