@@ -18,6 +18,16 @@ EXE=
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT*) EXE=.exe ;;
 esac
+# Windows has no anonymous-fd support (no memfd_create, no /proc/self/fd/N),
+# so sysroot is materialized to disk and mem blobs use named temp files that
+# Windows file-locking may prevent from being deleted. This test's zero-temp
+# assumption is Linux/macOS-specific; skip on Windows.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT*)
+    echo "PASS (skipped on Windows: no anonymous-fd support)"
+    exit 0
+    ;;
+esac
 TDIR="${TMPDIR:-/tmp}"
 
 cat > "$OUT/single.pli" <<'EOF'
