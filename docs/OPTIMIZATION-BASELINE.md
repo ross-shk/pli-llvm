@@ -1053,8 +1053,13 @@ float path ✓.
 **E5 — narrow-type codegen.** The plan defers it: "only if a narrow-integer
 benchmark shows a gap on the target. On x86-64 the expected gain is ~0; on a
 32-bit or embedded target it is real. **Defer** — record as gated on a
-target-specific measurement." The corpus has no narrow-integer benchmark and
-the repo's `intBits()` already picks the narrowest of i32/i64/i128 ✓ → **deferred** ✓, gated on a target-specific measurement ✓.
+target-specific measurement." A narrow-integer benchmark (`narrow_int`) has
+now been added to `benchmarks/lang/` and its `-emit-llvm` output audited:
+`FIXED BINARY(15)` values live in `i32` and `add/sub/mul`/`icmp` on two
+narrow operands run at `i32` end-to-end — no unnecessary i32→i64 widening
+was found on the host (arm64 macOS). The only i32→i64 extensions are array
+subscript addressing, the `mod` builtin, and the runtime output ABI. The
+repo's `intBits()` already picks the narrowest of i32/i64/i128 ✓ → **deferred** ✓, gated on a target-specific measurement ✓ (no 32-bit target available locally).
 
 ---
 

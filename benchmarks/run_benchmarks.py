@@ -83,6 +83,7 @@ LANG_BENCHMARKS = [
     # D1 (ADR-365): every hot item is narrower than its slot, so the declared
     # range fact is what lets LLVM fold the storage-width overflow checks.
     ("fixed_narrow",  "lang/fixed_narrow.pli",  "lang/baseline/fixed_narrow_c.c"),
+    ("narrow_int",    "lang/narrow_int.pli",    "lang/baseline/narrow_int_c.c"),
     ("on_dispatch",   "lang/on_dispatch.pli",   "lang/baseline/on_dispatch_c.c"),
     ("decimal_scale", "lang/decimal_scale.pli", "lang/baseline/decimal_scale_c.c"),
     ("bit_fields",    "lang/bit_fields.pli",    "lang/baseline/bit_fields_c.c"),
@@ -151,6 +152,11 @@ PAIRS = [
      ["--size-checks"]),
     ("fixed_narrow", "range-facts", ["--size-checks"], "no-range-facts",
      ["--size-checks", "--no-range-facts"]),
+    # E5/D3 narrow-type codegen: same program, check-free vs --size-checks,
+    # pricing the SIZE trap on a narrow item. The host (64-bit) cannot
+    # meaningfully compare i32 vs i64 codegen since both fit a native register.
+    ("narrow_int", "check-free", [], "size-checks",
+     ["--size-checks"]),
     # WS-A1 (ADR-264): what the inferred procedure memory effects are worth.
     # The same program, once with the inference and once with
     # --no-memory-effects, so every call keeps LLVM's default effects.
@@ -303,6 +309,7 @@ CHECKS = {
     # exact integer or fixed-point arithmetic, never floating point).
     "checks_on":        {"min_ms_O2": 50, "float_tol": False},
     "fixed_narrow":     {"min_ms_O2": 50, "float_tol": False},
+    "narrow_int":       {"min_ms_O2": 50, "float_tol": False},
     "on_dispatch":      {"min_ms_O2": 50, "float_tol": False},
     "decimal_scale":    {"min_ms_O2": 50, "float_tol": False},
     "bit_fields":       {"min_ms_O2": 50, "float_tol": False},
