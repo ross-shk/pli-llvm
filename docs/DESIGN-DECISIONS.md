@@ -14021,3 +14021,60 @@ parser/sema/irgen code. DEFERRED-WORK.md row D5 is served by this record
 **Rejected.** Building `INLIST`/`INARRAY` as an optimization (it is a language
 feature, not an optimization, plan §21); building it as TR 25.084 scope (it is
 not in the spec; no rule number).
+
+## ADR-370 — In-memory linking on all platforms (Windows zero-named-file extension)
+
+**Context.** ADR-360 introduced in-memory linking for Linux/macOS using
+anonymous file descriptors (`memfd_create` + `/proc/self/fd/N` on Linux,
+`mkstemp`+`unlink` + `/dev/fd/N` on macOS). Windows has no anonymous-fd
+mechanism that `lld` can reopen by path, so the Windows path materialized the
+embedded sysroot to a real `pli-sysroot-*` directory and created named
+`pli-mem-*` temp files for object blobs that `closeMemBlob` deleted on
+best-effort basis. The `no_temp_files.sh` driver test skipped on Windows.
+
+**Spike (Phase 0).** Inspected the shipped LLVM 23 `lld/Common/Driver.h`
+`lldMain` API: it accepts only `argv` (paths), `stdout`, `stderr`, and the
+driver table. No `vfs::FileSystem`, `MemoryBuffer`, or in-process VFS hook is
+exposed for the MinGW/COFF drivers. The MinGW driver opens inputs by filesystem
+path; there is no mechanism to inject anonymous handles or memory-backed files.
+`FILE_FLAG_DELETE_ON_CLOSE` with `FILE_SHARE_DELETE` keeps a directory entry
+visible while any handle is open, so literal "zero named files" (Option B) is
+infeasible without an `lld` patch (out of scope without explicit approval).
+
+**Decision.** Implement Fallback A (compiler-managed lifecycle, no persistent
+temp artifacts):
+- `src/memfd.cpp` (Windows): create temp file via `createUniqueFile`, reopen
+  with `CreateFileW(GENERIC_WRITE|DELETE, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+  FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE)`, write bytes, keep the
+  `HANDLE` open in `memFdTable`. `closeMemBlob` closes the handle — the OS
+  deletes the file when the last handle closes. This guarantees no leaked
+  compiler-managed blobs after link; transient directory entries while `lld`
+  holds the path open are acceptable and not a leak.
+- `src/main.cpp`: enable `materializeEmbeddedSysrootMem()` for COFF (remove the
+  `if (!isCOFF)` gate). The COFF/MinGW recipe resolves every CRT object and
+  import library via `sysrootPath(...)` to explicit mem-blob paths; the vendored
+  `-L` directory flag and `-l:` library args are dropped. No `pli-sysroot-*`
+  directory is ever created on Windows.
+- `tests/driver/no_temp_files.sh`: runs on Windows; asserts no `pli-sysroot-*`
+  dirs created and no leaked `pli-mem-*` files after link (count-diff against
+  pre-link snapshot). The test documents the Windows guarantee precisely:
+  "no `pli-sysroot-*` dirs and no leaked compiler-managed `pli-mem-*` blobs
+  (transient directory entries while lld holds handles open are acceptable)."
+
+**Consequences.**
+- Windows link path uses in-memory lifecycle for all compiler-managed blobs
+  (unit objects + embedded sysroot artifacts). No persistent temp files/dirs.
+- `lld`-internal `--flto` temps remain a known limitation (unchanged from
+  ADR-360).
+- Linux/macOS behavior unchanged (true anonymous fds).
+- GRAMMAR-COVERAGE.md: no rule moves (driver-only change).
+
+**Rejected.**
+- Status quo (Windows skip in `no_temp_files.sh`, disk sysroot on Windows).
+- Option B (true zero named files) — blocked by `lldMain` path-based API;
+  would require an `lld` patch not approved for this scope.
+- Keeping `-L` + `-l:` for MinGW sysroot when mem sysroot is available
+  (defeats the no-disk-sysroot goal).
+
+**Known limits.** `lld`-internal `--flto` temps are not controlled by `pli`;
+no new leaks introduced by this change.

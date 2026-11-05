@@ -1011,13 +1011,10 @@ int main(int argc, char** argv) {
     std::string tmErr;
     if (auto tm = pli::createTargetMachine(triple, optLevel, tmErr, marchNative)) {
       // Resolve the embedded sysroot once: in-memory (anonymous fds, no named
-      // file) when the platform supports it (Linux/macOS); disk materialization
-      // otherwise (COFF, whose recipe needs a real -L directory). The recipe
-      // below passes every vendored sysroot artifact as an explicit path
-      // argument and drops the vendored -L/-syslibroot directory flags.
-      pli::EmbeddedSysrootMem embMem;
-      if (!isCOFF)
-        embMem = pli::materializeEmbeddedSysrootMem();
+      // file) on all platforms; disk materialization as fallback if mem fails.
+      // The recipe below passes every vendored sysroot artifact as an explicit
+      // path argument and drops the vendored -L/-syslibroot directory flags.
+      pli::EmbeddedSysrootMem embMem = pli::materializeEmbeddedSysrootMem();
       const bool useMemSysroot = !embMem.name.empty() && !embMem.files.empty();
       pli::EmbeddedSysroot emb;
       if (!useMemSysroot) {
@@ -1126,23 +1123,45 @@ int main(int argc, char** argv) {
           argStore.push_back("--build-id");
         }
       } else if (isCOFF) {
-        // Windows/mingw: MinGW driver (GNU-ld-compatible, disk sysroot).
+        // Windows/mingw: MinGW driver (GNU-ld-compatible). Use explicit mem
+        // blob paths for all sysroot artifacts; no -L sysroot dir.
         argStore.push_back("-m");
         argStore.push_back("i386pep");
-        argStore.push_back(emb.dir + "/crt2.o");
-        argStore.push_back(emb.dir + "/crtbegin.o");
+        std::string crt2 = sysrootPath("crt2.o");
+        std::string crtbegin = sysrootPath("crtbegin.o");
+        std::string fltused = sysrootPath("fltused.o");
+        std::string chkstk = sysrootPath("chkstk.o");
+        std::string crtend = sysrootPath("crtend.o");
+        if (crt2.empty() || crtbegin.empty() || fltused.empty() || chkstk.empty() ||
+            crtend.empty()) {
+          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+          removeTempObjects();
+          if (!useMemSysroot)
+            pli::cleanupMaterializedSysroot(emb.dir);
+          return 1;
+        }
+        argStore.push_back(crt2);
+        argStore.push_back(crtbegin);
         for (const std::string& o : objs)
           argStore.push_back(o);
-        argStore.push_back(emb.dir + "/fltused.o");
-        argStore.push_back(emb.dir + "/chkstk.o");
-        argStore.push_back("-L" + emb.dir);
-        // Import libs + GCC helpers (mirrors the mingw-gcc recipe).
+        argStore.push_back(fltused);
+        argStore.push_back(chkstk);
+        // Import libs + GCC helpers: pass as explicit file paths.
         for (const char* lib :
              {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
               "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
-              "libshell32.a", "libuser32.a", "libws2_32.a", "libkernel32.a"})
-          argStore.push_back(std::string("-l:") + lib);
-        argStore.push_back(emb.dir + "/crtend.o");
+              "libshell32.a", "libuser32.a", "libws2_32.a"}) {
+          std::string p = sysrootPath(lib);
+          if (p.empty()) {
+            std::cerr << "pli: embedded sysroot incomplete (missing " << lib << ") — cannot link\n";
+            removeTempObjects();
+            if (!useMemSysroot)
+              pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          argStore.push_back(p);
+        }
+        argStore.push_back(crtend);
         argStore.push_back("--subsystem=" + subsystem);
       } else {
         std::cerr << "pli: unsupported object format for link\n";

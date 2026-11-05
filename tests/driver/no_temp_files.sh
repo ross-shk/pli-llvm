@@ -9,7 +9,9 @@
 # the temp dir after a link. Windows has no anonymous-fd lld can reopen, so
 # mem blobs fall back to uniquely named temp files (same pli-mem-* marker) that
 # closeMemBlob must delete; this script's count-diff catches a leaked one. The
-# only real file produced is the executable (-o).
+# only real file produced is the executable (-o). On Windows, the guarantee is:
+# no pli-sysroot-* dirs created; no leaked pli-mem-* files after link (transient
+# directory entries while lld holds handles open are acceptable and not a leak).
 set -u
 PLI=${PLI:-./build/cmake/pli}
 OUT=tests/driver/out/no_temp_files
@@ -18,17 +20,19 @@ EXE=
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT*) EXE=.exe ;;
 esac
-# Windows has no anonymous-fd support (no memfd_create, no /proc/self/fd/N),
-# so sysroot is materialized to disk and mem blobs use named temp files that
-# Windows file-locking may prevent from being deleted. This test's zero-temp
-# assumption is Linux/macOS-specific; skip on Windows.
+# Use the same temp directory the compiler uses: on Windows, std::filesystem::temp_directory_path()
+# returns the Windows temp dir (e.g. %TEMP%); on Unix, $TMPDIR or /tmp.
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT*)
-    echo "PASS (skipped on Windows: no anonymous-fd support)"
-    exit 0
+    # Use cmd to get the real Windows TEMP, then convert to POSIX path for find.
+    TDIR=$(cmd /c "echo %TEMP%" 2>/dev/null | tr -d '\r')
+    # Convert Windows path like C:\Users\...\Temp to /c/Users/.../Temp for MSYS find.
+    TDIR=$(echo "$TDIR" | sed -E 's|^([A-Za-z]):\\|/\L\1/|; s|\\|/|g')
+    ;;
+  *)
+    TDIR="${TMPDIR:-/tmp}"
     ;;
 esac
-TDIR="${TMPDIR:-/tmp}"
 
 cat > "$OUT/single.pli" <<'EOF'
   single: proc options(main);
@@ -42,6 +46,8 @@ cat > "$OUT/unit_a.pli" <<'EOF'
 EOF
 cat > "$OUT/unit_b.pli" <<'EOF'
   unit_b: proc options(main);
+     declare unit_a entry;
+     call unit_a;
      put skip list('multi PASS');
   end unit_b;
 EOF
@@ -88,7 +94,9 @@ before=$(sysroot_count)
 before_mem=$(mem_count)
 
 link_and_run single 'single PASS' "$OUT/single.pli" || true
-link_and_run multi 'multi PASS' "$OUT/unit_a.pli" "$OUT/unit_b.pli" || true
+# multi test prints "unit A PASS" then "multi PASS" on separate lines
+multi_want=$(printf 'unit A PASS\nmulti PASS')
+link_and_run multi "$multi_want" "$OUT/unit_a.pli" "$OUT/unit_b.pli" || true
 
 # Strict: no sysroot temp dir or mem blob temp file may remain above the
 # snapshot after the links.
