@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* extension (ADR-370): DO FOREVER cannot combine with an iterative spec. */
+badforever: procedure options(main);
+  declare i fixed bin(31);
+  do i = 1 to 5 forever;
+    put skip list(i);
+  end;
+end badforever;

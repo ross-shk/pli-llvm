@@ -781,8 +781,9 @@ private:
       if (s->sym)
         set_.insert(s->sym);
       list(s->body);
-      // A zero-trip loop stores nothing; DO UNTIL runs its body at least once.
-      if (!s->until) {
+      // A zero-trip loop stores nothing; DO UNTIL and DO FOREVER run their
+      // body at least once (FOREVER has no exit condition at all).
+      if (!s->until && !s->forever) {
         set_ = entry;
         if (s->sym)
           set_.insert(s->sym);
@@ -4180,7 +4181,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   }
   case Stmt::DoWhile: {
-    typeExpr(s->cond.get(), sc, p);
+    if (s->cond)
+      typeExpr(s->cond.get(), sc, p);
     Stmt* save = curEntry_;
     loopStack_.push_back(s->labels);
     for (auto& b : s->body) {

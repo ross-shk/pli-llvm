@@ -249,6 +249,7 @@ struct Stmt {
 
   ExprP target, value, cond, from, to, by;
   bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
+  bool forever = false;            // DO FOREVER (extension, ADR-370): infinite loop, no condition
   std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
   bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
   bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)

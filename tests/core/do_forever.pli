@@ -1,0 +1,31 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* extension (ADR-370): DO FOREVER is an infinite loop; LEAVE exits,
+   ITERATE re-enters the body; forever stays usable as an identifier. */
+doforever: procedure options(main);
+  declare i fixed bin(31);
+  declare s fixed bin(31);
+  declare forever fixed bin(31);
+  forever = 7;
+  put skip list('ident', forever);
+  i = 0;
+  s = 0;
+  do forever;
+    s = s + 1;
+    i = i + 1;
+    if i = 3 then iterate;
+    if i = 5 then leave;
+    s = s + 10;
+  end;
+  put skip list('leave', s, i);
+  /* nested forever with a leaving inner loop */
+  s = 0;
+  do forever;
+    do forever;
+      leave;
+    end;
+    s = s + 1;
+    leave;
+  end;
+  put skip list('nested', s);
+end doforever;

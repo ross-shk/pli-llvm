@@ -2871,12 +2871,36 @@ generalized from `FIXED BINARY overflow` to `FIXED overflow`, and
  `until` stays usable as an identifier via the existing
  assignment-lookahead dispatch.
 
- Consequences. `do_until.pli` covers runs-once, counting, nesting,
- and LEAVE/ITERATE interplay; `bad_do_until.pli` pins the
- iterative-combination diagnostic. Known limits: MX4–MX8 are
- untouched.
+Consequences. `do_until.pli` covers runs-once, counting, nesting,
+and LEAVE/ITERATE interplay; `bad_do_until.pli` pins the
+iterative-combination diagnostic. Known limits: MX4–MX8 are
+untouched.
 
- ## ADR-107 — TRIM and TALLY string built-ins
+## ADR-370 — DO FOREVER as a flag on the DO-group
+
+Context. Infinite loops have no TR production; only `DO WHILE`
+(rules (69)–(73)) and `DO UNTIL` (ADR-106) are served. The gap
+between `DO UNTIL` and `DO FOREVER` is one branch direction, so a new
+AST kind would duplicate every statement walker for no semantic
+difference.
+
+Decision. `DO FOREVER;` sets a `forever` flag on the ordinary
+DO-group (mirrored to HIR and shown by `--print-hir`); codegen emits
+body-first with an unconditional branch back to the body start,
+sharing the LEAVE/ITERATE re-entry targets (contBB = bodyL,
+breakBB = endL). `forever` implies "body runs at least once; never
+exits by condition", so sema keeps body assignments on fall-through
+(like `until`) and skips condition type-checking (cond is null).
+`forever` stays usable as an identifier via the existing
+assignment-lookahead dispatch; `do forever` plus WHILE/UNTIL or an
+iterative specification is diagnosed, never silently accepted.
+
+Consequences. `do_forever.pli` covers runs-once, counting, LEAVE/
+ITERATE interplay, nesting, and identifier coexistence;
+`bad_do_forever.pli` pins the iterative-combination diagnostic.
+Known limits: MX4–MX8 are untouched.
+
+## ADR-107 — TRIM and TALLY string built-ins
 
  Context. Enterprise verification first: `TALLY(x, y)` is confirmed
  (FIXED BINARY(31,0) non-overlapping case-sensitive count, zero

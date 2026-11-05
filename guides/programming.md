@@ -44,7 +44,7 @@ pli name.pli -o name && ./name
 | Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, OVERFLOW, FIXEDOVERFLOW, named; `CHECK`/`NOCHECK` prefixes | KEYED/DIRECT file conditions |
 | I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
-| Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, TRIM, PACKAGE, OPTIONAL         | —                                |
+| Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, DO FOREVER, TRIM, PACKAGE, OPTIONAL | —                                |
 
 If a feature is missing, `pli` tells you the rule number (like `(24)` or `(91)`) instead of silently accepting it. That's a feature: gaps are always diagnosed.
 
@@ -472,10 +472,29 @@ Rules: at least one `when`, `otherwise` (if present) goes last and only once.
  dcl step fixed bin(31) init(0);
  dcl done bit(1) init('0'b);
 
- do until (done);
-   step = step + 1;
-   if step >= 10 then done = '1'b;
+  do until (done);
+    step = step + 1;
+    if step >= 10 then done = '1'b;
+  end;
+```
+
+### DO FOREVER
+
+`do forever` is an infinite loop (extension, ADR-370): the body runs at least once and never exits by condition. Use `leave` to exit and `iterate` to re-enter the body — they share the same machinery as `DO WHILE`/`DO UNTIL`. `forever` stays usable as an identifier.
+
+```pli
+ dcl i fixed bin(31);
+ dcl s fixed bin(31);
+ i = 0;
+ s = 0;
+ do forever;
+   s = s + 1;
+   i = i + 1;
+   if i = 5 then leave;   /* break out of the infinite loop */
+   if mod(i, 2) = 0 then iterate; /* re-enter the body */
+   s = s + 10;
  end;
+ put skip list(s, i);     /* prints 35 5 */
 ```
 
 ### GO TO (use sparingly)

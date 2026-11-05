@@ -9185,6 +9185,22 @@ void IRGen::hoistCtlForLoopBody(const std::vector<HStmtP>& body, HExpr* cond,
 
 void IRGen::emitDoWhile(HStmt* s) {
   std::string id = std::to_string(n_++);
+  if (s->forever) {
+    // DO FOREVER (extension, ADR-370): body then unconditional branch back to
+    // the body start. No condition block; ITERATE re-enters the body, LEAVE
+    // exits to endL.
+    llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
+    llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);
+    branch(bodyL);
+    startBlock(bodyL);
+    loopStack_.push_back({s->labels, endL, bodyL});
+    for (auto& b : s->body)
+      emitStmt(b.get());
+    loopStack_.pop_back();
+    branch(bodyL); // infinite
+    startBlock(endL);
+    return;
+  }
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "do.cond." + id, curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "do.body." + id, curFn_);
   llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "do.end." + id, curFn_);

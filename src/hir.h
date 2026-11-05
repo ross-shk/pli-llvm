@@ -167,6 +167,7 @@ struct HStmt {
 
   HExprP target, value, cond, from, to, by;
   bool until = false;               // DO UNTIL (extension, ADR-106): test cond after the body
+  bool forever = false;             // DO FOREVER (extension, ADR-370): infinite loop, no condition
   // sema-folded: true only when BY is a compile-time negative integer constant
   bool byNegConst = false;          // P1.1: lets emitDoIter skip the runtime sign test
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e

@@ -368,6 +368,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->chkFOver = s->chkFOver;
   h->strRange = s->strRange;
   h->until = s->until;
+  h->forever = s->forever;
   h->cond = lowerExpr(s->cond.get());
   h->from = lowerExpr(s->from.get());
   h->to = lowerExpr(s->to.get());
@@ -813,8 +814,12 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
     printExpr(os, s->cond.get(), ind);
     break;
   case HStmt::DoWhile:
-    os << (s->until ? " until=" : " cond=");
-    printExpr(os, s->cond.get(), ind);
+    if (s->forever)
+      os << " forever";
+    else {
+      os << (s->until ? " until=" : " cond=");
+      printExpr(os, s->cond.get(), ind);
+    }
     break;
   case HStmt::DoIter:
     os << " v=" << (s->sym ? s->sym->name : s->name) << " from=";

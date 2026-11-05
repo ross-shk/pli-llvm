@@ -3462,6 +3462,23 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
       resync();
       return nullptr;
     }
+  } else if (atWord("FOREVER")) {
+    // DO FOREVER (extension, ADR-370): infinite loop, no condition, no
+    // iterative specification. LEAVE exits; ITERATE re-enters the body.
+    advance(); // FOREVER
+    st->kind = Stmt::DoWhile;
+    st->forever = true;
+    if (atWord("WHILE") || atWord("UNTIL")) {
+      d_.error(cur().loc, "DO FOREVER cannot be combined with WHILE/UNTIL (ADR-370)",
+               "");
+      resync();
+      return nullptr;
+    }
+    if (!eat(Tok::Semi)) {
+      d_.error(cur().loc, "expected ';' after DO FOREVER (ADR-370)", "");
+      resync();
+      return nullptr;
+    }
   } else if (at(Tok::Word)) {
     st->kind = Stmt::DoIter;
     st->name = cur().text;
@@ -3494,6 +3511,13 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
         d_.error(cur().loc,
                  "DO with an iterative specification and UNTIL is not implemented in this stage "
                  "(ADR-106)",
+                 "");
+        resync();
+        return nullptr;
+      }
+      if (atWord("FOREVER")) {
+        d_.error(cur().loc,
+                 "DO FOREVER cannot be combined with an iterative specification (ADR-370)",
                  "");
         resync();
         return nullptr;
