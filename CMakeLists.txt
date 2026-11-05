@@ -608,20 +608,29 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   endif()
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
-  # Compiled from src/win/stl_stubs.c as part of the build. The hermetic stash
-  # is compiled with the runner's own toolset, so its libcpmt already exports
-  # these helpers; adding the stubs there produces duplicate symbols.
+  # Compiled from src/win/stl_stubs.c as part of the build. When the dynamic CRT
+  # (/MD, clang-cl's default on CI runners) is used, libcpmt.lib is auto-linked
+  # and already exports these helpers; compiling the stubs then produces
+  # duplicate-symbol link errors. Only compile the stubs when the static CRT
+  # (/MT) is used (libcpmt.lib is not linked, stubs provide the missing symbols).
+  # libxml2_stubs.c provides XML-related stubs that libcpmt never exports, so
+  # it is always included on Windows.
   target_sources(pli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c)
-  # Silence expected clang warnings for the __std_*/xml* helper stubs
-  # (reserved double-underscore names, pre-C99 declaration style).
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c)
   set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c PROPERTIES
     COMPILE_OPTIONS "-Wno-reserved-identifier;-Wno-missing-prototypes;-Wno-unsafe-buffer-usage;-Wno-unreachable-code-return;-Wno-declaration-after-statement;-Wno-unused-parameter")
-  message(STATUS "MSVC STL helper stubs: src/win/stl_stubs.c")
-  message(STATUS "Using /MT (static CRT) to match prebuilt LLVM libraries")
+  get_target_property(_msvc_rt pli MSVC_RUNTIME_LIBRARY)
+  if(_msvc_rt STREQUAL "MultiThreaded" OR _msvc_rt STREQUAL "MultiThreadedDLL")
+    target_sources(pli PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c)
+    set_source_files_properties(
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c PROPERTIES
+      COMPILE_OPTIONS "-Wno-reserved-identifier;-Wno-missing-prototypes;-Wno-unsafe-buffer-usage;-Wno-unreachable-code-return;-Wno-declaration-after-statement;-Wno-unused-parameter")
+    message(STATUS "MSVC STL helper stubs: src/win/stl_stubs.c (static CRT: ${_msvc_rt})")
+  else()
+    message(STATUS "MSVC STL helper stubs: skipped (dynamic CRT: ${_msvc_rt}; libcpmt.lib provides __std_* helpers)")
+  endif()
 endif()
 
 # Force-include lld + host target so their symbols survive static dead-stripping.
