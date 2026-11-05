@@ -394,6 +394,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     hf.w = lowerExpr(f.w.get());
     hf.d = lowerExpr(f.d.get());
     hf.s = lowerExpr(f.s.get());
+    hf.repeatCount = lowerExpr(f.repeatCount.get());
     hf.pic = f.pic;
     hf.remote = f.remote;
     for (const auto& sb : f.subs) {
@@ -402,6 +403,20 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hs.w = lowerExpr(sb.w.get());
       hs.d = lowerExpr(sb.d.get());
       hs.s = lowerExpr(sb.s.get());
+      hs.repeatCount = lowerExpr(sb.repeatCount.get());
+      hs.pic = sb.pic;
+      hs.remote = sb.remote;
+      for (const auto& ssb : sb.subs) {
+        HFormatItem hss;
+        hss.kind = static_cast<HFormatItem::Kind>(ssb.kind);
+        hss.w = lowerExpr(ssb.w.get());
+        hss.d = lowerExpr(ssb.d.get());
+        hss.s = lowerExpr(ssb.s.get());
+        hss.repeatCount = lowerExpr(ssb.repeatCount.get());
+        hss.pic = ssb.pic;
+        hss.remote = ssb.remote;
+        hs.subs.push_back(std::move(hss));
+      }
       hf.subs.push_back(std::move(hs));
     }
     h->formats.push_back(std::move(hf));

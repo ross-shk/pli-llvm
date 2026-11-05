@@ -99,20 +99,22 @@ static PliI128 decLitRescaled128(const Expr* e, const Type& t) {
 }
 
 // Stored integer of an INITIAL/VALUE literal for a FIXED BINARY(p,q)
-// target (ADR-284): value * 2^q, with a decimal literal's fraction
-// truncated toward zero — the same rule convert() applies at run time.
-static PliI128 binLitRescaled(const Expr* e, const Type& t) {
-  if (!e)
-    return 0;
-  if (e->kind == Expr::FltLit)
-    return pli_from_i64((long long)std::ldexp(e->fval, t.scale));
-  PliI128 v = e->kind == Expr::DecLit ? e->wideIval : pli_from_i64(e->ival);
-  if (t.scale > 0)
-    v = v * pli_from_i64(1LL << t.scale);
-  if (e->kind == Expr::DecLit && e->decScale > 0)
-    v = v / pliPow10_128(e->decScale);
-  return v;
-}
+ // target (ADR-284): value * 2^q, with a decimal literal's fraction
+ // truncated toward zero — the same rule convert() applies at run time.
+ static PliI128 binLitRescaled(const Expr* e, const Type& t) {
+   if (!e)
+     return 0;
+   if (e->kind == Expr::FltLit)
+     return pli_from_i64((long long)std::ldexp(e->fval, t.scale));
+   PliI128 v = e->kind == Expr::DecLit ? e->wideIval : pli_from_i64(e->ival);
+   if (t.scale > 0)
+     v = v * pli_from_i64(1LL << t.scale);
+   else if (t.scale < 0)
+     v = v * pli_from_i64(1LL << (-t.scale)); // negative scale: multiply by 2^|q|
+   if (e->kind == Expr::DecLit && e->decScale > 0)
+     v = v / pliPow10_128(e->decScale);
+   return v;
+ }
 
 // True when a DECIMAL literal needs the wide constant path (ADR-191): its
 // full value exceeds i64, or the target itself is wide (a narrow literal
@@ -5056,10 +5058,8 @@ bool IRGen::constScalarInit(Symbol* s, Val& out) {
     }
     long long val = e->kind == Expr::FltLit ? (long long)e->fval : e->ival;
     if (e->kind == Expr::DecLit) {
-      int dq = s->ty.scale - e->decScale; // rescale to the target scale
-      val = dq > 0   ? val * pliPow10(dq)
-            : dq < 0 ? pliRescaleDown(val, -dq, s->ty.k == TK::FixedDec)
-                     : val;
+      int dq = s->ty.scale - e->decScale; // rescale to the target type's scale
+      val = dq > 0 ? val * pliPow10(dq) : dq < 0 ? pliRescaleDown(val, -dq, s->ty.k == TK::FixedDec) : val;
     }
     out.reg = llvm::ConstantInt::get(llvmTy(s->ty), val, true);
     return true;
@@ -10084,175 +10084,191 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
 void IRGen::emitPutEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   llvm::Value* defD = i64(0);
+  // Pre-evaluate all data items once (PL/I semantics: data items evaluated
+  // once per PUT statement, in order).
+  std::vector<Val> dataItems;
+  dataItems.reserve(s->items.size());
+  for (auto& item : s->items) {
+    dataItems.push_back(emitExpr(item.get()));
+  }
   size_t di = 0;
-  // One real (F/E) part of a COMPLEX value (rule (51)): both parts are
-  // doubles, so F uses the float path and E the scientific path.
-  auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
-    llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
-    llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
-    if (sub.s)
-      (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
-    if (sub.kind == HFormatItem::E)
-      deferCall("pli_put_edit_float_e", {dbl, w, d});
-    else
-      deferCall("pli_put_edit_float", {dbl, w, d});
-  };
   for (auto& f : s->formats) {
-    switch (f.kind) {
-    case HFormatItem::X: {
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferCall("pli_put_edit_x", {w});
+    emitPutEditFormatItem(f, s, di, defW, defD, dataItems);
+  }
+}
+
+// Edit-directed output (rule (108)): walk the format list, pairing each
+// A/B/C/F/E data format with the next data item and emitting the control
+// (X/SKIP/PAGE/LINE/COLUMN) items in order.
+void IRGen::emitPutEditFormatItem(const HFormatItem& f, HStmt* s, size_t& di,
+                                  llvm::Value* defW, llvm::Value* defD,
+                                  const std::vector<Val>& dataItems) {
+  switch (f.kind) {
+  case HFormatItem::X: {
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    deferCall("pli_put_edit_x", {w});
+    break;
+  }
+  case HFormatItem::Skip: {
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_skip", {n});
+    break;
+  }
+  case HFormatItem::Page:
+    deferCall("pli_put_edit_page", {});
+    break;
+  case HFormatItem::Line: {
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_line", {n});
+    break;
+  }
+  case HFormatItem::Column: {
+    // Column positioning (rule (48)): pad blanks to 1-based column n.
+    llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
+    deferCall("pli_put_edit_column", {n});
+    break;
+  }
+  case HFormatItem::Remote:
+    d_.error(s->loc, f.remote.empty() ? "unexpanded remote format R (internal)" : "", "(55)");
+    break;
+  case HFormatItem::A: {
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    deferCall("pli_put_edit_char", {v.ptr, v.len, w});
+    break;
+  }
+  case HFormatItem::B: {
+    // Bit-string output (rule (52)): materialize the packed big-endian
+    // bytes into a temp and write them as '0'/'1' right-justified in w.
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
+    long long nbytes = (nbits + 7) / 8;
+    llvm::Value* tmp =
+        entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
+    llvm::Value* ptr = b_.CreateInBoundsGEP(
+        llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
+    if (nbits == 1) {
+      llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
+      // BIT(1) travels as i1; the packed byte holds it in the low bit, but
+      // the runtime reads the top bit of each byte, so shift into place.
+      llvm::Value* top = b_.CreateShl(one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
+      b_.CreateStore(top, ptr);
+    } else {
+      b_.CreateStore(v.reg, tmp);
+    }
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
+    deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
+    break;
+  }
+  case HFormatItem::C: {
+    // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
+    // formats; a single sub serves both parts.
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
+    llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
+    if (f.subs.empty()) {
+      d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
       break;
     }
-    case HFormatItem::Skip: {
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_skip", {n});
+    auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
+      llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
+      llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
+      if (sub.s)
+        (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
+      if (sub.kind == HFormatItem::E)
+        deferCall("pli_put_edit_float_e", {dbl, w, d});
+      else
+        deferCall("pli_put_edit_float", {dbl, w, d});
+    };
+    putRealPart(re, f.subs[0]);
+    putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
+    break;
+  }
+  case HFormatItem::F: {
+    if (di >= dataItems.size())
       break;
-    }
-    case HFormatItem::Page:
-      deferCall("pli_put_edit_page", {});
-      break;
-    case HFormatItem::Line: {
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_line", {n});
-      break;
-    }
-    case HFormatItem::Column: {
-      // Column positioning (rule (48)): pad blanks to 1-based column n.
-      llvm::Value* n = f.w ? toI64(emitExpr(f.w.get())) : i64(1);
-      deferCall("pli_put_edit_column", {n});
-      break;
-    }
-    case HFormatItem::Remote:
-      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-      break;
-    case HFormatItem::A: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      deferCall("pli_put_edit_char", {v.ptr, v.len, w});
-      break;
-    }
-    case HFormatItem::B: {
-      // Bit-string output (rule (52)): materialize the packed big-endian
-      // bytes into a temp and write them as '0'/'1' right-justified in w.
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
-      long long nbytes = (nbits + 7) / 8;
-      llvm::Value* tmp =
-          entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
-      llvm::Value* ptr = b_.CreateInBoundsGEP(
-          llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
-      if (nbits == 1) {
-        llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
-        // BIT(1) travels as i1; the packed byte holds it in the low bit, but
-        // the runtime reads the top bit of each byte, so shift into place.
-        llvm::Value* top = b_.CreateShl(one, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "btop");
-        b_.CreateStore(top, ptr);
-      } else {
-        b_.CreateStore(v.reg, tmp);
+    Val v = dataItems[di++];
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+    if (f.s)
+      (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
+    if (v.ty.k == TK::Float) {
+      deferCall("pli_put_edit_float", {v.reg, w, d});
+    } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+      // F(w,d) needs the true value: a scaled binary is divided by 2^q
+      // first (ADR-284). The FLOAT path keeps the common d digits; a
+      // point-aware fixed formatter remains a B11 refinement.
+      Val fv = convert(v, Type::flt(6), f.subs.empty() ? s->loc : f.w ? f.w->loc : s->loc);
+      deferCall("pli_put_edit_float", {fv.reg, w, d});
+    } else {
+      // For FIXED DECIMAL, the stored value is actual * 10^q.
+      // F(w,d,s) displays actual * 10^s = stored * 10^(s-q).
+      // The runtime function divides by 10^scale for positive scale,
+      // so we pass scale = q - s.
+      llvm::Value* fixedScale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
+      llvm::Value* scale = fixedScale;
+      if (f.s) {
+        llvm::Value* fScale = toI64(emitExpr(f.s.get()));
+        scale = b_.CreateSub(fixedScale, fScale, "eff_scale");
       }
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
-      deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
-      break;
+      deferCall("pli_put_edit_fixed", {toI64(v), scale, w, d});
     }
-    case HFormatItem::C: {
-      // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
-      // formats; a single sub serves both parts.
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
-      llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
-      if (f.subs.empty()) {
-        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
+    break;
+  }
+  case HFormatItem::E: {
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    v = convert(v, Type::flt(6), f.subs.empty() ? s->loc : f.w ? f.w->loc : s->loc);
+    llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+    llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
+    if (f.s)
+      (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
+    deferCall("pli_put_edit_float_e", {v.reg, w, d});
+    break;
+  }
+  case HFormatItem::P: {
+    // P(picture): picture-directed output (rules (53),(146)-(148));
+    // formats a numeric value via pli_put_edit_pic against the picture string.
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+    llvm::Value* val = nullptr;
+    llvm::Value* signSrc = nullptr;
+    bool binaryScaled = false;
+    int scale = 0;
+    if (spec.sterling) {
+      if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+        d_.error(s->loc, "wide FIXED DECIMAL output through a sterling PICTURE is not "
+                            "implemented",
+                 "(53)");
         break;
       }
-      putRealPart(re, f.subs[0]);
-      putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
-      break;
-    }
-    case HFormatItem::F: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
-      if (f.s)
-        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      if (v.ty.k == TK::Float) {
-        deferCall("pli_put_edit_float", {v.reg, w, d});
-      } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
-        // F(w,d) needs the true value: a scaled binary is divided by 2^q
-        // first (ADR-284). The FLOAT path keeps the common d digits; a
-        // point-aware fixed formatter remains a B11 refinement.
-        Val fv = convert(v, Type::flt(6), item->loc);
-        deferCall("pli_put_edit_float", {fv.reg, w, d});
-      } else {
-        llvm::Value* scale = v.ty.k == TK::FixedDec ? i64(v.ty.scale) : i64(0);
-        deferCall("pli_put_edit_fixed", {toI64(v), scale, w, d});
-      }
-      break;
-    }
-    case HFormatItem::E: {
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = convert(emitExpr(item), Type::flt(6), item->loc);
-      llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
-      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
-      if (f.s)
-        (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
-      deferCall("pli_put_edit_float_e", {v.reg, w, d});
-      break;
-    }
-    case HFormatItem::P: {
-      // P(picture): picture-directed output (rules (53),(146)-(148));
-      // formats a numeric value via pli_put_edit_pic against the picture string.
-      if (di >= s->items.size())
-        break;
-      HExpr* item = s->items[di++].get();
-      Val v = emitExpr(item);
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      llvm::Value* val = nullptr;
-      llvm::Value* signSrc = nullptr;
-      bool binaryScaled = false;
-      int scale = 0;
-      if (spec.sterling) {
-        if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-          d_.error(item->loc, "wide FIXED DECIMAL output through a sterling PICTURE is not "
-                              "implemented",
-                   "(53)");
-          break;
-        }
-        if (!v.ty.isFixed() && v.ty.k != TK::Float) {
-          d_.error(item->loc, "P edit item requires a numeric value", "(53)");
-          break;
-        }
-        if (v.ty.isFixed() && v.ty.scale != 0) {
-          d_.error(item->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
-          break;
-        }
-        val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf")
-                                  : toI64(v);
-        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"),
-                                            i32(-1), i32(1), "picst");
-        facts_.recordBuiltin("picture", "runtime",
-                             "the sterling picture conversion needs the library routine");
-        if (remarkLibraryCalls_)
-          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
-        deferCall("pli_put_edit_pic_sterling",
-                  {val, sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())});
+      if (!v.ty.isFixed() && v.ty.k != TK::Float) {
+        d_.error(s->loc, "P edit item requires a numeric value", "(53)");
         break;
       }
+      if (v.ty.isFixed() && v.ty.scale != 0) {
+        d_.error(s->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
+        break;
+      }
+      val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf")
+                                : toI64(v);
+      llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"),
+                                          i32(-1), i32(1), "picst");
+      facts_.recordBuiltin("picture", "runtime",
+                           "the sterling picture conversion needs the library routine");
+      if (remarkLibraryCalls_)
+        d_.remark(s->loc, "P edit uses library routine for sterling picture");
+      deferCall("pli_put_edit_pic_sterling", {val, sign, globalString(spec.expanded), i64((long long)spec.expanded.size())});
+    } else if (spec.valid && spec.numeric) {
       if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
         // Wide DECIMAL output uses the 128-bit formatter core (B1).
         llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
@@ -10263,7 +10279,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         facts_.recordBuiltin("picture", "runtime",
                              "the wide picture conversion needs the library routine");
         if (remarkLibraryCalls_)
-          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+          d_.remark(s->loc, "the library routine does this conversion: the picture conversion");
         deferCall("pli_put_edit_pic_wide",
                   {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
                    i64((long long)spec.expanded.size())});
@@ -10296,7 +10312,7 @@ void IRGen::emitPutEditItems(HStmt* s) {
         val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
         signSrc = val;
       } else {
-        d_.error(item->loc, "P edit item requires a numeric value", "(53)");
+        d_.error(s->loc, "P edit item requires a numeric value", "(53)");
         break;
       }
       // B4: a constant value through a foldable constant picture is formatted
@@ -10321,22 +10337,99 @@ void IRGen::emitPutEditItems(HStmt* s) {
       // The library-call remark (ADR-254): the picture conversion is done by
       // the library routine, so the user is told where it happens.
       if (remarkLibraryCalls_)
-        d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+        d_.remark(s->loc, "the library routine does this conversion: the picture conversion");
       // sign derived from the value: -1 if negative, +1 if non-negative.
       llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
       llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
       deferCall("pli_put_edit_pic",
                 {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
-      break;
+    } else {
+      d_.error(f.w ? f.w->loc : s->loc, "invalid PICTURE format", "(53)");
     }
-    }
+    break;
   }
-}
+  case HFormatItem::Repeat: {
+    // Repetition group (rule (48)): check if count is a constant integer
+    // literal; if so, unroll the sub-formats at codegen time. Handle nested
+    // repeats by recursively unrolling.
+    bool isConst = f.repeatCount && f.repeatCount->kind == HExpr::IntLit;
+    long long count = isConst ? f.repeatCount->ival : 0;
+    if (isConst && count > 0) {
+      for (long long i = 0; i < count; ++i) {
+        for (auto& sub : f.subs) {
+          emitPutEditFormatItem(sub, s, di, defW, defD, dataItems);
+        }
+      }
+    } else if (!isConst && f.repeatCount) {
+      // Dynamic repetition count: generate a runtime loop.
+      llvm::Value* repeatCount = toI64(emitExpr(f.repeatCount.get()));
+      if (repeatCount) {
+        size_t baseDi = di;
+        // Create loop blocks.
+        llvm::BasicBlock* loopCond = llvm::BasicBlock::Create(b_.getContext(), "rep.cond", b_.GetInsertBlock()->getParent());
+        llvm::BasicBlock* loopBody = llvm::BasicBlock::Create(b_.getContext(), "rep.body", b_.GetInsertBlock()->getParent());
+        llvm::BasicBlock* loopEnd = llvm::BasicBlock::Create(b_.getContext(), "rep.end", b_.GetInsertBlock()->getParent());
+        
+        // Initialize loop counter.
+        llvm::Value* i = b_.CreateAlloca(b_.getInt64Ty(), nullptr, "rep.i");
+        b_.CreateStore(i64(0), i);
+        b_.CreateBr(loopCond);
+        
+        // Loop condition.
+        b_.SetInsertPoint(loopCond);
+        llvm::Value* iVal = b_.CreateLoad(b_.getInt64Ty(), i, "rep.i.val");
+        llvm::Value* cond = b_.CreateICmpSLT(iVal, repeatCount, "rep.cond");
+        b_.CreateCondBr(cond, loopBody, loopEnd);
+        
+        // Loop body: for each sub-format, select the data item based on runtime index.
+        b_.SetInsertPoint(loopBody);
+        for (auto& sub : f.subs) {
+          // Compute runtime data index.
+          llvm::Value* runtimeIdx = b_.CreateAdd(i64(baseDi), iVal, "runtimeIdx");
+          
+          // Generate a switch to select the data item.
+          llvm::BasicBlock* defaultBlock = llvm::BasicBlock::Create(b_.getContext(), "rep.default", b_.GetInsertBlock()->getParent());
+          llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(b_.getContext(), "rep.merge", b_.GetInsertBlock()->getParent());
+          llvm::SwitchInst* sw = b_.CreateSwitch(runtimeIdx, defaultBlock, (unsigned)dataItems.size());
+          
+          for (size_t j = 0; j < dataItems.size(); j++) {
+            llvm::BasicBlock* caseBlock = llvm::BasicBlock::Create(b_.getContext(), "rep.case", b_.GetInsertBlock()->getParent());
+            sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), baseDi + j), caseBlock);
+            b_.SetInsertPoint(caseBlock);
+            // Process dataItems[j] with the sub-format.
+            size_t savedDi = j;
+            emitPutEditFormatItem(sub, s, savedDi, defW, defD, dataItems);
+            b_.CreateBr(mergeBlock);
+          }
+          
+          b_.SetInsertPoint(defaultBlock);
+          b_.CreateBr(mergeBlock);
+          
+          b_.SetInsertPoint(mergeBlock);
+        }
+        // Increment loop counter.
+        llvm::Value* nextI = b_.CreateAdd(iVal, i64(1), "rep.next");
+        b_.CreateStore(nextI, i);
+        b_.CreateBr(loopCond);
+        
+        b_.SetInsertPoint(loopEnd);
+      }
+    } else {
+      // No repeat count (shouldn't happen), evaluate sub-formats once.
+      for (auto& sub : f.subs) {
+        emitPutEditFormatItem(sub, s, di, defW, defD, dataItems);
+      }
+    }
+    break;
+  }
+}  // switch (f.kind)
+}  // emitPutEditFormatItem
 
 // Edit-directed input (rule (108)): pair each A/B/C/F/E data format with
 // the next data item and emit the control (X/SKIP/COLUMN) items in order.
 void IRGen::emitGetEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
+  llvm::Value* defD = i64(0);
   size_t di = 0;
   for (auto& f : s->formats) {
     switch (f.kind) {
@@ -10390,19 +10483,21 @@ void IRGen::emitGetEditItems(HStmt* s) {
       HExpr* t = s->items[di++].get();
       SourceLoc loc = s->loc;
       llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
+      llvm::Value* d = f.d ? toI64(emitExpr(f.d.get())) : defD;
       if (f.s)
         (void)toI64(emitExpr(f.s.get())); // scale evaluated for effects (50)
+      // GET EDIT uses pli_get_edit_num to read a numeric field and convert
+      // to the target type. The target may be FIXED, FLOAT, etc.
       deferCall("pli_get_edit_num", {w}, false,
                 [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
                   Val v;
                   v.reg = r[i];
-                  v.ty = Type::flt(6);
+                  v.ty = Type::flt(6); // pli_get_edit_num returns double
                   storeGetTarget(t, v, loc);
                 });
       break;
     }
     case HFormatItem::B: {
-      // Bit-string input (rule (52)): read a w-character '0'/'1' field into
       // a temp packed buffer, then store through the normal BIT path.
       if (di >= s->items.size())
         break;
@@ -12878,6 +12973,41 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       return b_.CreateTrunc(r, llvmTy(dst), "cvt");
     };
 
+    // Apply destination scale factor (for scale > precision).
+    // Scale > precision: round to precision digits at declared scale.
+    auto applyDstScale = [&](llvm::Value* r) -> llvm::Value* {
+      if (dst.scale <= dst.prec) {
+        // Positive scale within precision: already handled by rescale logic below
+        return r;
+      }
+      // Scale > precision: round to precision digits at declared scale
+      int k = dst.scale - dst.prec;
+      if (dstBin) {
+        // Round half away from zero to precision bits, then shift back
+        llvm::Value* div = i128(1LL << k);
+        llvm::Value* half = i128(1LL << (k - 1));
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
+        llvm::Value* adj = b_.CreateMul(half, sign, "adj");
+        r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        // Restore the scale by shifting back
+        r = b_.CreateShl(r, i128(k), "scale_gt_prec_bin");
+      } else {
+        // DECIMAL: round half away from zero to precision digits
+        bool isWide = dst.intBits() == 128;
+        llvm::Value* div = isWide ? i128(pliPow10_128(k)) : i64(pliPow10(k));
+        llvm::Value* half = isWide ? i128(pliPow10_128(k - 1) * 5) : i64(pliPow10(k - 1) * 5);
+        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, (isWide ? i128(0) : i64(0)), "sgn"),
+                                           (isWide ? i128(-1) : i64(-1)), (isWide ? i128(1) : i64(1)));
+        llvm::Value* adj = b_.CreateMul(half, sign, "adj");
+        r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
+        // Restore the scale
+        if (k > 0) {
+          r = checkedArith(Tok::Star, r, isWide ? i128(pliPow10_128(k)) : i64(pliPow10(k)));
+        }
+      }
+      return r;
+    };
+
     if (!rescale) {
       if (needDec) {
         // Trap at the source's native width; magTrap sign-extends the i64
@@ -12893,6 +13023,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       llvm::Value* sv = v.reg;
       if (dstBin)
         sv = fixedBinPrecTrap(sv, dst.prec);
+      sv = applyDstScale(sv);
       out.reg = fitFixed(sv);
       return out;
     }
@@ -12908,6 +13039,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       else if (dq < 0)
         r = b_.CreateSDiv(r, i128(pli_from_i64(1LL << -dq)), "res");
       r = fixedBinPrecTrap(r, dst.prec);
+      r = applyDstScale(r);
       out.reg = fitFixed(r);
       return out;
     }
@@ -12935,6 +13067,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       if (v.ty.scale > 0)
         r = b_.CreateSDiv(r, i128(pliPow10_128(v.ty.scale)), "res");
       r = fixedBinPrecTrap(r, dst.prec);
+      r = applyDstScale(r);
       out.reg = fitFixed(r);
       return out;
     }
@@ -12958,6 +13091,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
           r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
         }
         wideMagTrap(r, dst.prec);
+        r = applyDstScale(r);
         out.reg = fitFixed(r);
         return out;
       }
@@ -12975,6 +13109,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       }
       if (needDec)
         magTrap(r, limit);
+      r = applyDstScale(r);
       out.reg = fitFixed(r);
       return out;
     }
@@ -13003,6 +13138,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     }
     if (needDec)
       magTrap(r, limit);
+    r = applyDstScale(r);
     out.reg = fitFixed(r);
     return out;
   }

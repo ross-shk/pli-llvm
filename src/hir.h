@@ -114,13 +114,14 @@ struct HDeclItem {
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
-  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
+  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P, Repeat } kind = A;
   HExprP w;                      // field width
   HExprP d;                      // F/E: fractional digits
   HExprP s;                      // F/E: scale factor (evaluated for effects, formatting uses (w,d))
+  HExprP repeatCount;            // Repeat: repetition count expression (rule (48))
   std::string remote;            // R: FORMAT label (sema expands R, so HIR never carries one)
-  std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
-  std::vector<HFormatItem> subs; // C: 1-2 inner real formats
+  std::string pic;               // P: picture string (rules (53),(146)-(148)); empty = none
+  std::vector<HFormatItem> subs; // C: 1-2 inner real formats; Repeat: repeated group
 };
 
 struct HStmt {

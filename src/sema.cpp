@@ -1776,6 +1776,19 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           }
         }
         item.dynMembers = std::move(dynMs);
+        // Validate FIXED scale (rule (16)): BINARY scale must be < precision;
+        // DECIMAL scale can be any value (negative or > precision), but warn on extreme.
+        if (item.ty.isFixed()) {
+          bool binary = item.ty.k == TK::FixedBin;
+          int p = item.ty.prec;
+          int q = item.ty.scale;
+          if (binary && q >= p) {
+            d_.error(item.loc, "FIXED BINARY scale factor must be less than precision", "(16)");
+          }
+          if (!binary && (q > 31 || q < -31)) {
+            d_.warn(item.loc, "extreme FIXED DECIMAL scale may lose precision", "(16)");
+          }
+        }
         // A STATIC AREA (rule (20)) is real static storage: its region lives for
         // the whole program. AREA(*) inherits the argument's region, so the
         // storage attribute cannot apply to it.
@@ -2895,20 +2908,37 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
     // unary sign folds with the expression, so it needs no separate case.
     ConstNum num;
     if (!constNumOf(lit, num) ||
-        !foldConstExpr(lit, Type::fixedDec(num.prec, num.scale), num.scale)) {
+        !foldConstExpr(lit, ty, ty.scale)) {
       d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
       return nullptr;
     }
   }
-  // A FIXED DECIMAL target carries a scale, so an integer literal must be
-  // rescaled to it: the constant is expressed as a DECIMAL literal and
+  // A FIXED target carries a scale, so an integer/decimal literal must be
+  // rescaled to it: the constant is expressed with the declared scale and
   // codegen applies the declared scale (ADR-240).
-  if (lit->kind == Expr::IntLit && ty.k == TK::FixedDec && ty.scale > 0) {
-    lit->kind = Expr::DecLit;
-    lit->decScale = 0;
-    lit->decPrec = constDigits(lit->wideIval);
-    lit->ty = Type::fixedDec(lit->decPrec, 0);
-    lit->folded = true;
+  if ((lit->kind == Expr::IntLit || lit->kind == Expr::DecLit) && ty.isFixed()) {
+    if (ty.k == TK::FixedDec) {
+      // For DECIMAL, fold the literal to the target precision/scale
+      ConstNum num;
+      if (constNumOf(lit, num)) {
+        // Fold the value to target precision/scale
+        if (!foldConstExpr(lit, ty, ty.scale)) {
+          d_.error(loc, "INITIAL value cannot be folded to target type", "(26)");
+          return nullptr;
+        }
+      }
+      if (lit->kind == Expr::IntLit) {
+        lit->kind = Expr::DecLit;
+      }
+      lit->decScale = ty.scale;
+      lit->ty = Type::fixedDec(lit->decPrec, ty.scale);
+      lit->folded = true;
+    } else if (ty.k == TK::FixedBin) {
+      // For BINARY, the literal stays as IntLit but with target scale info
+      // The actual scaling is done by codegen
+      lit->ty = Type::fixedBin(ty.prec, ty.scale);
+      lit->folded = true;
+    }
   }
   bool strInit = lit->kind == Expr::CharLit;
   if (ty.isChar() != strInit) {
@@ -5227,14 +5257,15 @@ static ExprP cloneFmtExpr(const Expr* e) {
   return c;
 }
 
- static FormatItem cloneFmtItem(const FormatItem& f) {
-   FormatItem c;
-   c.kind = f.kind;
-   c.w = cloneFmtExpr(f.w.get());
-   c.d = cloneFmtExpr(f.d.get());
-   c.s = cloneFmtExpr(f.s.get());
-   c.pic = f.pic;
-   c.remote = f.remote;
+static FormatItem cloneFmtItem(const FormatItem& f) {
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneFmtExpr(f.w.get());
+  c.d = cloneFmtExpr(f.d.get());
+  c.s = cloneFmtExpr(f.s.get());
+  c.repeatCount = cloneFmtExpr(f.repeatCount.get());
+  c.pic = f.pic;
+  c.remote = f.remote;
   for (const auto& sb : f.subs)
     c.subs.push_back(cloneFmtItem(sb));
   return c;
@@ -5297,10 +5328,12 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     typeExpr(f.w.get(), sc, p);
     typeExpr(f.d.get(), sc, p);
     typeExpr(f.s.get(), sc, p);
+    typeExpr(f.repeatCount.get(), sc, p);
     for (auto& sb : f.subs) {
       typeExpr(sb.w.get(), sc, p);
       typeExpr(sb.d.get(), sc, p);
       typeExpr(sb.s.get(), sc, p);
+      typeExpr(sb.repeatCount.get(), sc, p);
     }
     // An F/E scale factor (rule (50)) is a numeric expression evaluated for
     // its effects; formatting itself uses (w,d).
@@ -5314,8 +5347,8 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   size_t dataIdx = 0;
   for (auto& f : s->formats) {
     if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-        f.kind == FormatItem::Line || f.kind == FormatItem::Column)
-      continue; // a control format consumes no data item
+        f.kind == FormatItem::Line || f.kind == FormatItem::Column || f.kind == FormatItem::Repeat)
+      continue; // a control format or repetition group consumes no data item directly
     if (f.kind == FormatItem::Remote) {
       d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
       continue;
@@ -5412,15 +5445,46 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
         checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
     } else if (it->ty.isVoid()) {
       d_.error(it->loc, "invalid data list item", "(110)");
+}
+  ++dataIdx;
+}
+  // Count data formats, expanding repetition groups (rule (48)).
+  // If any repetition count is dynamic (not an integer literal), we cannot
+  // verify the data/format count at compile time, so we skip the check.
+  bool hasDynamicRepetition = false;
+  std::function<size_t(const std::vector<FormatItem>&)> countDataFormats;
+  countDataFormats = [&](const std::vector<FormatItem>& formats) -> size_t {
+    size_t count = 0;
+    for (const auto& f : formats) {
+      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P) {
+        ++count;
+      } else if (f.kind == FormatItem::Repeat) {
+        long long repCount = 1;
+        bool isIntLit = (f.repeatCount && f.repeatCount->kind == Expr::IntLit);
+        bool isNegIntLit = (f.repeatCount && f.repeatCount->kind == Expr::Unary &&
+                            f.repeatCount->op == Tok::Minus && f.repeatCount->a &&
+                            f.repeatCount->a->kind == Expr::IntLit);
+        if (isIntLit) {
+          repCount = f.repeatCount->ival;
+          if (repCount < 0) {
+            d_.error(f.repeatCount->loc, "repetition count must be non-negative", "(48)");
+          }
+        } else if (isNegIntLit) {
+          repCount = -f.repeatCount->a->ival;
+          d_.error(f.repeatCount->loc, "repetition count must be non-negative", "(48)");
+        } else {
+          // Dynamic repetition count: allowed but needs runtime evaluation.
+          // Mark as dynamic so codegen knows to emit a loop.
+          hasDynamicRepetition = true;
+        }
+        count += repCount * countDataFormats(f.subs);
+      }
     }
-    ++dataIdx;
-  }
-  size_t dataFormats = 0;
-    for (auto& f : s->formats)
-     if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-         f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
-       ++dataFormats;
-  if (dataFormats < s->items.size())
+    return count;
+  };
+  size_t dataFormats = countDataFormats(s->formats);
+  if (!hasDynamicRepetition && dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
 

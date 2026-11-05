@@ -98,17 +98,18 @@ struct DefinedSub {
 // that acts without consuming data, or a remote R(label) spliced from a
 // FORMAT statement (rule (55)). F(w,d[,p]): w = field width, d =
 // fractional digits, p = scale factor (evaluated, then formatting uses
-// (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
-// formats for the real/imaginary parts; P carries a picture string (rule 53).
-struct FormatItem {
-  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P } kind = A;
-  ExprP w;                      // field width
-  ExprP d;                      // F/E: fractional digits
-  ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
-   std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
-   std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
-   std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51))
-};
+ // (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
+ // formats for the real/imaginary parts; P carries a picture string (rule 53).
+ struct FormatItem {
+   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P, Repeat } kind = A;
+   ExprP w;                      // field width
+   ExprP d;                      // F/E: fractional digits
+   ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
+   ExprP repeatCount;            // Repeat: repetition count expression (rule (48))
+    std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
+    std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
+    std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51)); Repeat: repeated group
+ };
 
 struct DeclItem {
   std::string name;

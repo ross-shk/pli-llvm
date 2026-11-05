@@ -281,6 +281,10 @@ PLI_FN(pli_record_read_keyed_float, DOUBLE, (I64, PTR, I64))
 PLI_FN(pli_record_read_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, buf, buflen */
 PLI_FN(pli_record_read_keyed_bit, I8, (I64, PTR, I64))
 
+/* Scale helpers for FIXED with negative scale and scale > precision */
+PLI_FN(pli_scale_decimal, VOID, (I64, I64, I64))     /* (val_lo, val_hi, scale) - 128-bit value as lo,hi halves */
+PLI_FN(pli_scale_binary, VOID, (I64, I64))           /* (val, scale) */
+
 /* Multitasking (rules (79),(82),(83), QR2.8): EVENT completion flags are i32
  * words (0 incomplete, 1 complete) owned by PL/I variables; the runtime
  * serialises them behind one mutex+cond. TASK handles are opaque ids. */

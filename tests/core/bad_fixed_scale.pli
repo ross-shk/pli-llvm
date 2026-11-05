@@ -1,10 +1,7 @@
- /* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* A FIXED DECIMAL scale factor wider than the precision cannot be
-    represented (rule (16)): FIXED DECIMAL(p,q) takes q <= p decimal
-    digits. It used to be accepted silently, and the runtime's
-    fixed-point formatters sized their buffers from the scale alone. */
- badscale: procedure options(main);
-    declare x decimal(3, 5);
-    put skip list(x);
- end badscale;
+ /* FIXED BINARY: scale >= precision still rejected (rule (16)) */
+ bad_scale: procedure options(main);
+     declare x fixed bin(15, 15);  /* q = p -> invalid (sign bit) */
+     put skip list(x);
+ end bad_scale;

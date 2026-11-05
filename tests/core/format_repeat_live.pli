@@ -1,0 +1,31 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (52),(53): format repeat with live expression count */
+ format_repeat_live: procedure options(main);
+     declare buf char(40);
+     declare x fixed dec(5,2) init(1.23);
+     declare y fixed dec(5,2) init(4.56);
+     declare z fixed dec(5,2) init(7.89);
+     
+     /* Format repeat with live variable: (n)(F(8,2)) */
+     declare n fixed bin(15) init(2);
+     put string(buf) edit(x, y, z) ((n)(F(8,2)));
+     put skip list('repeat_var=', buf);
+     
+     /* Format repeat with live expression: (i+1)(F(8,2)) */
+     declare i fixed bin(15) init(1);
+     put string(buf) edit(x, y, z) ((i+1)(F(8,2)));
+     put skip list('repeat_expr=', buf);
+     
+     /* Format repeat with function call */
+     declare f entry(fixed bin(15)) returns(fixed bin(15));
+     put string(buf) edit(x, y, z) ((f(2))(F(8,2)));
+     put skip list('repeat_func=', buf);
+     
+     put skip list('PASS format_repeat_live');
+ end format_repeat_live;
+ 
+ f: proc(k) returns(fixed bin(15));
+     declare k fixed bin(15);
+     return(k);
+ end f;

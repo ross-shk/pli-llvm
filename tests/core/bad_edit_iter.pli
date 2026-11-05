@@ -1,10 +1,6 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Format iteration limits (rule (48)): only an integer literal
-    repeats a group; anything else stays diagnosed. */
- bad_iter: procedure options(main);
-    declare k fixed bin(31);
-    k = 2;
-    put edit (1, 2) ((k)(f(4)));
-    put edit (1, 2) ((-1)(f(4)));
- end bad_iter;
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Format iteration limits (rule (48)): a negative repetition count
+   stays diagnosed. */
+bad_iter: procedure options(main);
+   put edit (1, 2) ((-1)(f(4)));
+end bad_iter;

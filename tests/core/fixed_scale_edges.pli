@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rules (16),(17),(135): FIXED DECIMAL/BINARY with q<0 and q>p */
+ fixed_edges: procedure options(main);
+     declare d1 fixed dec(3, 5) init(1.23456);  /* q>p: rounds to 3 digits at scale 5 */
+     declare d2 fixed dec(5, -2) init(12300);   /* q<0: stored as 123 * 10^2 */
+     declare b1 fixed bin(15, -3) init(8);      /* q<0: stored as 8 * 2^3 = 64 */
+     
+     /* Check stored values via PUT EDIT with known format */
+     declare buf char(30);
+     
+     put string(buf) edit(d1) (f(10,5));
+     put skip list('d1=', buf);
+     
+     put string(buf) edit(d2) (f(10));
+     put skip list('d2=', buf);
+     
+     put string(buf) edit(b1) (f(10));
+     put skip list('b1=', buf);
+     
+     /* SIZE trap on overflow into declared digits */
+     declare caught fixed bin(31) init(0);
+     on size caught = 1;
+     declare d3 fixed dec(3, 5);
+     d3 = 1234.56;  /* 5 digits at scale 5 → exceeds 3 digits */
+     revert size;
+     put skip list('size_caught=', caught);
+     
+     put skip list('PASS fixed_scale_edges');
+ end fixed_edges;

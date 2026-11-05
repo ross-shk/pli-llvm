@@ -331,6 +331,9 @@ private:
   // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
   // items in order.
   void emitPutEditItems(HStmt* s);
+  void emitPutEditFormatItem(const HFormatItem& f, HStmt* s, size_t& di,
+                             llvm::Value* defW, llvm::Value* defD,
+                             const std::vector<Val>& dataItems);
   void emitGetEditItems(HStmt* s);
   // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
   // and ";"-terminated; names are compile-time globals, values reuse the

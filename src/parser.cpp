@@ -1612,10 +1612,15 @@ StmtP Parser::parseDeclare() {
 // q < p binary digits (the sign bit takes one of the p). A scale wider than
 // the precision cannot be represented, and the runtime's fixed-point
 // formatters sized their buffers from the scale alone.
+//
+// Y33-6003-0 allows negative scale (q < 0) and scale > precision (q > p).
+// Parser accepts all values; sema validates BINARY q < p.
 bool Parser::fixedScaleFits(const AttrBag& bag, bool binary) {
   if (bag.prec <= 0)
     return true;
-  return binary ? bag.scale < bag.prec : bag.scale <= bag.prec;
+  if (binary)
+    return bag.scale < bag.prec;
+  return true;
 }
 
 // Consume one scalar computational attribute word into `bag`. Shared by
@@ -1625,16 +1630,30 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
   if (!at(Tok::Word))
     return false;
   const std::string& w = cur().text;
-  auto parenNums = [&](int& n1, int& n2) {
+  auto parenNums = [&](int& n1, int& n2, bool allowNegScale) {
     if (!eat(Tok::LParen))
       return false;
     if (at(Tok::Number)) {
       n1 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
       advance();
     }
-    if (eat(Tok::Comma) && at(Tok::Number)) {
-      n2 = boundedNonNeg(cur().text, cur().loc, d_, "precision", rule);
-      advance();
+    if (eat(Tok::Comma)) {
+      if (at(Tok::Minus)) {
+        if (!allowNegScale) {
+          d_.error(cur().loc, "negative scale not allowed here", rule);
+          return false;
+        }
+        advance();
+        if (!at(Tok::Number)) {
+          d_.error(cur().loc, "expected number after '-'", rule);
+          return false;
+        }
+        n2 = -boundedNonNeg(cur().text, cur().loc, d_, "scale", rule);
+        advance();
+      } else if (at(Tok::Number)) {
+        n2 = boundedNonNeg(cur().text, cur().loc, d_, "scale", rule);
+        advance();
+      }
     }
     expect(Tok::RParen, rule);
     return true;
@@ -1644,7 +1663,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.fixed = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b);
+      parenNums(a, b, true);  // FIXED allows negative scale
       if (a > 0) {
         bag.prec = a;
         bag.scale = b;
@@ -1656,7 +1675,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.floating = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b);
+      parenNums(a, b, false);  // FLOAT doesn't allow negative scale
       if (a > 0)
         bag.prec = a;
     }
@@ -1666,7 +1685,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.binary = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b);
+      parenNums(a, b, true);  // BINARY allows negative scale
       if (a > 0) {
         bag.prec = a;
         bag.scale = b;
@@ -1678,7 +1697,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.decimal = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b);
+      parenNums(a, b, true);  // DECIMAL allows negative scale
       if (a > 0) {
         bag.prec = a;
         bag.scale = b;
@@ -1729,7 +1748,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       bag.starLen = true;
       expect(Tok::RParen, rule);
     } else if (at(Tok::LParen)) {
-      parenNums(a, b);
+      parenNums(a, b, false);  // BIT length doesn't allow negative
       if (a > 0)
         bag.slen = a;
     }
@@ -3872,6 +3891,7 @@ static FormatItem cloneFormatItem(const FormatItem& f) {
   c.w = cloneFormatExpr(f.w.get());
   c.d = cloneFormatExpr(f.d.get());
   c.s = cloneFormatExpr(f.s.get());
+  c.repeatCount = cloneFormatExpr(f.repeatCount.get());
   c.remote = f.remote;
   for (const auto& sb : f.subs)
     c.subs.push_back(cloneFormatItem(sb));
@@ -3881,33 +3901,67 @@ static FormatItem cloneFormatItem(const FormatItem& f) {
 bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
   if (cur().kind == Tok::LParen) {
     advance();
-    if (cur().kind != Tok::Number || cur().isFloat) {
-      d_.error(cur().loc, "a format repetition count must be an integer literal", "(48)");
-      return false;
-    }
-    int n = boundedNonNeg(cur().text, cur().loc, d_, "repetition count", "(48)");
-    advance();
-    if (!expect(Tok::RParen, "(48)"))
-      return false;
-    if (!eat(Tok::LParen)) {
-      d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
-      return false;
-    }
-    std::vector<FormatItem> group;
-    if (!at(Tok::RParen)) {
-      for (;;) {
-        if (!parseFormatItemInto(group))
-          return false;
-        if (!eat(Tok::Comma))
-          break;
+    // Check if this is a repetition count: parse an expression
+    // It could be a literal or a variable/expression
+    if (at(Tok::Number) && !cur().isFloat) {
+      // Integer literal - parse as before for backward compat
+      int n = boundedNonNeg(cur().text, cur().loc, d_, "repetition count", "(48)");
+      advance();
+      if (!expect(Tok::RParen, "(48)"))
+        return false;
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
+        return false;
       }
+      std::vector<FormatItem> group;
+      if (!at(Tok::RParen)) {
+        for (;;) {
+          if (!parseFormatItemInto(group))
+            return false;
+          if (!eat(Tok::Comma))
+            break;
+        }
+      }
+      if (!expect(Tok::RParen, "(48)"))
+        return false;
+      // Create a Repeat FormatItem
+      FormatItem fi;
+      fi.kind = FormatItem::Repeat;
+      fi.repeatCount = std::make_unique<Expr>();
+      fi.repeatCount->kind = Expr::IntLit;
+      fi.repeatCount->ival = n;
+      fi.repeatCount->ty = Type::fixedBin(31, 0);
+      fi.subs = std::move(group);
+      out.push_back(std::move(fi));
+      return true;
+    } else {
+      // Parse as expression for dynamic repetition count
+      ExprP repeatExpr = parseExpr();
+      if (!expect(Tok::RParen, "(48)"))
+        return false;
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
+        return false;
+      }
+      std::vector<FormatItem> group;
+      if (!at(Tok::RParen)) {
+        for (;;) {
+          if (!parseFormatItemInto(group))
+            return false;
+          if (!eat(Tok::Comma))
+            break;
+        }
+      }
+      if (!expect(Tok::RParen, "(48)"))
+        return false;
+      // Create a Repeat FormatItem with dynamic count
+      FormatItem fi;
+      fi.kind = FormatItem::Repeat;
+      fi.repeatCount = std::move(repeatExpr);
+      fi.subs = std::move(group);
+      out.push_back(std::move(fi));
+      return true;
     }
-    if (!expect(Tok::RParen, "(48)"))
-      return false;
-    for (int i = 0; i < n; ++i)
-      for (const FormatItem& gi : group)
-        out.push_back(cloneFormatItem(gi));
-    return true;
   }
   FormatItem fi;
   if (!parseSingleFormatItem(fi))

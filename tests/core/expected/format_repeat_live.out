@@ -1,0 +1,4 @@
+repeat_var=     1.23    4.56                        
+repeat_expr=     1.23    4.56                        
+repeat_func=     1.23    4.56                        
+PASS format_repeat_live
