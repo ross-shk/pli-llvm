@@ -171,6 +171,9 @@ private:
   // for the precision parenthesised group (16 for a declaration, 38 for a
   // descriptor parameter).
   bool parseScalarAttr(AttrBag& bag, const char* rule);
+  // Parse a GENERIC WHEN selector's attribute spec into a Type (attribute
+  // class only: precision/scale/length are wildcards). rule (41).
+  bool parseWhenType(Type& out);
   // The scale factor of a FIXED attribute must fit the precision (rule (16)):
   // FIXED DECIMAL(p,q) takes q <= p decimal digits; FIXED BINARY(p,q) takes
   // q < p binary digits (the sign bit takes one of the p).

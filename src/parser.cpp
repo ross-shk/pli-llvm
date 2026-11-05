@@ -1589,6 +1589,7 @@ StmtP Parser::parseDeclare() {
         // name stays a non-file and OPEN/FILE( f ) rejects it (B15).
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
+        item.genericEntries = base.genericEntries;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -1759,6 +1760,105 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     return true;
   }
   return false;
+}
+
+// Parse a GENERIC WHEN selector's attribute spec into a Type (attribute class
+// only: precision/scale/length are wildcards). WHEN(FIXED BINARY) matches any
+// FIXED BINARY precision; WHEN(CHARACTER(*)) matches any CHARACTER length.
+// rule (41). The opening '(' has already been consumed by the caller.
+bool Parser::parseWhenType(Type& out) {
+  bool fixed = false, floating = false, binary = false, decimal = false;
+  bool character = false, bit = false, pointer = false, complex = false;
+  bool entry = false, area = false, offset = false, label = false;
+  bool task = false, event = false;
+  for (;;) {
+    if (!at(Tok::Word))
+      break;
+    const std::string& w = cur().text;
+    if (w == "FIXED")
+      fixed = true;
+    else if (w == "FLOAT")
+      floating = true;
+    else if (w == "BINARY" || w == "BIN")
+      binary = true;
+    else if (w == "DECIMAL" || w == "DEC")
+      decimal = true;
+    else if (w == "CHARACTER" || w == "CHAR")
+      character = true;
+    else if (w == "BIT")
+      bit = true;
+    else if (w == "POINTER" || w == "PTR")
+      pointer = true;
+    else if (w == "COMPLEX" || w == "CPLX")
+      complex = true;
+    else if (w == "ENTRY")
+      entry = true;
+    else if (w == "AREA")
+      area = true;
+    else if (w == "OFFSET")
+      offset = true;
+    else if (w == "LABEL")
+      label = true;
+    else if (w == "TASK")
+      task = true;
+    else if (w == "EVENT")
+      event = true;
+    else
+      break;
+    advance();
+    // Skip an optional precision/length/extent parenthesised group: it is a
+    // wildcard for matching, so consume it without interpreting the values.
+    if (at(Tok::LParen)) {
+      int depth = 0;
+      do {
+        if (at(Tok::LParen))
+          ++depth;
+        else if (at(Tok::RParen))
+          --depth;
+        advance();
+      } while (depth > 0 && !at(Tok::Eof));
+    }
+  }
+  // At least one data class must be present.
+  if (!fixed && !floating && !character && !bit && !pointer && !complex && !entry &&
+      !area && !offset && !label && !task && !event) {
+    d_.error(cur().loc, "expected a data attribute in a GENERIC WHEN selector", "(41)");
+    return false;
+  }
+  // Conflicting classes are diagnosed; otherwise pick the single data class.
+  // FIXED+BINARY/DECIMAL and FLOAT+BINARY/DECIMAL are valid combos (scale+base),
+  // so only mutually-exclusive pairs conflict — not any multi-word selector.
+  if ((fixed && floating) || (binary && decimal) || (character && bit) ||
+      (complex && (character || bit || pointer)) || (area && offset) ||
+      (task && event)) {
+    d_.error(cur().loc, "conflicting attributes in a GENERIC WHEN selector", "(15)");
+    return false;
+  }
+  if (character)
+    out = Type::chr(1);
+  else if (bit)
+    out = Type::bit(1);
+  else if (floating)
+    out = Type::flt(6);
+  else if (fixed || binary || decimal)
+    out = binary ? Type::fixedBin(15, 0) : Type::fixedDec(5, 0);
+  else if (pointer)
+    out = Type::ptr();
+  else if (complex)
+    out = Type::complexTy();
+  else if (entry)
+    out = Type::entryTy();
+  else if (area)
+    out = Type::areaTy();
+  else if (offset)
+    out = Type::offsetTy();
+  else if (label)
+    out = Type::labelTy();
+  else if (task)
+    out = Type::taskTy();
+  else // event
+    out = Type::eventTy();
+  return true;
 }
 
 // declaration ::= [integer] identifier [dimension] [attribute•••]  rule (11)
@@ -2353,13 +2453,53 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.labelAttr = true;
         continue;
       }
-      if (w == "GENERIC" || w == "BUILTIN" || w == "SECONDARY") {
-        // GENERIC/BUILTIN are not Subset-G attributes; SECONDARY is listed in
-        // TR 25.084 rule (15), but IBM Enterprise PL/I defines no such data
+      if (w == "GENERIC") {
+        // generic-attribute ::= GENERIC '(' entryname WHEN '(' attribute-spec ')'
+        //                    { ',' entryname WHEN '(' attribute-spec ')' } ')'  rule (41)
+        // Builds a dispatch matrix (entry name → WHEN attribute-class type).
+        // GENERIC is an entry-name attribute: reject it on non-scalar contexts
+        // and when combined with a data attribute (rule (15)).
+        advance(); // GENERIC
+        if (expect(Tok::LParen, "(41)")) {
+          for (;;) {
+            // entryname
+            if (!at(Tok::Word)) {
+              d_.error(cur().loc, "expected an entry name after GENERIC '('", "(41)");
+              break;
+            }
+            std::string entryName = cur().text;
+            advance();
+            if (!eatWord("WHEN")) {
+              d_.error(cur().loc, "expected WHEN after entry name in GENERIC", "(41)");
+              break;
+            }
+            if (!expect(Tok::LParen, "(41)")) break;
+            Type whenTy;
+            if (!parseWhenType(whenTy)) {
+              // skip to the matching ')' so the rest of the list can continue
+              int depth = 0;
+              do {
+                if (at(Tok::LParen)) ++depth;
+                else if (at(Tok::RParen)) --depth;
+                advance();
+              } while (depth > 0 && !at(Tok::Eof));
+              if (at(Tok::RParen)) advance();
+            }
+            expect(Tok::RParen, "(41)");
+            item.genericEntries.push_back({entryName, whenTy});
+            if (!eat(Tok::Comma)) break;
+          }
+          expect(Tok::RParen, "(41)");
+        }
+        continue;
+      }
+      if (w == "BUILTIN" || w == "SECONDARY") {
+        // BUILTIN is not a Subset-G attribute; SECONDARY is listed in TR
+        // 25.084 rule (15), but IBM Enterprise PL/I defines no such data
         // attribute. Both cases are diagnosed with the attribute rule number.
         std::string why = w == "SECONDARY"
-                              ? "attribute SECONDARY is not supported"
-                              : "attribute " + w + " is not a Subset-G attribute";
+                                  ? "attribute SECONDARY is not supported"
+                                  : "attribute BUILTIN is not a Subset-G attribute";
         d_.error(cur().loc, why, "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -2483,6 +2623,15 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "AREA/OFFSET cannot be combined with another data attribute", "(15)");
   if (bag.area && bag.offset)
     d_.error(item.loc, "AREA and OFFSET are conflicting attributes", "(15)");
+
+  // Remember whether a data attribute was actually given: item.ty defaults to
+  // FIXED BINARY even when none was written, so the type alone cannot tell.
+  item.dataAttr = bag.fixed || bag.floating || bag.binary || bag.decimal ||
+                  bag.character || bag.bit || bag.pointer || bag.complex ||
+                  bag.file || bag.task || bag.event || bag.area || bag.offset ||
+                  item.labelAttr || bag.picture || !item.like.empty() ||
+                  !item.typeRef.empty() || item.controlled ||
+                  !item.basedBase.empty() || item.basedNoPtr || item.imaginary;
 
   if (bag.task) {
     // A TASK name (rules (15),(79), QR2.8): an opaque handle for CALL TASK.

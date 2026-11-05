@@ -1,0 +1,29 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: GENERIC selection, rule (41) */
+   generic: proc options(main);
+      dcl x fixed bin(31) init(10);
+      dcl y float dec(6) init(2.5);
+      dcl r fixed bin(31);
+      dcl g generic(f1 when(fixed binary), f2 when(float));
+      r = g(x);
+      if r ^= 11 then do;
+         put skip list('FAIL fixed');
+         stop;
+      end;
+      r = g(y);
+      if r ^= 99 then do;
+         put skip list('FAIL float');
+         stop;
+      end;
+      put skip list('PASS generic');
+   end generic;
+
+   f1: proc(x) returns(fixed bin(31));
+      dcl x fixed bin(31);
+      return(x + 1);
+   end f1;
+
+   f2: proc(y) returns(fixed bin(31));
+      dcl y float dec(6);
+      return(99);
+   end f2;

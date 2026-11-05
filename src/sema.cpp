@@ -1441,6 +1441,28 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           d_.error(item.loc, "ABNORMAL cannot be specified on a function entry", "(38)");
           item.abnormalLabel.clear();
         }
+        if (!item.genericEntries.empty()) {
+          // GENERIC (rule 41): an entry-name attribute. The name becomes a
+          // generic entry point whose argument dispatches one of the listed
+          // entries. Reject it on non-scalar contexts and next to a data
+          // attribute (rule (15)) or an explicit ENTRY declaration (rule (34)).
+          if (item.level != 0 || !item.ty.dims.empty())
+            d_.error(item.loc, "GENERIC is only valid on a scalar entry name", "(12)");
+          if (item.dataAttr || item.fileAttr || item.labelAttr || !item.picture.empty() ||
+              item.area || item.offset || item.isCondition || item.controlled ||
+              !item.basedBase.empty() || item.basedNoPtr || !item.like.empty() ||
+              !item.typeRef.empty())
+            d_.error(item.loc,
+                     "GENERIC cannot be combined with a data or storage attribute", "(15)");
+          if (item.isEntry)
+            d_.error(item.loc,
+                     "GENERIC is not valid on an explicit ENTRY declaration", "(34)");
+          Symbol* sym = declare(sc, item.name, Type::voidTy(), item.loc,
+                                Symbol::Generic, false);
+          sym->genericEntries = item.genericEntries;
+          item.sym = sym;
+          continue;
+        }
         if (item.isCondition) {
           // DECLARE name CONDITION; (rule 9): register the programmer-named
           // condition so subsequent SIGNAL/ON CONDITION(name) resolve it. Use
@@ -5966,6 +5988,15 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     if (typeBuiltin(e, p))
       break;
     Symbol* sym = lookup(sc, e->name);
+    if (sym && sym->kind == Symbol::Generic) {
+      // GENERIC dispatch (rule 41): bind e->sym to the entry whose WHEN
+      // selector matches the argument's attribute class.
+      if (!resolveGenericCall(e, sym, sc)) {
+        e->ty = Type::voidTy();
+        break;
+      }
+      sym = e->sym; // the selected entry symbol
+    }
     if (!sym || (sym->kind != Symbol::ProcName && !sym->isEntryVar)) {
       d_.error(e->loc, "'" + e->name + "' is not a function procedure", "(123)");
       e->ty = Type::voidTy();
@@ -6479,6 +6510,54 @@ static long long staticStoreBytes(const Type& t) {
     return -1;
   }
 }
+
+// GENERIC dispatch (rule 41): match the call's argument attribute class against
+// the WHEN selectors and bind e->sym to the selected entry. Returns false after
+// diagnosing no match, ambiguity, or an undeclared entry name.
+bool Sema::resolveGenericCall(Expr* e, Symbol* gen, Scope* sc) {
+  if (e->args.empty()) {
+    d_.error(e->loc, "a GENERIC reference requires exactly one argument", "(41)");
+    return false;
+  }
+  Type argTy = e->args[0]->ty;
+  struct Cand { Symbol* sym; };
+  std::vector<Cand> cands;
+  for (const auto& [entryName, whenTy] : gen->genericEntries) {
+    Symbol* esym = lookup(sc, entryName);
+    if (!esym || (esym->kind != Symbol::ProcName && !esym->isEntryVar))
+      continue; // undeclared entry: not a candidate
+    if (matchWhenType(argTy, whenTy))
+      cands.push_back({esym});
+  }
+  if (cands.empty()) {
+    d_.error(e->loc, "no GENERIC entry matches the argument's attributes", "(41)");
+    return false;
+  }
+  if (cands.size() > 1) {
+    d_.error(e->loc, "ambiguous GENERIC reference: more than one entry matches", "(41)");
+    return false;
+  }
+  e->sym = cands[0].sym;
+  return true;
+}
+
+// Attribute-class match for a GENERIC WHEN selector (rule 41): precision,
+// scale and length are wildcards; only the type kind matters. FIXED BINARY and
+// FIXED DECIMAL are the same FIXED attribute class, so WHEN(FIXED BINARY)
+// matches any FIXED argument regardless of base.
+static TK whenClass(const Type& t) {
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    return TK::FixedBin; // one FIXED class
+  default:
+    return t.k;
+  }
+}
+bool Sema::matchWhenType(const Type& arg, const Type& when) {
+  return whenClass(arg) == whenClass(when);
+}
+
 bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // Names matching none of these are user function procedures and are
   // handled in typeExpr's general function-call path.

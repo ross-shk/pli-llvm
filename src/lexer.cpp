@@ -323,7 +323,13 @@ std::vector<Token> Lexer::lexAll() {
       one(Tok::Colon);
       break;
     case ',':
-      one(Tok::Comma);
+      bump();
+      if (cur() == '.') { // ,. -> ; (48-character set, rule 1)
+        bump();
+        t.kind = Tok::Semi;
+      } else {
+        t.kind = Tok::Comma;
+      }
       break;
     case '(':
       one(Tok::LParen);
@@ -332,7 +338,13 @@ std::vector<Token> Lexer::lexAll() {
       one(Tok::RParen);
       break;
     case '.':
-      one(Tok::Dot);
+      bump();
+      if (cur() == '.') { // .. -> : (48-character set, rule 1)
+        bump();
+        t.kind = Tok::Colon;
+      } else {
+        t.kind = Tok::Dot;
+      }
       break;
     case '+':
       one(Tok::Plus);

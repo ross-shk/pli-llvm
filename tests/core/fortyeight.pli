@@ -1,0 +1,9 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: 48-character set ,. -> ; and .. -> : */
+   fortyeight: proc options(main),.
+      dcl x fixed bin(31) init(5),.
+      dcl y fixed bin(31),.
+      lab.. y = x + 1,.
+      put skip list(y),.
+      put skip list('PASS fortyeight'),.
+   end fortyeight;

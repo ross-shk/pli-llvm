@@ -181,7 +181,11 @@ struct DeclItem {
    bool labelAttr = false;        // LABEL (rule (21)): label variable
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
    bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
-};
+   bool dataAttr = false;         // a computational/string data attribute was given
+                                  // on this item (used to validate GENERIC)
+   // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
+   std::vector<std::pair<std::string, Type>> genericEntries;
+ };
 
 // Rule (65) initial-label: an element of a label array named by a statement
 // prefix (AR(1): ...). The subscripts are optionally signed integer constants;

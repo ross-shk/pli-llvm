@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: GENERIC negatives, rule (41) */
+   bad: proc options(main);
+      dcl x fixed bin(31) init(10);
+      dcl y float dec(6) init(2.5);
+      dcl r fixed bin(31);
+      dcl g1 generic(f1 when(fixed binary), f2 when(fixed binary));
+      dcl g2 generic(f3 when(character));
+      r = g1(x);   /* ambiguous: both entries match FIXED BINARY */
+      r = g2(y);   /* no match: FLOAT against a CHARACTER-only generic */
+   end bad;
+
+   f1: proc(x) returns(fixed bin(31));
+      dcl x fixed bin(31);
+      return(x);
+   end f1;
+
+   f2: proc(x) returns(fixed bin(31));
+      dcl x fixed bin(31);
+      return(x);
+   end f2;
+
+   f3: proc(c) returns(fixed bin(31));
+      dcl c character(*);
+      return(0);
+   end f3;

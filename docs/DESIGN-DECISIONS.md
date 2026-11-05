@@ -13914,3 +13914,44 @@ IBM block layout); a hashed index (no ordering guarantee); updating the sidecar
 on every write instead of at close (crash window unchanged, extra I/O cost).
 
 ---
+
+## ADR-368 — GENERIC selection (TR 25.084 rule 41)
+
+**Context.** Rule (41) `GENERIC` lets a name denote several entry points, with a
+call resolved at compile time to the entry whose `WHEN` selector matches the
+argument's data-attribute class. The corpus ranking (DEFERRED-WORK "Open
+decisions" 4) shows rule (41) as the largest unserved source-compatibility gap
+(0 citations in the existing corpus), so B10 serves it in full rather than a
+partial form.
+
+**Decision.** `GENERIC ( entryname WHEN ( type ) [, entryname WHEN ( type ) ...] )`
+is parsed in the DECLARE attribute tail (src/parser.cpp), replacing the former
+"not a Subset-G attribute" rule (15) diagnosis. Each entry name is paired with a
+WHEN selector type stored on the DeclItem (`genericEntries`). Sema converts the
+declared name into a `Symbol::Generic` symbol carrying the dispatch matrix
+(entry name → WHEN type), rejecting GENERIC on non-scalar contexts and next to a
+data or storage attribute (rules (12),(15),(34)). At a call site, `typeExpr`
+matches the argument's attribute class against each WHEN selector
+(`Sema::matchWhenType`): precision, scale and length are wildcards, so
+`WHEN(FIXED BINARY)` matches any FIXED BINARY precision and
+`WHEN(CHARACTER(*))` matches any CHARACTER length. Exactly one match binds the
+call expression directly to the selected entry's symbol; no match diagnoses
+"(41) no GENERIC entry matches", more than one diagnoses "(41) ambiguous GENERIC
+reference". Because sema binds the call to a concrete entry symbol, IRGen emits
+an ordinary direct call — there is no runtime dispatch table.
+
+**Consequences.**
+* `src/ast.h` DeclItem gains `genericEntries`; `src/sema.h` Symbol gains a
+  `Generic` kind and a `genericEntries` matrix.
+* The four GENERIC entry points are ordinary PL/I procedures or external ENTRY
+  declarations; forward references resolve at call time through normal lookup.
+* `tests/core/generic.pli` (self-checking PASS), `tests/core/bad_generic.pli`
+  (no match / ambiguous, cited rule (41)) and `tests/ir/generic.pli`
+  (`-emit-llvm`: direct `call` to each selected entry) gate the feature.
+* `docs/GRAMMAR-COVERAGE.md` row (41) moves GENERIC from M8 to served.
+
+**Rejected.** A runtime dispatch table (KISS, and compile-time resolution is
+both simpler and faster); partial silent-wrong-answer GENERIC (invariant 2:
+gaps are diagnosed, never silently accepted); matching on exact precision or
+length (contrary to PL/I GENERIC semantics, where selectors describe attribute
+classes).

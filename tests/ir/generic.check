@@ -1,0 +1,2 @@
+CHECK: call i32 @F1
+CHECK: call i32 @F2

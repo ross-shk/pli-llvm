@@ -17,7 +17,7 @@ struct Symbol {
   std::string name;
   Type ty{};
   SourceLoc loc{};
-  enum Kind { Var, Param, ProcName } kind = Var;
+  enum Kind { Var, Param, ProcName, Generic } kind = Var;
   bool isStatic = false;   // STATIC storage: an LLVM global
   bool external = false;   // EXTERNAL (rule (42)): shared across translation units
   bool implicit = false;   // created by the implicit-declaration rule
@@ -48,6 +48,10 @@ struct Symbol {
   // procedure can use it (abnormalOwner records which one declared it).
   std::string abnormalLabel;
   Proc* abnormalOwner = nullptr;
+  // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
+  // Populated when a DECLARE name carries the GENERIC attribute; call sites
+  // match an argument's attribute class against it to select an entry.
+  std::vector<std::pair<std::string, Type>> genericEntries;
   std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
@@ -270,6 +274,13 @@ private:
   // typeExpr can fall through to the general function-call path. Reductions
   // over array expressions defer to Assign expansion via pendingReduces_.
   bool typeBuiltin(Expr* e, Proc* p);
+  // GENERIC dispatch (rule 41): match the call's argument attribute class
+  // against the WHEN selectors and bind e->sym to the selected entry. Returns
+  // false after diagnosing no match / ambiguity / an undeclared entry.
+  bool resolveGenericCall(Expr* e, Symbol* gen, Scope* sc);
+  // Attribute-class match for a GENERIC WHEN selector (rule 41): precision,
+  // scale and length are wildcards; only the type kind matters.
+  static bool matchWhenType(const Type& arg, const Type& when);
   // A SUM/PROD/ANY/ALL call over an array expression awaiting expansion in
   // direct assignment (rule (123)); anything left at processProc end was
   // never expanded and is diagnosed there.
