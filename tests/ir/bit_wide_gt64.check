@@ -1,0 +1,4 @@
+CHECK-LABEL: define {{.*}}@PLI_BIT_WIDE_GT64
+CHECK: xor i8 %{{.*}}, -1
+CHECK: and i8 %{{.*}}, -32
+CHECK: call {{.*}}@pli_bit_cmp

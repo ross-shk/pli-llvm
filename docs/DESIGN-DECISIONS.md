@@ -14239,3 +14239,30 @@ the group, and constant non-negative counts keep the parse-time unroll.
 call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
 negative rule. This is a deviation from remote ADR-371's nonpositive skip and
 is recorded as such.
+
+## ADR-377 — BIT(n>64) value-width-independent, padding-safe comparison
+
+**Context.** `BIT(n)` for n > 64 could not be compared except by truncation to
+the low 64 bits (ADR-275). `bitLitToU64` rejected widths above 64, so wider
+values either failed to compile or compared only their low 64 bits. Padding bits
+in the final storage byte are indeterminate (ADR-283) and must not affect
+equality or ordering.
+
+**Decision.** Retain the packed byte-buffer representation `[ceil(n/8) x i8]`
+with no i128 shortcut and no big-number type. For `BIT` comparisons of any
+width, when either operand exceeds 64 bits, emit addresses of both packed
+buffers and call the platform-agnostic runtime helper `pli_bit_cmp(ptr a, ptr b,
+i64 nbits) -> i32`, which compares full bytes except the last and masks the
+padding bits of the final byte with `0xFF << (8 - (n mod 8))` (or `0xFF` when
+n is a multiple of 8). The n <= 64 path is unchanged. `BIT` comparison in sema
+requires matching widths; mismatched widths are diagnosed with (117). `BIT(0)`
+and `BIT(-1)` are diagnosed with (18).
+
+Numeric precision evaluation (no representation change): `FIXED DECIMAL` remains
+a scaled i128 (ADR-284, ADR-289); values beyond that range are outside
+applicable scope for this dialect and keep existing diagnostic behaviour. No
+big-number type is introduced. Output width keeps the existing cap (ADR-293).
+
+**Consequences.** `tests/core/bit_wide_gt64.pli`, `tests/core/bit_pad_compare.pli`,
+`tests/core/bad_bit_wide_gt64.pli`, and `tests/ir/bit_wide_gt64.pli` pin the
+behaviour and lowering. GRAMMAR-COVERAGE rows (18) and (116)-(118) updated.

@@ -25,6 +25,24 @@ char *pli_alloc(long long n) {
   return p;
 }
 
+int pli_bit_cmp(const char *a, const char *b, long long nbits) {
+  long long nb = (nbits + 7) / 8;
+  const unsigned char *pa = (const unsigned char *)a;
+  const unsigned char *pb = (const unsigned char *)b;
+  for (long long i = 0; i < nb - 1; i++) {
+    if (pa[i] != pb[i]) return (pa[i] < pb[i]) ? -1 : 1;
+  }
+  if (nb == 0) return 0;
+  unsigned mask = 0xFF;
+  int rem = (int)(nbits % 8);
+  if (rem != 0) mask = (unsigned)(0xFF << (8 - rem)) & 0xFF;
+  unsigned va = pa[nb - 1] & mask;
+  unsigned vb = pb[nb - 1] & mask;
+  if (va < vb) return -1;
+  if (va > vb) return 1;
+  return 0;
+}
+
 void pli_free(char *p) { pli_plat_free(p); }
 
 typedef struct {

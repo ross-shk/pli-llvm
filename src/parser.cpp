@@ -1768,6 +1768,8 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       expect(Tok::RParen, rule);
     } else if (at(Tok::LParen)) {
       parenNums(a, b, false);
+      if (a <= 0)
+        d_.error(cur().loc, "BIT length must be a positive integer", "(18)");
       if (a > 0)
         bag.slen = a;
     }

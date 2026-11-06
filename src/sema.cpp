@@ -6385,9 +6385,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // but complex-or-numeric is diagnosed.
         if (!(A.isComplex() || A.isNumeric()) || !(B.isComplex() || B.isNumeric()))
           d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      } else if (A.isChar() != B.isChar())
-        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      e->ty = Type::bit(1);
+} else if (A.isChar() != B.isChar())
+         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+       else if (A.isBit() && B.isBit() && A.len != B.len)
+         d_.error(e->loc, "BIT comparison requires identical widths", "(117)");
+       e->ty = Type::bit(1);
       break;
     case Tok::Lt:
     case Tok::Le:
@@ -6400,9 +6402,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         d_.error(e->loc, "ordered comparison of a COMPLEX value is not allowed", "(117)");
       else if (A.isLocator() || B.isLocator())
         d_.error(e->loc, "ordered comparison of a POINTER or OFFSET is not allowed", "(117)");
-      else if (A.isChar() != B.isChar())
-        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      e->ty = Type::bit(1);
+       else if (A.isChar() != B.isChar())
+         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+       else if (A.isBit() && B.isBit() && A.len != B.len)
+         d_.error(e->loc, "BIT comparison requires identical widths", "(117)");
+       e->ty = Type::bit(1);
       break;
     default:
       e->ty = Type::fixedBin(31, 0);

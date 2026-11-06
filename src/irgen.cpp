@@ -14232,6 +14232,54 @@ Val IRGen::emitExpr(HExpr* e) {
   Val a = emitExpr(e->a.get());
   Val b = emitExpr(e->b.get());
 
+  if (isCmp && a.ty.isBit() && b.ty.isBit() &&
+      (a.ty.len > 64 || b.ty.len > 64)) {
+    const int nbits = a.ty.len;
+    auto slotFor = [&](Val& x) -> llvm::Value* {
+      llvm::Type* aggTy = llvmTy(x.ty);
+      llvm::Value* slot = b_.CreateAlloca(aggTy, nullptr, "bitcmp.slot");
+      b_.CreateStore(x.reg, slot);
+      return b_.CreateBitCast(slot, b_.getPtrTy());
+    };
+    llvm::Value* pa = slotFor(a);
+    llvm::Value* pb = slotFor(b);
+    llvm::Value* cmp = b_.CreateCall(runtimeFn("pli_bit_cmp"),
+                                     {pa, pb, i64((long long)nbits)}, "bitcmp");
+    llvm::Value* r = nullptr;
+    switch (op) {
+    case Tok::Eq:
+      r = b_.CreateICmpEQ(cmp, b_.getInt32(0), "bitcmp.eq");
+      break;
+    case Tok::Ne:
+      r = b_.CreateICmpNE(cmp, b_.getInt32(0), "bitcmp.ne");
+      break;
+    case Tok::Lt:
+      r = b_.CreateICmpSLT(cmp, b_.getInt32(0), "bitcmp.lt");
+      break;
+    case Tok::Le:
+      r = b_.CreateICmpSLE(cmp, b_.getInt32(0), "bitcmp.le");
+      break;
+    case Tok::Gt:
+      r = b_.CreateICmpSGT(cmp, b_.getInt32(0), "bitcmp.gt");
+      break;
+    case Tok::Ge:
+      r = b_.CreateICmpSGE(cmp, b_.getInt32(0), "bitcmp.ge");
+      break;
+    case Tok::Ngt:
+      r = b_.CreateICmpSLE(cmp, b_.getInt32(0), "bitcmp.ngt");
+      break;
+    case Tok::Nlt:
+      r = b_.CreateICmpSGE(cmp, b_.getInt32(0), "bitcmp.nlt");
+      break;
+    default:
+      r = b_.CreateICmpEQ(cmp, b_.getInt32(0), "bitcmp.d");
+      break;
+    }
+    v.ty = Type::bit(1);
+    v.reg = r;
+    return v;
+  }
+
   if (isCmp && a.ty.isChar() && b.ty.isChar()) { // rule (117)
     llvm::Value* c = emitCmpChar(a.ptr, a.len, b.ptr, b.len);
     llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
