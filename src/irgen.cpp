@@ -10604,7 +10604,9 @@ void IRGen::emitGetEditItems(HStmt* s) {
         if (p > 18) {
           // Wide P input writes the 128-bit value through a temp (B1).
           llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
-          deferCall("pli_get_edit_pic_wide", {i64(spec.width), i64(spec.fracDigits), slot},
+          deferCall("pli_get_edit_pic_picture_wide",
+                    {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)), globalString(spec.expanded),
+                     i64((long long)spec.expanded.size()), i64(spec.fracDigits), slot},
                     false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
                       Val v;
                       v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
@@ -10613,8 +10615,10 @@ void IRGen::emitGetEditItems(HStmt* s) {
                       storeGetTarget(t, v, loc);
                     });
         } else {
-          deferCall("pli_get_edit_pic", {i64(spec.width), i64(spec.fracDigits)}, false,
-                    [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
+          deferCall("pli_get_edit_pic_picture",
+                    {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)), globalString(spec.expanded),
+                     i64((long long)spec.expanded.size()), i64(spec.fracDigits)},
+                    false, [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
                       Val v;
                       v.reg = r[i];
                       v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);

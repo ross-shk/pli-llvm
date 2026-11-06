@@ -1604,6 +1604,20 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // the F(n) scaling factor stay diagnosed for now.
         if (!it.picture.empty()) {
           const pli::PictureSpec spec = pli::classifyPicture(it.picture);
+          // Rule (148): a character off the classes list or a binary digit
+          // specifier diagnoses with its own rule before anything else.
+          if (spec.badChar) {
+            d_.error(it.loc, "picture character '" + std::string(1, spec.badChar) +
+                                 "' is not in a picture class",
+                     "(148)");
+            return Type::chr(1);
+          }
+          if (spec.binary) {
+            d_.error(it.loc, "binary PICTURE digit elements 1, 2 and 3 are not implemented in "
+                             "this stage",
+                     "(148)");
+            return Type::chr(1);
+          }
           if (!spec.valid || spec.width <= 0) {
             d_.error(it.loc, "invalid PICTURE string", "(19)");
             return Type::chr(1);
@@ -5382,7 +5396,18 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       // picture characters are not in this slice.
       const pli::PictureSpec spec = pli::classifyPicture(f.pic);
       const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
-      if (spec.sterling) {
+      if (spec.badChar) {
+        // Rule (148): an off-class character diagnoses with its own rule.
+        d_.error(f.w ? f.w->loc : it->loc,
+                 "picture character '" + std::string(1, spec.badChar) +
+                     "' is not in a picture class",
+                 "(148)");
+      } else if (spec.binary) {
+        // Rule (148): a binary digit specifier is diagnosed, never served.
+        d_.error(f.w ? f.w->loc : it->loc,
+                 "binary PICTURE digit elements 1, 2 and 3 are not implemented in this stage",
+                 "(148)");
+      } else if (spec.sterling) {
         if (!spec.valid || spec.width <= 0)
           d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
         else if (spec.intDigits > 18)
@@ -5390,6 +5415,17 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
                    "sterling P input with more than 18 digit positions is not implemented in "
                    "this stage",
                    "(53)");
+        else {
+          for (char c : spec.expanded) {
+            if (std::string("GHMPB./9Z").find(c) == std::string::npos) {
+              d_.error(it->loc,
+                       std::string("sterling P input does not support the picture character '") +
+                           c + "' in this stage",
+                       "(53)");
+              break;
+            }
+          }
+        }
       } else if (!spec.valid || spec.width <= 0 || !spec.numeric || spec.hasScale) {
         d_.error(f.w ? f.w->loc : it->loc, "invalid PICTURE format for input", "(53)");
       } else if (spec.width > 127) {
@@ -5400,8 +5436,10 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
                  "P input with more than 38 digit positions is not implemented in this stage",
                  "(53)");
       } else {
+        // The input reader serves every numeric class of rule (148); the
+        // whitelist matches what pli_get_edit_pic_picture accepts.
         for (char c : spec.expanded) {
-          if (std::string("9ZV.,+-S ").find(c) == std::string::npos) {
+          if (std::string("9ZV.,+-S CRDTIB/$*YEK").find(c) == std::string::npos) {
             d_.error(it->loc,
                      std::string("P input does not support the picture character '") + c +
                          "' in this stage",
@@ -5417,7 +5455,18 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       // in IRGen (ADR-288); the formatter itself stays decimal. More than 18
       // fractional positions exceed its 64-bit decimal value.
       const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
+      if (spec.badChar) {
+        // Rule (148): an off-class character diagnoses with its own rule.
+        d_.error(f.w ? f.w->loc : it->loc,
+                 "picture character '" + std::string(1, spec.badChar) +
+                     "' is not in a picture class",
+                 "(148)");
+      } else if (spec.binary) {
+        // Rule (148): a binary digit specifier is diagnosed, never served.
+        d_.error(f.w ? f.w->loc : it->loc,
+                 "binary PICTURE digit elements 1, 2 and 3 are not implemented in this stage",
+                 "(148)");
+      } else if (!isGet && spec.sterling && (!spec.valid || spec.width <= 0)) {
         d_.error(f.w ? f.w->loc : it->loc, "invalid sterling PICTURE format", "(53)");
       } else if (!isGet && spec.sterling &&
                  (it->ty.scale != 0 || (it->ty.k == TK::FixedDec && it->ty.intBits() == 128))) {

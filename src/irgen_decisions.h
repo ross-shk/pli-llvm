@@ -253,6 +253,7 @@ struct PictureSpec {
   bool numeric = false;   // numeric rather than character picture
   bool foldable = false;  // the simple numeric subset B4 folds
   bool sterling = false;  // a G/M pounds-shillings-pence picture
+  bool binary = false;    // a 1/2/3 binary picture (diagnosed, not served)
   bool hasRepeat = false; // a repetition factor was expanded
   bool hasScale = false;  // a trailing F(n) scaling factor was present
   int width = 0;          // output positions (V and F(n) emit none)
@@ -260,6 +261,7 @@ struct PictureSpec {
   int fracDigits = 0;     // 9/Z positions after the decimal point
   int point = -1;         // expanded index of V/., -1 when none
   int scale = 0;          // F(n) scaling factor
+  char badChar = 0;       // first character outside the rule (148) classes
   std::string expanded;   // repetition factors expanded, F(n) removed
 };
 

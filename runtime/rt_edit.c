@@ -6,6 +6,8 @@
 /* Output routes through rt_put_raw and pli_snprintf; no direct
  * stdio use remains, so no system header is included here. */
 
+static int pic_digit_class(char c);  /* forward: used before definition */
+
 static void put_field(const char *p, size_t n, long long w) {
   if (w > (long long)n)
     for (long long i = n; i < w; ++i) rt_put_raw(" ", 1);
@@ -344,6 +346,242 @@ void pli_get_edit_pic_wide(long long w, long long scale, char *out) {
   *dst = isneg ? pli_neg_s(sv) : sv;
 }
 
+/* Picture-aware P input: skips insertion chars (B, /, ,, ., $, CR/DB) without
+ * consuming a value digit, treats * and Y like Z, parses digits/point/sign. */
+/* Picture-aware P input (rules (53),(146)-(148), ADR-291): read a w-character
+ * field and return its value scaled by the picture's assumed decimal point. Walks
+ * the picture in lockstep with the field (V consumes no field char); insertion
+ * characters are skipped, CR/DB and a trailing overpunch '-' set the sign. */
+long long pli_get_edit_pic_picture(long long w, const char *pic, long long piclen,
+                                   long long scale) {
+  char field[128];
+  long long i = 0;
+  rt_in_lock();
+  for (; i < w && i < (long long)(sizeof field - 1); ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    field[i] = (char)c;
+  }
+  field[i] = '\0';
+  rt_in_unlock();
+  long long nread = i;
+
+  long long vpos = -1;
+  for (long long j = 0; j < piclen; ++j) {
+    if (pic[j] == 'V' || (pic[j] == '.' && vpos < 0)) { vpos = j; break; }
+  }
+  long long pic_frac_total = 0;
+  for (long long j = (vpos >= 0 ? vpos + 1 : piclen); j < piclen; ++j) {
+    if (pic_digit_class(pic[j])) ++pic_frac_total;
+  }
+
+  long long ival = 0, fval = 0, fcount = 0;
+  int isneg = 0, has_point = 0;
+  long long fi = 0;
+  for (long long pi = 0; pi < piclen && fi < nread; ++pi) {
+    char pc = pic[pi];
+    if (pc == 'V') {
+      if (!has_point) has_point = 1;
+      continue;
+    }
+    char c = field[fi++];
+    if (pc == 'E' || pc == 'K') {
+      fi += 3;
+      if (fi > nread) fi = nread;
+      continue;
+    }
+    if (pc == 'C' && pi + 1 < piclen && pic[pi + 1] == 'R') {
+      if (c == 'C' && fi < nread && field[fi] == 'R') { isneg = 1; ++fi; }
+      else if (c == 'D' && fi < nread && field[fi] == 'B') { isneg = 1; ++fi; }
+      else if (c == '-') { isneg = 1; }
+      ++pi;
+      continue;
+    }
+    if (pc == 'D' && pi + 1 < piclen && pic[pi + 1] == 'B') {
+      if (c == 'D' && fi < nread && field[fi] == 'B') { isneg = 1; ++fi; }
+      else if (c == '-') { isneg = 1; }
+      ++pi;
+      continue;
+    }
+    if (pc == '.' || pc == ',') {
+      if (pc == '.' && !has_point) has_point = 1;
+      if (c == '.') has_point = 1;
+      if (c == '-') isneg = 1;
+      continue;
+    }
+    if (pc == 'B' || pc == '/') {
+      if (c == '-') isneg = 1;
+      continue;
+    }
+    if (pc == 'S' || pc == '+' || pc == '-') {
+      if (c == '-') isneg = 1;
+      else if (c == '+') isneg = 0;
+      continue;
+    }
+    if (pic_digit_class(pc)) {
+      int d = 0;
+      if (c >= '0' && c <= '9') d = c - '0';
+      else if (c == '-') { isneg = 1; d = 0; }
+      else if (c == '+') { isneg = 0; d = 0; }
+      if (has_point) {
+        if (fcount < pic_frac_total) {
+          fval = fval * 10 + d;
+          ++fcount;
+        }
+      } else {
+        ival = ival * 10 + d;
+      }
+      continue;
+    }
+    if (c == '-') isneg = 1;
+  }
+  while (fi < nread) {
+    if (field[fi] == '-') isneg = 1;
+    ++fi;
+  }
+
+  long long val;
+  if (has_point) {
+    while (fcount < pic_frac_total) {
+      fval *= 10;
+      ++fcount;
+    }
+    for (long long k = 0; k < pic_frac_total; ++k)
+      ival *= 10;
+    val = ival + fval;
+    if (scale > pic_frac_total)
+      for (long long k = 0; k < scale - pic_frac_total; ++k)
+        val *= 10;
+    else if (scale < pic_frac_total)
+      for (long long k = 0; k < pic_frac_total - scale; ++k)
+        val /= 10;
+  } else {
+    val = ival;
+  }
+  return isneg ? -val : val;
+}
+
+/* Wide picture-aware P input (B1): same logic with 128-bit arithmetic. */
+void pli_get_edit_pic_picture_wide(long long w, const char *pic, long long piclen,
+                                   long long scale, char *out) {
+  char field[128];
+  long long i = 0;
+  PliI128 *dst = (PliI128 *)out;
+  rt_in_lock();
+  for (; i < w && i < (long long)(sizeof field - 1); ++i) {
+    int c = rt_next_char();
+    if (c == EOF)
+      break;
+    field[i] = (char)c;
+  }
+  field[i] = '\0';
+  rt_in_unlock();
+  long long nread = i;
+
+  long long vpos = -1;
+  for (long long j = 0; j < piclen; ++j) {
+    if (pic[j] == 'V' || (pic[j] == '.' && vpos < 0)) { vpos = j; break; }
+  }
+  long long pic_frac_total = 0;
+  for (long long j = (vpos >= 0 ? vpos + 1 : piclen); j < piclen; ++j) {
+    if (pic_digit_class(pic[j])) ++pic_frac_total;
+  }
+
+  PliU128 ival = pli_u128(0u, 0u), fval = pli_u128(0u, 0u);
+  PliU128 ten = pli_u128(10u, 0u);
+  long long fcount = 0;
+  int isneg = 0, has_point = 0;
+  long long fi = 0;
+  for (long long pi = 0; pi < piclen && fi < nread; ++pi) {
+    char pc = pic[pi];
+    if (pc == 'V') {
+      if (!has_point) has_point = 1;
+      continue;
+    }
+    char c = field[fi++];
+    if (pc == 'E' || pc == 'K') {
+      fi += 3;
+      if (fi > nread) fi = nread;
+      continue;
+    }
+    if (pc == 'C' && pi + 1 < piclen && pic[pi + 1] == 'R') {
+      if (c == 'C' && fi < nread && field[fi] == 'R') { isneg = 1; ++fi; }
+      else if (c == 'D' && fi < nread && field[fi] == 'B') { isneg = 1; ++fi; }
+      else if (c == '-') { isneg = 1; }
+      ++pi;
+      continue;
+    }
+    if (pc == 'D' && pi + 1 < piclen && pic[pi + 1] == 'B') {
+      if (c == 'D' && fi < nread && field[fi] == 'B') { isneg = 1; ++fi; }
+      else if (c == '-') { isneg = 1; }
+      ++pi;
+      continue;
+    }
+    if (pc == '.' || pc == ',') {
+      if (pc == '.' && !has_point) has_point = 1;
+      if (c == '.') has_point = 1;
+      if (c == '-') isneg = 1;
+      continue;
+    }
+    if (pc == 'B' || pc == '/') {
+      if (c == '-') isneg = 1;
+      continue;
+    }
+    if (pc == 'S' || pc == '+' || pc == '-') {
+      if (c == '-') isneg = 1;
+      else if (c == '+') isneg = 0;
+      continue;
+    }
+    if (pic_digit_class(pc)) {
+      int d = 0;
+      if (c >= '0' && c <= '9') d = c - '0';
+      else if (c == '-') { isneg = 1; d = 0; }
+      else if (c == '+') { isneg = 0; d = 0; }
+      PliU128 dd = pli_u128((uint64_t)d, 0u);
+      if (has_point) {
+        if (fcount < pic_frac_total) {
+          fval = pli_add_u(pli_mul_u(fval, ten), dd);
+          ++fcount;
+        }
+      } else {
+        ival = pli_add_u(pli_mul_u(ival, ten), dd);
+      }
+      continue;
+    }
+    if (c == '-') isneg = 1;
+  }
+  while (fi < nread) {
+    if (field[fi] == '-') isneg = 1;
+    ++fi;
+  }
+
+  if (has_point) {
+    while (fcount < pic_frac_total) {
+      fval = pli_mul_u(fval, ten);
+      ++fcount;
+    }
+    for (long long k = 0; k < pic_frac_total; ++k)
+      ival = pli_mul_u(ival, ten);
+    PliU128 val = pli_add_u(ival, fval);
+    if (scale > pic_frac_total)
+      for (long long k = 0; k < scale - pic_frac_total; ++k)
+        val = pli_mul_u(val, ten);
+    else if (scale < pic_frac_total)
+      for (long long k = 0; k < pic_frac_total - scale; ++k) {
+        PliU128 q, r;
+        pli_divmod_u(val, ten, &q, &r);
+        val = q;
+      }
+    PliI128 sv = pli_to_s(val);
+    *dst = isneg ? pli_neg_s(sv) : sv;
+  } else {
+    PliU128 val = ival;
+    PliI128 sv = pli_to_s(val);
+    *dst = isneg ? pli_neg_s(sv) : sv;
+  }
+}
+
 /* A(w): read w characters left-justified into dst, blank-padded to cap; a field
  * wider than the target is truncated (the excess input is still consumed).
  * Returns the assigned length: a VARYING target stores it, a fixed target
@@ -454,10 +692,20 @@ void pli_get_edit_skip(long long n) {
 
 /* CALL ... EVENT(ev): mark the event incomplete before the task starts. */
 
-/* P picture-directed output (rules (53),(146)-(148)): format a FIXED value
- * (stored as val*10^scale) against the PICTURE edit string. Digits are
- * right-aligned in digit positions; Z suppresses leading zeros, 9 forces a
- * zero. Supports: Z, 9, V, ., +, -, S, X, A, and fixed characters. */
+/* digit-position classes of rule (148): every picture element that is read or
+ * written as one value digit (the $ string member acts as a digit position of
+ * a floating-currency run, T/I/R carry the sign digit). */
+static int pic_digit_class(char c) {
+  return c == '9' || c == 'Z' || c == 'Y' || c == '*' || c == '$' || c == 'T' ||
+         c == 'I' || c == 'R';
+}
+
+/* P(picture) input (rules (53),(146)-(148), ADR-291): read a w-character
+ * field and return its value scaled by the picture's assumed decimal point.
+ * A blank, comma, currency symbol, '+' or '-' is skipped; a '-' anywhere sets
+ * the sign, and a '.' moves the following digits to the fractional side.
+ * Without a '.', every digit is already in picture positions (so a 9V99 field
+ * "150" is 1.50 and comes back as the integer 150 at scale 2). */
 /* Picture formatter core (rules (53),(146)-(148)): writes at most `cap`
  * characters to `out` and returns the number written. The output routine and
  * a PICTURE variable assignment share it (ADR-290), so both sides cannot
@@ -486,7 +734,7 @@ static long long pic_format128(PliI128 val, long long scale, int sign,
     }
   }
 
-  /* Count digit positions and locate the decimal marker (V or first '.'). */
+  /* Locate the assumed decimal marker (V or first '.'). */
   long long vpos = -1;
   for (long long i = 0; i < piclen; ++i) {
     if (pic[i] == 'V' || (pic[i] == '.' && vpos < 0)) { vpos = i; break; }
@@ -496,74 +744,218 @@ static long long pic_format128(PliI128 val, long long scale, int sign,
   long long val_int = ndig > scale ? ndig - scale : 0;
   long long val_frac = scale < ndig ? scale : ndig;
 
-  /* Walk the picture, emitting characters. A picture with a V position has
-   * one more template character than output positions; cap is the output
-   * width, so V simply does not consume a slot. */
-  long long ocap = piclen < cap ? piclen : cap;
+  /* Detect floating currency run: a run of '$' floats to the first significant
+   * digit. A run of exactly two '$' at the very start is fixed currency: the
+   * first '$' prints literally and the rest act as Z. */
+  int float_currency = 0;
+  long long currency_run_start = -1, currency_run_end = -1;
+  int fixed_currency = (piclen >= 2 && pic[0] == '$' && pic[1] == '$' &&
+                        (piclen == 2 || pic[2] != '$'));
+  if (!fixed_currency) {
+    for (long long i = 0; i < piclen; ++i) {
+      if (pic[i] == '$') {
+        if (currency_run_start < 0)
+          currency_run_start = i;
+        currency_run_end = i + 1;
+      } else if (currency_run_start >= 0) {
+        break;
+      }
+    }
+    if (currency_run_start >= 0) {
+      float_currency = 1;
+    }
+  } else {
+    currency_run_start = 0;
+    currency_run_end = 2;
+  }
+
+  /* Count picture integer digit positions (9 Z Y * T I R and $ run members). */
+  long long pic_int_total = 0;
+  for (long long j = 0; j < (vpos >= 0 ? vpos : piclen); ++j) {
+    if (fixed_currency && j == 0) continue;  /* first $ is a literal, not a digit */
+    if (pic_digit_class(pic[j])) ++pic_int_total;
+  }
+
+  /* Count picture fractional digit positions. */
+  long long pic_frac_total = 0;
+  for (long long j = (vpos >= 0 ? vpos + 1 : piclen); j < piclen; ++j) {
+    if (pic_digit_class(pic[j])) ++pic_frac_total;
+  }
+
+  /* Track if picture has an explicit sign char (+ - S CR DB) so overpunch
+   * append knows when to add trailing '-' for negative. */
+  int has_explicit_sign = 0;
+  int has_exponent = 0;
+  for (long long j = 0; j < piclen; ++j) {
+    char c = pic[j];
+    if (c == '+' || c == '-' || c == 'S' ||
+        (c == 'C' && j + 1 < piclen && pic[j + 1] == 'R') ||
+        (c == 'D' && j + 1 < piclen && pic[j + 1] == 'B'))
+      has_explicit_sign = 1;
+    if (c == 'E' || c == 'K')
+      has_exponent = 1;
+  }
+
+  /* First pass: fill out[] with digits and fixed characters; $ run acts like
+   * Z (zero-suppressed), other classes emit directly. CR/DB as a pair emits
+   * blanks here; we'll overwrite with CR/DB on a second pass. E/K expands
+   * one picture slot into four output characters. */
+  long long maxout = piclen;
+  for (long long j = 0; j < piclen; ++j)
+    if (pic[j] == 'E' || pic[j] == 'K') maxout += 3;
+  long long ocap = maxout < cap ? maxout : cap;
   for (long long i = 0; i < ocap; ++i) out[i] = ' ';
   long long oi = 0;
   int led_zero = 1;
-
-  /* Track current picture digit index for fractional positions. */
-  long long frac_idx = 0;  /* 0-based among picture fractional digit positions */
+  long long int_idx = 0;
+  long long frac_idx = 0;
+  long long exponent_pos = -1;
 
   for (long long pi = 0; pi < piclen && oi < ocap; ++pi) {
     char c = pic[pi];
     int is_fractional = (vpos >= 0 && pi > vpos);
 
-    if (c == 'V') continue;  /* no output char */
+    if (c == 'V') continue;
 
-    if (c == '9' || c == 'Z') {
+    /* Fixed currency: the first '$' prints literally. */
+    if (fixed_currency && pi == 0 && c == '$') {
+      out[oi++] = '$';
+      continue;
+    }
+
+    /* Digit-position classes. */
+    if (pic_digit_class(c)) {
       if (is_fractional) {
-        /* Fractional digit: emit value's fractional digit or '0'. */
-        long long vfrac_idx = frac_idx;  /* index among value fractional digits */
+        long long vfrac_idx = frac_idx;
         if (vfrac_idx < val_frac) {
           char d = (char)('0' + digits[val_int + vfrac_idx]);
-          led_zero = 0;
-          out[oi++] = d;
-        } else {
-          out[oi++] = '0';  /* zero-pad if value has fewer fractional digits */
-        }
-        ++frac_idx;
-      } else {
-        /* Integer digit: right-align value integer digits in picture positions.
-         * Count total picture integer digit positions. */
-        long long pic_int_total = 0;
-        for (long long j = 0; j < (vpos >= 0 ? vpos : piclen); ++j)
-          if (pic[j] == 'Z' || pic[j] == '9') ++pic_int_total;
-        /* Our index among picture integer positions (left-to-right). */
-        long long int_idx = 0;
-        for (long long j = 0; j < pi; ++j)
-          if (pic[j] == 'Z' || pic[j] == '9') ++int_idx;
-        /* Map to source digit index: right-aligned. */
-        long long src_idx = int_idx - (pic_int_total - val_int);
-        if (src_idx < 0) {
-          out[oi++] = (c == '9') ? '0' : ' ';  /* Z→blank, 9→zero */
-        } else if (src_idx < val_int) {
-          char d = (char)('0' + digits[src_idx]);
-          if (c == 'Z' && d == '0' && led_zero) {
-            out[oi++] = ' ';  /* leading zero suppression */
+          int suppressing = (c == 'Z' || c == 'Y' || c == '*' || c == '$');
+          if (suppressing && d == '0' && led_zero) {
+            out[oi++] = (c == '*') ? '*' : ' ';
           } else {
             led_zero = 0;
             out[oi++] = d;
           }
         } else {
-          /* Value has fewer integer digits than picture; Z→blank, 9→'0'. */
-          out[oi++] = (c == '9') ? '0' : ' ';
+          int forced = (c == '9' || c == 'T' || c == 'I' || c == 'R');
+          if (forced) out[oi++] = '0';
+          else if (c == '*') out[oi++] = (led_zero ? '*' : '0');
+          else out[oi++] = (led_zero ? ' ' : '0');
         }
+        ++frac_idx;
+      } else {
+        /* Integer digit: right-align value integer digits in picture positions. */
+        long long src_idx = int_idx - (pic_int_total - val_int);
+        if (src_idx < 0) {
+          int forced = (c == '9' || c == 'T' || c == 'I' || c == 'R');
+          if (forced) out[oi++] = '0';
+          else if (c == '*') out[oi++] = '*';
+          else out[oi++] = ' ';  /* Z Y $ → blank */
+        } else if (src_idx < val_int) {
+          char d = (char)('0' + digits[src_idx]);
+          int suppressing = (c == 'Z' || c == 'Y' || c == '*' || c == '$');
+          int suppress = suppressing && d == '0' && led_zero;
+          if (suppress)
+            out[oi++] = (c == '*') ? '*' : ' ';
+          else {
+            led_zero = 0;
+            out[oi++] = d;
+          }
+        } else {
+          int forced = (c == '9' || c == 'T' || c == 'I' || c == 'R');
+          if (forced) out[oi++] = '0';
+          else if (c == '*') out[oi++] = (led_zero ? '*' : '0');
+          else out[oi++] = (led_zero ? ' ' : '0');
+        }
+        ++int_idx;
       }
       continue;
     }
-    if (c == '.' || c == ',') { out[oi++] = '.'; continue; }
+
+    /* Insertion characters. */
+    if (c == '.') { out[oi++] = '.'; continue; }
+    if (c == ',') { out[oi++] = ','; continue; }
+    if (c == 'B') { out[oi++] = ' '; continue; }
+    if (c == '/') { out[oi++] = '/'; continue; }
+
+    /* Sign characters. */
     if (c == '+' || c == '-') {
       out[oi++] = isneg ? '-' : (c == '-' ? ' ' : '+');
       continue;
     }
     if (c == 'S') { out[oi++] = isneg ? '-' : ' '; continue; }
-    if (c == 'X') { out[oi++] = ' '; continue; }
-    if (c == 'A') { out[oi++] = ' '; continue; }
+
+    /* CR / DB: two-character field; emit CR/DB for negative, blanks otherwise. */
+    if ((c == 'C' && pi + 1 < piclen && pic[pi + 1] == 'R')) {
+      if (oi + 2 <= ocap) {
+        out[oi++] = isneg ? 'C' : ' ';
+        out[oi++] = isneg ? 'R' : ' ';
+        ++pi;  /* skip the R */
+      }
+      continue;
+    }
+    if ((c == 'D' && pi + 1 < piclen && pic[pi + 1] == 'B')) {
+      if (oi + 2 <= ocap) {
+        out[oi++] = isneg ? 'D' : ' ';
+        out[oi++] = isneg ? 'B' : ' ';
+        ++pi;  /* skip the B */
+      }
+      continue;
+    }
+
+    /* X and A: blank output positions (character picture element). */
+    if (c == 'X' || c == 'A') { out[oi++] = ' '; continue; }
+
+    /* E / K exponent: placeholder 'E±dd' emitted at end of main walk
+     * (we can't know exponent until value is placed). Reserve 4 chars. */
+    if (c == 'E' || c == 'K') {
+      has_exponent = 1;
+      if (oi + 4 <= ocap) {
+        exponent_pos = oi;
+        out[oi++] = ' ';
+        out[oi++] = ' ';
+        out[oi++] = ' ';
+        out[oi++] = ' ';
+      }
+      continue;
+    }
+
+    /* Any other character: fixed literal. */
     out[oi++] = c;
   }
+
+  /* Third pass: floating currency. */
+  if (float_currency && currency_run_start >= 0 && currency_run_end <= oi) {
+    /* Find first non-blank char in output. */
+    long long si = oi;
+    for (long long i = 0; i < oi; ++i) {
+      if (out[i] != ' ') { si = i; break; }
+    }
+    if (si > 0 && si - 1 >= currency_run_start && si - 1 < currency_run_end) {
+      out[si - 1] = '$';
+    } else if (si == oi) {
+      /* All blanks (zero value): put $ at first run position. */
+      if (currency_run_start < oi)
+        out[currency_run_start] = '$';
+    }
+  }
+
+  /* Fourth pass: exponent E/K. */
+  if (has_exponent && exponent_pos >= 0) {
+    long long exponent = scale - pic_frac_total;  /* e = source_scale - pic_frac */
+    out[exponent_pos] = 'E';
+    out[exponent_pos + 1] = exponent >= 0 ? '+' : '-';
+    long long e = exponent >= 0 ? exponent : -exponent;
+    out[exponent_pos + 2] = (char)('0' + (e / 10) % 10);
+    out[exponent_pos + 3] = (char)('0' + e % 10);
+  }
+
+  /* Overpunched signs (T/I/R): append trailing '-' for negative when no
+   * explicit sign character is present in the picture. */
+  if (isneg && !has_explicit_sign && oi < cap) {
+    out[oi++] = '-';
+  }
+
   return oi;
 }
 

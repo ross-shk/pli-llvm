@@ -14055,3 +14055,47 @@ state; rt_put_raw auto-wraps on a positive per-file linesize. Tests:
 open_linesize.pli, open_pagesize.pli, bad_open_environment.pli,
 bad_reserved_initial.pli. GRAMMAR-COVERAGE rows (33), (39)-(40),
 (100)-(103) updated.
+
+## ADR-372 — Rule (148) picture character classes round-trip (Wave 4 Slice 1)
+
+**Context.** TR 25.084 rules (146)–(148) define the full set of numeric picture
+characters. The prior implementation served only a small subset (`9 Z V . , + - S X A`
+output, `9 Z V . , + - S` input) through the single runtime interpreter
+`pic_format128` / `pli_get_edit_pic`. This slice widens the character-class coverage
+to all numeric classes while keeping character pictures (`A`/`X` only) as a
+separate copy case (rule (19)) and diagnosing binary pictures (`1`/`2`/`3`) with (148).
+
+**Decisions.**
+- Binary pictures (`1`/`2`/`3`): diagnosed with rule (148); no base-2 formatting path.
+- Floating currency (`$`): a leading run of `$` (not `$$`) floats to the first
+  significant digit; the symbol is placed at the last suppressed digit position.
+  `$$` at the start is fixed: first `$` prints, remaining `$` act as `Z` positions.
+- CR/DB: two-character field; emits `CR` or `DB` for negative, two blanks for
+  non-negative. Lone `C`/`R`/`D`/`B` are fixed literals.
+- Overpunched signs (`T`/`I`/`R`): treated as digit positions (`9`/`Z`-like
+  suppression). For negative values with no explicit sign char (`+ - S CR DB`),
+  a trailing `-` is appended after the formatted field.
+- Exponent (`E`/`K`): emits `E±dd` where `dd` is `scale - pic_frac_total`
+  (source decimal scale minus picture fractional digit count).
+- Zero suppression `Y` and `*`: `Y` suppresses like `Z` (blank fill); `*`
+  suppresses with `*` fill.
+- Comma insertion: `,` emits `,` literally (was incorrectly emitting `.`).
+- `B` insertion: emits a blank.
+- All classes share the single `pic_format128` core; a two-pass (pre-measure
+  for floating `$`, then emit) keeps assignment and output in sync (ADR-290).
+- Picture-aware input (`pli_get_edit_pic_picture`, `pli_get_edit_pic_picture_wide`)
+  skips insertion characters (`B / , . $ CR DB`) without consuming value digits,
+  treats `*`/`Y` like `Z`, and parses digits/point/sign. Exponent on input is
+  parsed and combined with the picture scale.
+
+**Consequences.** `isNumericPictureChar` widened; `PictureSpec` gains `binary` and
+`badChar` fields; sema diagnoses off-class and binary pictures with (148);
+`rt_edit.c` `pic_format128` rewritten with per-class branches and post-passes;
+new runtime entry points added to `pli_rt_abi.def`; IRGen P input switched to
+picture-aware functions. GRAMMAR-COVERAGE.md row (146)–(148) updated to "served".
+Tests: existing picture tests pass; binary input rejected with (148).
+
+**Rejected.** Serving binary pictures (`1`/`2`/`3`) without Y33 Appendix 2
+evidence for a base-2 formatting path; adding a second formatting engine (single
+interpreter invariant ADR-290); character pictures for numeric sources (stay
+diagnosed per rule (19) row).

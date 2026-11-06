@@ -1123,8 +1123,14 @@ bool isPictureChar(char c) {
 
 // The characters that make a picture numeric rather than character. A picture
 // with none of them is a character picture (A/X), which P output cannot use.
+// The binary digit specifiers 1/2/3 stay out: a binary picture is diagnosed
+// with (148) before anything reaching the runtime interpreter.
 bool isNumericPictureChar(char c) {
-  static const std::string chars = "9Z123V.,$+-SY*EK";
+  static const std::string chars =
+      "9ZV.,$+-SY*EK"  // digit/point, suppression, insertion, signs, exponent
+      "CRDTI"          // credit/debit and overpunched signs
+      "B/"             // insertion
+      "GHMP678";       // sterling
   return chars.find(c) != std::string::npos;
 }
 
@@ -1436,8 +1442,15 @@ PictureSpec classifyPicture(const std::string& pic) {
       continue;
     }
 
-    if (!isPictureChar(c))
+    if (!isPictureChar(c)) {
+      // Rule (148): the first character off the classes list diagnoses itself.
+      s.badChar = c;
       return s;
+    }
+    // Rule (148): a binary picture mixes 1/2/3 with the decimal classes; the
+    // flag lets sema diagnose it with its own rule instead of serving it.
+    if (c == '1' || c == '2' || c == '3')
+      s.binary = true;
     if (repeated)
       s.hasRepeat = true;
     // Expand the repetition now: every later step (width, digit positions,
@@ -1507,7 +1520,10 @@ PictureSpec classifyPicture(const std::string& pic) {
     }
   for (size_t i = 0; i < s.expanded.size(); ++i) {
     char c = s.expanded[i];
-    if (c != '9' && c != 'Z')
+    // Every digit-position class of rule (148) counts toward the precision,
+    // not just 9 and Z (Y * $ T I R suppress/overpunch like digit slots).
+    if (c != '9' && c != 'Z' && c != 'Y' && c != '*' && c != '$' &&
+        c != 'T' && c != 'I' && c != 'R')
       continue;
     if (s.point >= 0 && static_cast<int>(i) > s.point)
       ++s.fracDigits;
