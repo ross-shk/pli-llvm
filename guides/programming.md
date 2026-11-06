@@ -42,7 +42,7 @@ pli name.pli -o name && ./name
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
 | Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, OVERFLOW, FIXEDOVERFLOW, named; `CHECK`/`NOCHECK` prefixes | KEYED/DIRECT file conditions |
-| I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
+| I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record; OPEN options IDENT/LINESIZE/PAGESIZE are accepted no-ops (warn) |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, DO FOREVER, TRIM, PACKAGE, OPTIONAL | —                                |
 

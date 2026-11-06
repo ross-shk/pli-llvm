@@ -5111,6 +5111,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       s->fileSym->openKeyed = s->openKeyed;
       s->fileSym->openDirect = s->openDirect;
     }
+    if (s->kind == Stmt::Open) {
+      if (s->openInput && (s->hasLinesize || s->hasPagesize))
+        d_.error(s->loc, "LINESIZE/PAGESIZE are not valid on an INPUT file", "(101)");
+      if (s->openRecord && (s->hasLinesize || s->hasPagesize))
+        d_.error(s->loc, "LINESIZE/PAGESIZE are STREAM-only options", "(101)");
+    }
     break;
   case Stmt::Goto:
     // Direct GO TO label: target must be a label in this procedure (rules (64),(77)).

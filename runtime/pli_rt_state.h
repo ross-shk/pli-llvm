@@ -155,6 +155,10 @@ extern int rt_out_discard;
 extern int rt_pli_nonprint[PLI_MAX_FILES];
 /* Page counters per file slot (PLI PAGENO pseudo-variable). */
 extern volatile long long rt_pli_pages[PLI_MAX_FILES];
+/* Accepted no-op OPEN metadata (rule 101): LINESIZE/PAGESIZE requested values;
+ * 0 = implementation default. Stored for completeness; no effect on I/O. */
+extern int rt_pli_linesize[PLI_MAX_FILES];
+extern int rt_pli_pagesize[PLI_MAX_FILES];
 
 /* Stream helpers shared across TUs (defined in rt_stream.c). */
 /* rt_put_raw writes bytes into the active sink. The caller holds the output

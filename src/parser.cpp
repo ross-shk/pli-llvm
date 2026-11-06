@@ -4730,8 +4730,8 @@ StmtP Parser::parseRecordIO() {
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
 // record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
-// (101),(112)). KEYED/DIRECT and the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT
-// options stay unimplemented.
+// (101),(112)). KEYED/DIRECT stay diagnosed; IDENT/LINESIZE/PAGESIZE
+// are accepted no-ops; ENVIRONMENT is diagnosed (rule 101).
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -4811,11 +4811,37 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE") ||
-        atWord("ENVIRONMENT")) {
-      // File attributes accepted as no-ops in this stage (decision 14).
+    if (atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE")) {
+      // File attributes accepted as no-ops in this stage (decision 14): consume
+      // the parenthesized argument (IDENT/LINESIZE/PAGESIZE require one).
+      std::string opt = cur().text;
+      if (opt == "LINESIZE")
+        st->hasLinesize = true;
+      else if (opt == "PAGESIZE")
+        st->hasPagesize = true;
       advance();
+      if (eat(Tok::LParen)) {
+        int depth = 1;
+        while (depth > 0 && !at(Tok::Eof)) {
+          if (at(Tok::LParen))
+            ++depth;
+          else if (at(Tok::RParen))
+            --depth;
+          advance();
+        }
+        d_.warn(st->loc, opt + " is accepted but has no effect in this stage", "(101)");
+      } else {
+        d_.error(cur().loc, opt + " requires a parenthesized argument", "(101)");
+        resync();
+        return nullptr;
+      }
       continue;
+    }
+    if (atWord("ENVIRONMENT")) {
+      // ENVIRONMENT is a DECLARE FILE attribute (rule 39), not an OPEN option.
+      d_.error(cur().loc, "ENVIRONMENT is not an OPEN option", "(101)");
+      resync();
+      return nullptr;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
     resync();

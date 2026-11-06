@@ -1,0 +1,6 @@
+ open_noop: procedure options(main);
+    declare f file;
+    open file(f) title('noop.dat') output stream linesize(80) pagesize(60);
+    close file(f);
+    put skip list('PASS open_noop');
+ end open_noop;

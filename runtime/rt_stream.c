@@ -49,6 +49,8 @@ int rt_pli_nonprint[PLI_MAX_FILES] = {0};
    so the optimizer cannot see through the pli_set_pageno/pli_pageno wrappers
    and eliminate them as dead stores/loads when bitcode is merged at -O2. */
 volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
+int rt_pli_linesize[PLI_MAX_FILES] = {0};
+int rt_pli_pagesize[PLI_MAX_FILES] = {0};
 FILE *rt_out_f = NULL;
 FILE *rt_in_f = NULL;
 /* NONPRINT flag (ADR-204): when rt_out_discard is set, output is discarded
