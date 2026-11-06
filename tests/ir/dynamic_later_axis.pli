@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Rules (12),(13): dynamic LATER axes IR check. Pins the row-major
+   flat index with live per-axis extents and the hidden ABI arguments
+   for a dynamic multi-axis array. */
+dynamic_later_axis_ir: procedure options(main);
+   declare n fixed bin(31) init(2);
+   declare m fixed bin(31) init(3);
+   declare a(n, m) fixed bin(31);
+   declare i fixed bin(31);
+   declare j fixed bin(31);
+   n = 2;
+   m = 3;
+   do i = 1 to n;
+     do j = 1 to m;
+       a(i, j) = i * 10 + j;
+     end;
+   end;
+   /* Cross-section over dynamic later axis. */
+   declare r(m) fixed bin(31);
+   r = a(1, *);
+   put skip list(r(2));
+end dynamic_later_axis_ir;

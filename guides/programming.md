@@ -303,6 +303,15 @@ A slice on the left writes element-by-element. A scalar on the right broadcasts:
  a(1,*) = 42;       /* fill row 1 with 42 */
 ```
 
+**Dynamic later axes.** Any axis of an array may have a runtime extent (not just the first). The bounds are evaluated at block entry, and subscripting uses the live per-axis extents. `LBOUND`, `HBOUND`, and `DIM` read the live bounds. Cross-sections over a dynamic later axis use the live extent for that axis.
+
+```pli
+ dcl n fixed bin(31);
+ dcl m fixed bin(31);
+ dcl a(n, m) fixed bin(31);  /* both axes dynamic */
+ a(2, 3) = 42;               /* row-major access with live bounds */
+```
+
 ### Whole-array math: leave the loop behind
 
 This is the NumPy moment. `a + 1` means "every element plus 1":

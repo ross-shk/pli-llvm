@@ -1,0 +1,16 @@
+ test: proc options(main);
+   declare n fixed bin(31);
+   declare m fixed bin(31);
+   n = 2; m = 3;
+   declare a(n, m) fixed bin(31);
+   declare r(m) fixed bin(31);
+   declare i fixed bin(31);
+   declare j fixed bin(31);
+   do i = 1 to n;
+     do j = 1 to m;
+       a(i, j) = i * 10 + j;
+     end;
+   end;
+   r = a(2, *);
+   put skip list(r(1));
+ end test;

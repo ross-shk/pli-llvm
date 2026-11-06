@@ -454,10 +454,13 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // Parameters resolve here too, so a caller's argument checks (rules (34),
   // (78)) see every callee's descriptors regardless of procedure order
   // (ADR-094); processProc skips re-resolving them.
+  // beginScopes_ is keyed by unique Stmt*, so one clear before the whole
+  // collection pass suffices — clearing per procedure would erase the previous
+  // procedure's BEGIN scopes before pass 2 checks them (rule (68)).
+  beginScopes_.clear();
   for (auto& p : prog.procs) {
     if (p->isPackage)
       continue;
-    beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
     // BASED bases resolve before params so a bare parameter base becomes a
     // POINTER parameter (rule 25), not an implicit arithmetic parameter.
@@ -2328,10 +2331,23 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
             // A `(*)` BASED array takes its extent from each ALLOCATE
             // (rules (13),(25),(89)), like a CONTROLLED `(*)` axis.
+            // Served: leading '*' with constant later axes. Multiple '*' diagnosed.
             bool basedStar = hasStar &&
                              (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
+            bool basedMultiStar = false;
+            if (basedStar) {
+              for (size_t k = 1; k < item.ty.dims.size(); ++k)
+                if (item.ty.dims[k].adj)
+                  basedMultiStar = true;
+              if (!item.ty.dims.empty() && !item.ty.dims[0].adj)
+                basedMultiStar = true;
+            }
             if (hasStar && !isParam && !ctlStar && !basedStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
+            if (basedMultiStar)
+              d_.error(item.loc,
+                       "a BASED '*' extent needs a leading '*' with constant later axes",
+                       "(13)");
             if (hasStar && isParam) {
               // A multi-axis '*' parameter is served when only the first axis
               // is adjustable and later axes are constant (rules (13),(36)):
@@ -2354,16 +2370,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             for (auto& b : item.dynLbBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
-            // A dynamic array may be multi-axis, but only the first axis may
-            // have a runtime extent; later axes must be constant in this stage.
-            // `*` CONTROLLED axes are exempt: their extents come from each
-            // ALLOCATE, not from block entry (rules (13),(89)).
-            for (size_t k = 1; k < item.ty.dims.size(); ++k)
-              if ((item.ty.dims[k].dyn || item.ty.dims[k].lbDyn) &&
-                  !(item.controlled && item.ty.dims[k].adj))
-                d_.error(item.loc,
-                         "a dynamic array may only have a dynamic first axis in this stage",
-                         "(13)");
+            // Dynamic later axes are served (rules (12),(13)): every axis may
+            // carry a runtime extent; later axes are evaluated at block entry and
+            // fold into the flat row-major index (Wave 2 contract).
             // A single-axis dynamic lower bound on a parameter is served:
             // the bound exprs name caller-supplied params read at entry.
             if (item.sym->isStatic)

@@ -144,7 +144,7 @@ private:
   llvm::SmallVector<llvm::Metadata*, 4> loopMDs_;
   // For a dynamic (runtime-extent, rule (13)) array symbol: the runtime upper
   // bound value of its dynamic axis, loaded once at block entry.
-  std::unordered_map<Symbol*, llvm::Value*> dynUb_;
+  std::unordered_map<Symbol*, std::vector<llvm::Value*>> dynUb_;
   // For an adjustable-length `CHAR(*)` parameter (rule (18)): the live length,
   // read from the caller-supplied hidden i64 length argument once at entry.
   // The mirror of `dynUb_` for character parameters.
@@ -156,7 +156,10 @@ private:
   std::unordered_map<Symbol*, llvm::Value*> ctlKey_;
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
-  std::unordered_map<Symbol*, llvm::Value*> dynLb_;
+  std::unordered_map<Symbol*, std::vector<llvm::Value*>> dynLb_;
+  // First-axis compatibility accessors for the (now vector) dope slots.
+  llvm::Value* dynUbFirst(Symbol* s) const;
+  llvm::Value* dynLbFirst(Symbol* s) const;
   // The membership table of each constant character alphabet used by
   // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
   std::map<std::string, llvm::GlobalVariable*> searchTables_;
@@ -543,8 +546,8 @@ private:
   // the (single, 1-D) dynamic axis, `dynLb` the runtime lower bound, and `base`
   // is a bare element pointer.
   llvm::Value* arrayElementAddr(const Type& arr, llvm::Value* base, const std::vector<HExprP>& idxs,
-                                SourceLoc, llvm::Value* dynUb = nullptr,
-                                llvm::Value* dynLb = nullptr);
+                                SourceLoc, const std::vector<llvm::Value*>& dynUbs = {},
+                                const std::vector<llvm::Value*>& dynLbs = {});
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.

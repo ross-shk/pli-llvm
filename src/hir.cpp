@@ -296,10 +296,18 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     // The lowered dynamic upper bound rides on the symbol so irgen's allocaLocals
     // can size the runtime buffer (rules (12),(13)). Safe to keep a raw pointer:
     // the HExpr is owned by this HProgram, which outlives IRGen.
-    if (hd.sym && !hd.dynBounds.empty())
-      hd.sym->dynUb = hd.dynBounds[0].get();
-    if (hd.sym && !hd.dynLbBounds.empty())
-      hd.sym->dynLb = hd.dynLbBounds[0].get();
+    if (hd.sym) {
+      hd.sym->dynUbAxes.assign(hd.dynBounds.size(), nullptr);
+      hd.sym->dynLbAxes.assign(hd.dynLbBounds.size(), nullptr);
+      for (size_t k = 0; k < hd.dynBounds.size(); ++k)
+        if (hd.dynBounds[k]) hd.sym->dynUbAxes[k] = hd.dynBounds[k].get();
+      for (size_t k = 0; k < hd.dynLbBounds.size(); ++k)
+        if (hd.dynLbBounds[k]) hd.sym->dynLbAxes[k] = hd.dynLbBounds[k].get();
+      if (!hd.sym->dynUbAxes.empty())
+        hd.sym->dynUb = hd.sym->dynUbAxes[0];
+      if (!hd.sym->dynLbAxes.empty())
+        hd.sym->dynLb = hd.sym->dynLbAxes[0];
+    }
     // The lowered adjustable-length expression rides on the symbol so irgen
     // can size CONTROLLED generations at each ALLOCATE (rules (15),(18)).
     // Same ownership shape as the dynamic bounds above.

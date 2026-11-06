@@ -1,0 +1,10 @@
+CHECK-LABEL: define internal void @PLI_DYNAMIC_LATER_AXIS_IR()
+CHECK: %extall5 = mul i64 %extall, %ext4
+CHECK: %A.addr.dyn = alloca i32, i64 %allocExt, align 4
+CHECK: %R.addr.dyn = alloca i32, i64 %allocExt{{[0-9]*}}, align 4
+CHECK: %stride[0-9]+ = mul i64 %stride[0-9]*, %ext[0-9]+
+CHECK: %flat = add i64 %scaled, %scaled[0-9]+
+CHECK: %aelem = getelementptr inbounds i32, ptr %A.addr.dyn, i64 %flat
+CHECK: %csrc = getelementptr inbounds \[0 x i32\], ptr %A.addr.dyn, i64 0, i64 %csss
+CHECK: %cdst = getelementptr inbounds \[0 x i32\], ptr %R.addr.dyn, i64 0, i64 %css
+CHECK: call void @pli_put_list_fixed
