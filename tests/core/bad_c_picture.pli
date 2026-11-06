@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Negative cases for C(picture): (51) non-complex data item, (53) wide/sterling in GET EDIT, (148) binary picture char. */
+bad_c_picture: procedure options(main);
+   declare buf char(60);
+   declare z complex;
+   declare n fixed bin(31);
+
+   /* (51) C format requires a COMPLEX item */
+   put string(buf) edit(n) (c(p('999V.99'), p('999V.99')));
+
+   /* (53) sterling picture in GET EDIT */
+   get string(buf) edit(z) (c(p('9/9'), p('9/9')));
+
+   /* (53) wide picture (>18 digits) in GET EDIT */
+   get string(buf) edit(z) (c(p('9999999999999999999'), p('999V.99')));
+
+   /* (148) binary picture character */
+   put string(buf) edit(z) (c(p('999V.99'), p('111')));
+
+end bad_c_picture;

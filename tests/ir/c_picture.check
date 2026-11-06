@@ -1,0 +1,7 @@
+CHECK: call void @pli_put_edit_pic\(i64 %{{[a-z0-9.]+}}, i64 0, i32 %{{[a-z0-9.]+}}, ptr @str\.1, i64 7\)
+CHECK: call void @pli_put_edit_pic\(i64 %{{[a-z0-9.]+}}, i64 0, i32 %{{[a-z0-9.]+}}, ptr @str\.1, i64 7\)
+CHECK: call void @pli_put_edit_float\(double %{{[a-z0-9.]+}}, i64 8, i64 2\)
+CHECK: call void @pli_put_edit_pic\(i64 %{{[a-z0-9.]+}}, i64 0, i32 %{{[a-z0-9.]+}}, ptr @str\.1, i64 7\)
+CHECK: call i64 @pli_get_edit_pic_picture\(i64 6, ptr @str\.1, i64 7, i64 2\)
+CHECK: call i64 @pli_get_edit_pic_picture\(i64 6, ptr @str\.1, i64 7, i64 2\)
+CHECK: ret void

@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Mixed C(real,picture): PUT EDIT of a complex value through C with P inner parts. */
+c_picture: procedure options(main);
+   declare buf char(60);
+   declare z complex;
+
+   /* both parts as picture */
+   z = complex(12, 7);
+   put string(buf) edit(z) (c(p('999V.99'), p('999V.99')));
+   put skip list('both p:', buf);
+
+   /* mixed F and P parts */
+   z = complex(5, 9);
+   put string(buf) edit(z) (c(f(8,2), p('999V.99')));
+   put skip list('mixed f p:', buf);
+
+   /* single inner serves both parts */
+   z = complex(3, 4);
+   put string(buf) edit(z) (c(p('999V.99')));
+   put skip list('single p:', buf);
+
+   put skip list('PASS c_picture');
+end c_picture;

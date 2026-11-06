@@ -14099,3 +14099,48 @@ Tests: existing picture tests pass; binary input rejected with (148).
 evidence for a base-2 formatting path; adding a second formatting engine (single
 interpreter invariant ADR-290); character pictures for numeric sources (stay
 diagnosed per rule (19) row).
+
+## ADR-373 — Mixed C(real,picture) in complex format items (Wave 4 Slice 2)
+
+**Context.** TR 25.084 rule (51) allows a complex format item `C(real[,real])` where each
+real part is an `F`, `E`, or `P` real format. The prior implementation restricted the
+inner real formats to `F` and `E` only. This slice widens the inner format to also accept
+`P` picture items, enabling:
+
+```
+put edit(z) (c(p('999V.99'), p('999V.99')));
+get edit(w) (c(p('999V.99'), p('999V.99')));
+```
+
+A single inner format still serves both real and imaginary parts when only one is given
+(rule (51) with rule (108) edit pairing).
+
+**Decisions.**
+- Output: a complex part is a `double`. The part is truncated to `i64` with scale 0
+  (`FPToSI`) and passed to the existing `pli_put_edit_pic` / `pli_put_edit_pic_sterling`
+  runtime, mirroring the standalone `P(FLOAT)` output path. The picture's `V` and
+  fractional positions pad with zeros; no float-specific scaling is introduced (same
+  limitation as plain `P(FLOAT)`).
+- Sterling pictures in output: the truncated integer is sent to
+  `pli_put_edit_pic_sterling`, mirroring the P-output sterling branch.
+- Input: for a non-wide numeric picture, call `pli_get_edit_pic_picture(w, pic, piclen,
+  fracDigits)` (returns `i64` at scale `fracDigits`), then convert to `double` with
+  `SIToFP` + `FDiv` by `10^fracDigits`. For sterling/wide pictures inside `C` input,
+  diagnose with (53) (complex parts are doubles; wide/sterling conversions are not
+  meaningful there and the existing C input is double-based).
+- Width: for a `P` inner, `sub.w` is normally null; use `spec.width` (plus the T/I/R
+  sign column) as the field width, exactly as the standalone P path does. If `sub.w`
+  is present it overrides, matching current F/E behavior.
+- Mixed parts: the two halves may independently be F/E or P; the real and imaginary
+  parts are read/written independently and combined into the `{double,double}` pair
+  at the end.
+- Sema validation is factored into `validatePictureFormat` helper to avoid drift
+  between top-level `P` and `C`-inner `P`.
+
+**Consequences.** Parser accepts `P` in `C` inner formats; sema validates inner `P`
+pictures for both output and input; IRGen emits `pli_put_edit_pic` / `pli_get_edit_pic_picture`
+calls for P inner parts; no runtime changes (reuses existing entries). GRAMMAR-COVERAGE.md
+row (51) updated. Tests: `c_picture.pli` (golden PUT EDIT), `c_picture_input.pli`
+(self-checking round-trip), `bad_c_picture.pli` (diagnostics for non-complex item,
+sterling/wide in GET EDIT, binary picture char), `ir/c_picture.pli` (IR check for
+runtime calls).

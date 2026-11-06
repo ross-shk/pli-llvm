@@ -1,0 +1,55 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Mixed C(real,picture): complex value through C with P inner parts. */
+ c_picture_input: procedure options(main);
+    declare buf char(40);
+    declare z complex;
+    declare w complex;
+    declare re1 fixed bin(31);
+    declare re2 fixed bin(31);
+    z = complex(12, 7);
+    put string(buf) edit(z) (c(p('999V.99'), p('999V.99')));
+    get string(buf) edit(w) (c(p('999V.99'), p('999V.99')));
+    re1 = real(w);
+    re2 = imag(w);
+    if re1 ^= 12 then do;
+       put skip list('FAIL c_picture_input real:', re1);
+       stop;
+    end;
+    if re2 ^= 7 then do;
+       put skip list('FAIL c_picture_input imag:', re2);
+       stop;
+    end;
+
+    /* mixed F and P parts */
+    z = complex(5, 9);
+    put string(buf) edit(z) (c(f(8,2), p('999V.99')));
+    get string(buf) edit(w) (c(f(8,2), p('999V.99')));
+    re1 = real(w);
+    re2 = imag(w);
+    if re1 ^= 5 then do;
+       put skip list('FAIL c_picture_input mixed real:', re1);
+       stop;
+    end;
+    if re2 ^= 9 then do;
+       put skip list('FAIL c_picture_input mixed imag:', re2);
+       stop;
+    end;
+
+    /* single inner serves both parts */
+    z = complex(3, 4);
+    put string(buf) edit(z) (c(p('999V.99')));
+    get string(buf) edit(w) (c(p('999V.99')));
+    re1 = real(w);
+    re2 = imag(w);
+    if re1 ^= 3 then do;
+       put skip list('FAIL c_picture_input single real:', re1);
+       stop;
+    end;
+    if re2 ^= 4 then do;
+       put skip list('FAIL c_picture_input single imag:', re2);
+       stop;
+    end;
+
+    put skip list('PASS c_picture_input');
+ end c_picture_input;

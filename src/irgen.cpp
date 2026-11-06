@@ -10176,32 +10176,54 @@ void IRGen::emitPutEditFormatItem(const HFormatItem& f, HStmt* s, size_t& di,
     deferCall("pli_put_edit_bit", {ptr, i64(nbits), w});
     break;
   }
-  case HFormatItem::C: {
-    // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
-    // formats; a single sub serves both parts.
-    if (di >= dataItems.size())
-      break;
-    Val v = dataItems[di++];
-    llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
-    llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
-    if (f.subs.empty()) {
-      d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
-      break;
-    }
-    auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
-      llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
-      llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
-      if (sub.s)
-        (void)toI64(emitExpr(sub.s.get())); // scale evaluated for effects (50)
-      if (sub.kind == HFormatItem::E)
-        deferCall("pli_put_edit_float_e", {dbl, w, d});
-      else
-        deferCall("pli_put_edit_float", {dbl, w, d});
-    };
-    putRealPart(re, f.subs[0]);
-    putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
-    break;
-  }
+   case HFormatItem::C: {
+     // Complex output (rule (51)): one COMPLEX item through 1-2 inner real
+     // formats; a single sub serves both parts.
+     if (di >= dataItems.size())
+       break;
+     Val v = dataItems[di++];
+     llvm::Value* re = b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re");
+     llvm::Value* im = b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im");
+     if (f.subs.empty()) {
+       d_.error(s->loc, "a C format requires an inner F, E, or P format", "(51)");
+       break;
+     }
+     auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
+       if (sub.kind == HFormatItem::E) {
+         llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
+         llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
+         if (sub.s) (void)toI64(emitExpr(sub.s.get()));
+         deferCall("pli_put_edit_float_e", {dbl, w, d});
+         return;
+       }
+       if (sub.kind == HFormatItem::P) {
+         const pli::PictureSpec spec = pli::classifyPicture(sub.pic);
+         llvm::Value* val = b_.CreateFPToSI(dbl, b_.getInt64Ty(), "cpicv");
+         llvm::Value* sign = b_.CreateSelect(
+             b_.CreateICmpSLT(val, i64(0), "cpicsgn"), i32(-1), i32(1), "cpicst");
+         if (spec.sterling) {
+           facts_.recordBuiltin("picture", "runtime", "sterling picture in C output");
+           deferCall("pli_put_edit_pic_sterling",
+                     {val, sign, globalString(spec.expanded),
+                      i64((long long)spec.expanded.size())});
+         } else {
+           facts_.recordBuiltin("picture", "runtime", "picture in C output");
+           deferCall("pli_put_edit_pic",
+                     {val, i64(0), sign, globalString(spec.expanded),
+                      i64((long long)spec.expanded.size())});
+         }
+         return;
+       }
+       // F (default)
+       llvm::Value* w = sub.w ? toI64(emitExpr(sub.w.get())) : defW;
+       llvm::Value* d = sub.d ? toI64(emitExpr(sub.d.get())) : defD;
+       if (sub.s) (void)toI64(emitExpr(sub.s.get()));
+       deferCall("pli_put_edit_float", {dbl, w, d});
+     };
+     putRealPart(re, f.subs[0]);
+     putRealPart(im, f.subs.size() > 1 ? f.subs[1] : f.subs[0]);
+     break;
+   }
   case HFormatItem::F: {
     if (di >= dataItems.size())
       break;
@@ -10540,39 +10562,113 @@ void IRGen::emitGetEditItems(HStmt* s) {
                 });
       break;
     }
-    case HFormatItem::C: {
-      // Complex input (rule (51)): read the real/imaginary parts through the
-      // inner real widths, then store the {double,double} pair.
-      if (di >= s->items.size())
-        break;
-      HExpr* t = s->items[di++].get();
-      SourceLoc loc = s->loc;
-      if (f.subs.empty()) {
-        d_.error(s->loc, "a C format requires an inner F/E format", "(51)");
-        break;
-      }
-      const HFormatItem& s1 = f.subs[0];
-      const HFormatItem& s2 = f.subs.size() > 1 ? f.subs[1] : f.subs[0];
-      llvm::Value* w1 = s1.w ? toI64(emitExpr(s1.w.get())) : defW;
-      llvm::Value* w2 = s2.w ? toI64(emitExpr(s2.w.get())) : defW;
-      if (s1.s)
-        (void)toI64(emitExpr(s1.s.get()));
-      if (s2.s)
-        (void)toI64(emitExpr(s2.s.get()));
-      // The two halves are read in order; the store waits for the second one.
-      deferCall("pli_get_edit_num", {w1});
-      deferCall("pli_get_edit_num", {w2}, false,
-                [this, t, loc](const std::vector<llvm::Value*>& r, size_t i) {
-                  llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
-                  cpx = b_.CreateInsertValue(cpx, r[i - 1], 0, "cpx.re");
-                  cpx = b_.CreateInsertValue(cpx, r[i], 1, "cpx.im");
-                  Val v;
-                  v.cpx = cpx;
-                  v.ty = Type::complexTy();
-                  storeGetTarget(t, v, loc);
-                });
-      break;
-    }
+     case HFormatItem::C: {
+       // Complex input (rule (51)): read the real/imaginary parts through the
+       // inner real widths, then store the {double,double} pair.
+       if (di >= s->items.size())
+         break;
+       HExpr* t = s->items[di++].get();
+       SourceLoc loc = s->loc;
+       if (f.subs.empty()) {
+         d_.error(s->loc, "a C format requires an inner F, E, or P format", "(51)");
+         break;
+       }
+       const HFormatItem& s1 = f.subs[0];
+       const HFormatItem& s2 = f.subs.size() > 1 ? f.subs[1] : f.subs[0];
+       auto partWidth = [&](const HFormatItem& sub) -> llvm::Value* {
+         if (sub.w) return toI64(emitExpr(sub.w.get()));
+         if (sub.kind == HFormatItem::P) {
+           const pli::PictureSpec spec = pli::classifyPicture(sub.pic);
+           return i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0));
+         }
+         return defW;
+       };
+       // Evaluate scale factors for effects.
+       if (s1.s) (void)toI64(emitExpr(s1.s.get()));
+       if (s2.s) (void)toI64(emitExpr(s2.s.get()));
+       // First half
+       const pli::PictureSpec sp1 = (s1.kind == HFormatItem::P) ? pli::classifyPicture(s1.pic) : pli::PictureSpec{};
+       const pli::PictureSpec sp2 = (s2.kind == HFormatItem::P) ? pli::classifyPicture(s2.pic) : pli::PictureSpec{};
+       const bool p1 = (s1.kind == HFormatItem::P);
+       const bool p2 = (s2.kind == HFormatItem::P);
+       if (s1.kind == HFormatItem::P) {
+         if (sp1.sterling || sp1.intDigits + sp1.fracDigits > 18) {
+           d_.error(s->loc, "sterling or wide P inside C input is not implemented in this stage", "(53)");
+           break;
+         }
+       }
+       if (s2.kind == HFormatItem::P) {
+         if (sp2.sterling || sp2.intDigits + sp2.fracDigits > 18) {
+           d_.error(s->loc, "sterling or wide P inside C input is not implemented in this stage", "(53)");
+           break;
+         }
+       }
+       // The two halves are read in order; the store waits for the second one.
+       if (s1.kind == HFormatItem::P) {
+         deferCall("pli_get_edit_pic_picture",
+                   {partWidth(s1), globalString(sp1.expanded),
+                    i64((long long)sp1.expanded.size()), i64(sp1.fracDigits)});
+       } else {
+         deferCall("pli_get_edit_num", {partWidth(s1)});
+       }
+       if (s2.kind == HFormatItem::P) {
+         deferCall("pli_get_edit_pic_picture",
+                   {partWidth(s2), globalString(sp2.expanded),
+                    i64((long long)sp2.expanded.size()), i64(sp2.fracDigits)},
+                   false,
+                   [this, t, loc, p1, p2, sp1, sp2](const std::vector<llvm::Value*>& r, size_t i) {
+                     auto picToDouble = [&](llvm::Value* iv, int fracDigits) -> llvm::Value* {
+                       llvm::Value* d = b_.CreateSIToFP(iv, b_.getDoubleTy(), "pic2dbl");
+                       if (fracDigits > 0) {
+                         double scale = 1.0;
+                         for (int k = 0; k < fracDigits; ++k) scale *= 10.0;
+                         d = b_.CreateFDiv(d, llvm::ConstantFP::get(b_.getDoubleTy(), scale), "pic2dbls");
+                       }
+                       return d;
+                     };
+                     llvm::Value* re = p1
+                         ? picToDouble(r[i - 1], sp1.fracDigits)
+                         : r[i - 1];
+                     llvm::Value* im = p2
+                         ? picToDouble(r[i], sp2.fracDigits)
+                         : r[i];
+                     llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+                     cpx = b_.CreateInsertValue(cpx, re, 0, "cpx.re");
+                     cpx = b_.CreateInsertValue(cpx, im, 1, "cpx.im");
+                     Val v;
+                     v.cpx = cpx;
+                     v.ty = Type::complexTy();
+                     storeGetTarget(t, v, loc);
+                   });
+       } else {
+         deferCall("pli_get_edit_num", {partWidth(s2)}, false,
+                   [this, t, loc, p1, p2, sp1, sp2](const std::vector<llvm::Value*>& r, size_t i) {
+                     auto picToDouble = [&](llvm::Value* iv, int fracDigits) -> llvm::Value* {
+                       llvm::Value* d = b_.CreateSIToFP(iv, b_.getDoubleTy(), "pic2dbl");
+                       if (fracDigits > 0) {
+                         double scale = 1.0;
+                         for (int k = 0; k < fracDigits; ++k) scale *= 10.0;
+                         d = b_.CreateFDiv(d, llvm::ConstantFP::get(b_.getDoubleTy(), scale), "pic2dbls");
+                       }
+                       return d;
+                     };
+                     llvm::Value* re = p1
+                         ? picToDouble(r[i - 1], sp1.fracDigits)
+                         : r[i - 1];
+                     llvm::Value* im = p2
+                         ? picToDouble(r[i], sp2.fracDigits)
+                         : r[i];
+                     llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
+                     cpx = b_.CreateInsertValue(cpx, re, 0, "cpx.re");
+                     cpx = b_.CreateInsertValue(cpx, im, 1, "cpx.im");
+                     Val v;
+                     v.cpx = cpx;
+                     v.ty = Type::complexTy();
+                     storeGetTarget(t, v, loc);
+                   });
+       }
+       break;
+     }
     case HFormatItem::P: {
       // P input (ADR-291): read the picture-width field and return the value
       // at the picture's assumed decimal point; the normal conversion path

@@ -1294,6 +1294,21 @@ Use `-v` to list the configured paths.
 
 Served items: `f(w,d)`, `e(w,d)`, `a(w)`, `x(w)`, `skip(n)`, `page`, `line(n)`, `b(n)`, `c(re,im)`, `col(n)`, and `(n)(...)` repetition groups. Labelled `format` statements plus remote `r(label)` splicing work too.
 
+The `c(re,im)` complex format accepts `F`, `E`, or `P` (picture) for each real part:
+```pli
+  dcl z complex;
+  z = 12 + 7i;
+
+  /* both parts as picture */
+  put edit(z) (c(p('999V.99'), p('999V.99')));
+
+  /* mixed: real as F, imag as picture */
+  put edit(z) (c(f(8,2), p('999V.99')));
+
+  /* single inner serves both parts */
+  put edit(z) (c(p('999V.99')));
+```
+
 `line(n)` also works as a stream option on `get`/`put` and advances to line n
 (a newline-count approximation, not a tracked page counter). `put ... copy`
 echoes the rest of the current input line to the output, which is handy for
