@@ -1,20 +1,20 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* Mixed C(real,picture) in complex format: IR emits pli_put_edit_pic and pli_get_edit_pic_picture for P inner parts. */
-c_picture: procedure options(main);
-   declare buf char(60);
-   declare z complex;
-   declare w complex;
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Mixed C(real,picture): IR emits picture calls. */
+ c_picture: procedure options(main);
+    declare buf char(60);
+    declare z complex;
+    declare w complex;
 
-   /* output: both parts P */
-   z = complex(12, 7);
-   put string(buf) edit(z) (c(p('999V.99'), p('999V.99')));
+    /* output: both parts P */
+    z = complex(12, 7);
+    put string(buf) edit(z) (c(p('999V.99'), p('999V.99')));
 
-   /* output: mixed F and P */
-   z = complex(5, 9);
-   put string(buf) edit(z) (c(f(8,2), p('999V.99')));
+    /* output: mixed F and P */
+    z = complex(5, 9);
+    put string(buf) edit(z) (c(f(8,2), p('999V.99')));
 
-   /* input: both parts P */
-   get string(buf) edit(w) (c(p('999V.99'), p('999V.99')));
+    /* input: both parts P */
+    get string(buf) edit(w) (c(p('999V.99'), p('999V.99')));
 
-end c_picture;
+ end c_picture;

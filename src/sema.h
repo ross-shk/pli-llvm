@@ -239,10 +239,10 @@ private:
   // Validate edit-directed transmission (rule (108)): type the format widths,
   // and check that the data items pair one-to-one with the data (A/F) formats,
   // and for GET that each item is an assignable reference of a matching type.
-   void checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet);
-   // Validate a PICTURE format item (rules (53),(146)-(148)); complexPart
-   // treats the target as a numeric double part (used by C inner formats).
-   void validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool complexPart);
+  void checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet);
+  // Validate a PICTURE format item (rules (53),(146)-(148)); complexPart
+  // treats the target as a numeric double part (used by C inner formats).
+  void validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool complexPart);
   // FORMAT statements (rule (44)) collected per procedure: label -> statement,
   // so R(label) remote formats (rule (55)) splice the referenced list.
   std::unordered_map<std::string, Stmt*> formatMap_;

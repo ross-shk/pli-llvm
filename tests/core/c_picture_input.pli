@@ -1,6 +1,6 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Mixed C(real,picture): complex value through C with P inner parts. */
+ /* Mixed C(real,picture): complex through C with P parts. */
  c_picture_input: procedure options(main);
     declare buf char(40);
     declare z complex;

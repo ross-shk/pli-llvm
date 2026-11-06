@@ -5389,19 +5389,19 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
       d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
     }
-     if (f.kind == FormatItem::P && isGet) {
-       validatePictureFormat(f, it, isGet, false);
-     } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-       validatePictureFormat(f, it, isGet, false);
-     } else if (f.kind == FormatItem::P) {
-       d_.error(it->loc, "a P format requires a numeric item", "(53)");
-     }
-     if (f.kind == FormatItem::C) {
-       for (auto& sb : f.subs) {
-         if (sb.kind == FormatItem::P)
-           validatePictureFormat(sb, it, isGet, true);
-       }
-     }
+    if (f.kind == FormatItem::P && isGet) {
+      validatePictureFormat(f, it, isGet, false);
+    } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+      validatePictureFormat(f, it, isGet, false);
+    } else if (f.kind == FormatItem::P) {
+      d_.error(it->loc, "a P format requires a numeric item", "(53)");
+    }
+    if (f.kind == FormatItem::C) {
+      for (auto& sb : f.subs) {
+        if (sb.kind == FormatItem::P)
+          validatePictureFormat(sb, it, isGet, true);
+      }
+    }
     if (isGet) {
       if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
         d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",

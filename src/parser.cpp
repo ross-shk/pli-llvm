@@ -4055,11 +4055,11 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
       FormatItem inner;
       if (!parseSingleFormatItem(inner))
         return false;
-  if (inner.kind != FormatItem::F && inner.kind != FormatItem::E &&
-      inner.kind != FormatItem::P) {
-    d_.error(cur().loc, "a C format part must be an F, E, or P real format", "(51)");
-    return false;
-  }
+      if (inner.kind != FormatItem::F && inner.kind != FormatItem::E &&
+          inner.kind != FormatItem::P) {
+        d_.error(cur().loc, "a C format part must be an F, E, or P real format", "(51)");
+        return false;
+      }
       fi.subs.push_back(std::move(inner));
       if (!eat(Tok::Comma))
         break;
