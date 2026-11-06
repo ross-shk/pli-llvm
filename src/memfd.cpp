@@ -16,6 +16,9 @@
 #if !defined(_WIN32)
 #include <sys/mman.h>
 #include <unistd.h>
+#else
+#include <windows.h>
+#include <io.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -24,8 +27,8 @@ namespace pli {
 
 namespace {
 
-std::map<std::string, int>& memFdTable() {
-  static std::map<std::string, int> table;
+std::map<std::string, intptr_t>& memFdTable() {
+  static std::map<std::string, intptr_t> table;
   return table;
 }
 
@@ -78,8 +81,9 @@ std::string createMemBlob(llvm::StringRef bytes, std::string& err) {
   memFdTable()[path] = fd;
   return path;
 #elif defined(_WIN32)
-  // Windows has no anonymous-fd path that lld can reopen by name, so fall back
-  // to a uniquely named temp file; closeMemBlob removes it after the link.
+  // Windows: no anonymous-fd path lld can reopen. Use a temp file with
+  // FILE_FLAG_DELETE_ON_CLOSE and share modes that allow lld to open it by
+  // path while we hold the handle. The file is deleted when our handle closes.
   std::error_code ec;
   fs::path dir = fs::temp_directory_path(ec);
   if (ec) {
@@ -93,16 +97,31 @@ std::string createMemBlob(llvm::StringRef bytes, std::string& err) {
     err = "create temp blob failed: " + ec.message();
     return "";
   }
-  std::ofstream os(std::string(path), std::ios::binary | std::ios::trunc);
-  os.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  os.close();
-  if (!os) {
+  // Reopen with DELETE_ON_CLOSE and full sharing so lld can open the path.
+  fs::path nativePath(path.c_str());
+  HANDLE h = CreateFileW(
+      nativePath.wstring().c_str(),
+      GENERIC_WRITE | DELETE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+      nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
     llvm::sys::fs::remove(path);
+    err = "CreateFileW DELETE_ON_CLOSE failed: " + std::to_string(GetLastError());
+    return "";
+  }
+  DWORD written = 0;
+  if (!WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) ||
+      written != bytes.size()) {
+    CloseHandle(h);
     err = "write to mem blob failed";
     return "";
   }
-  std::string p(path.str());
-  memFdTable()[p] = -1;
+  // Keep handle open in the table; closeMemBlob will close it (triggering delete).
+  std::string p(path.c_str());
+  memFdTable()[p] = reinterpret_cast<intptr_t>(h);
   return p;
 #else
   err = "in-memory blob not supported on this platform";
@@ -114,16 +133,16 @@ void closeMemBlob(const std::string& path) {
   auto it = memFdTable().find(path);
   if (it == memFdTable().end())
     return;
-  int fd = it->second;
+  intptr_t handle = it->second;
   memFdTable().erase(it);
 #if defined(_WIN32)
-  // The blob is a temp file: delete it now that lld no longer needs it.
-  (void)fd;
-  std::error_code ec;
-  fs::remove(fs::path(path), ec);
+  // Close the handle; FILE_FLAG_DELETE_ON_CLOSE deletes the file.
+  HANDLE h = reinterpret_cast<HANDLE>(handle);
+  if (h != INVALID_HANDLE_VALUE)
+    CloseHandle(h);
 #else
-  if (fd >= 0)
-    ::close(fd);
+  if (handle >= 0)
+    ::close(static_cast<int>(handle));
 #endif
 }
 
