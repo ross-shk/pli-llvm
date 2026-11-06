@@ -2350,6 +2350,14 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.file = true;
         continue;
       }
+      if (w == "ENVIRONMENT") {
+        // ENVIRONMENT (rule 39, Y33 6548): implementation-defined file
+        // attribute. Accept and treat as a file variable; skip the option list.
+        advance();
+        bag.file = true;
+        if (at(Tok::LParen)) skipParen("(39)");
+        continue;
+      }
       if (w == "TASK") {
         // task-attribute (rules (15),(79), QR2.8): a task name for CALL TASK.
         advance();
@@ -4824,10 +4832,34 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("IDENT") || atWord("LINESIZE") || atWord("PAGESIZE") ||
-        atWord("ENVIRONMENT")) {
-      // File attributes accepted as no-ops in this stage (decision 14).
+    if (atWord("IDENT")) {
       advance();
+      if (eat(Tok::LParen)) {
+        st->openIdent = parseExpr();
+        expect(Tok::RParen, "(101)");
+      }
+      continue;
+    }
+    if (atWord("LINESIZE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        st->openLinesize = parseExpr();
+        expect(Tok::RParen, "(101)");
+      }
+      continue;
+    }
+    if (atWord("PAGESIZE")) {
+      advance();
+      if (eat(Tok::LParen)) {
+        st->openPagesize = parseExpr();
+        expect(Tok::RParen, "(101)");
+      }
+      continue;
+    }
+    if (atWord("ENVIRONMENT")) {
+      d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
+      advance();
+      if (at(Tok::LParen)) skipParen("(101)");
       continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");

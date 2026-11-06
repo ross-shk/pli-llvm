@@ -3,6 +3,10 @@
 /* rt_file.c — PL/I runtime library (pli_runtime): named files + SEQUENTIAL RECORD. */
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
+
+int rt_pli_linesize[PLI_MAX_FILES] = {0};
+int rt_pli_pagesize[PLI_MAX_FILES] = {0};
+int rt_cur_file_slot = -1;
 /* Record/stream files route through pli_plat_fopen/pli_plat_fclose/
  * pli_plat_fread/pli_plat_fwrite (the platform seam). */
 /* Defined with the record state below; pli_file_close resets it too. */
@@ -200,6 +204,7 @@ void pli_put_select(long long slot) {
      * Discard what a resuming ERROR handler lets through. */
     rt_out_f = NULL;
     rt_out_discard = 1;
+    rt_cur_file_slot = -1;
     rt_out_unlock();
     pli_signal_error("PUT to a file that is not open");
     return;
@@ -213,6 +218,7 @@ void pli_put_select(long long slot) {
   }
   rt_col = 0;
   rt_items_on_line = 0;
+  rt_cur_file_slot = (int)slot;
   rt_out_unlock();
 }
 
@@ -220,7 +226,17 @@ void pli_put_unselect(void) {
   rt_out_lock();
   rt_out_f = NULL;
   rt_out_discard = 0;
+  rt_cur_file_slot = -1;
   rt_out_unlock();
+}
+
+void pli_file_set_linesize(long long slot, long long n) {
+  if (slot >= 0 && slot < PLI_MAX_FILES && n > 0)
+    rt_pli_linesize[slot] = (int)n;
+}
+void pli_file_set_pagesize(long long slot, long long n) {
+  if (slot >= 0 && slot < PLI_MAX_FILES && n > 0)
+    rt_pli_pagesize[slot] = (int)n;
 }
 
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */

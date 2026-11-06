@@ -320,6 +320,10 @@ struct Stmt {
                            // KEYTO/KEYFROM to address records by key
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
                            // direct organisation; same keyed access as KEYED
+  // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
+  ExprP openIdent = nullptr;   // IDENT ( expression )
+  ExprP openLinesize = nullptr; // LINESIZE ( expression )
+  ExprP openPagesize = nullptr; // PAGESIZE ( expression )
   // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
   // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
   // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE). NOLOCK/SET/LOCATE

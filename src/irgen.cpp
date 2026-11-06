@@ -8751,12 +8751,24 @@ void IRGen::emitOpen(HStmt* s) {
         runtimeFn("pli_file_open_keyed"),
         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
          i64(f->fileNonprint ? 1 : 0), i64(1)});
+    if (s->openLinesize) {
+      b_.CreateCall(runtimeFn("pli_file_set_linesize"), {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+    }
+    if (s->openPagesize) {
+      b_.CreateCall(runtimeFn("pli_file_set_pagesize"), {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+    }
     return;
   }
    b_.CreateCall(
        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
         i64(f->fileNonprint ? 1 : 0)});
+   if (s->openLinesize) {
+     b_.CreateCall(runtimeFn("pli_file_set_linesize"), {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+   }
+   if (s->openPagesize) {
+     b_.CreateCall(runtimeFn("pli_file_set_pagesize"), {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+   }
 }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8

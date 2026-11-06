@@ -1348,6 +1348,15 @@ the way through, with `on endfile` telling the loop to stop:
  end;
 ```
 
+`open file(f) ... linesize(n)` sets a per-file line width; list-directed output
+to that file wraps to a new line when the next item would exceed it. The
+default (no `linesize`) never wraps, preserving existing output.
+`pagesize(n)` records a page size for the file (page tracking only).
+`ident(expr)` is accepted and type-checked but has no runtime effect on
+regular files. `environment(...)` is not a valid `open` option and is
+diagnosed; it may appear on `declare f environment(...)` as an
+implementation-defined file attribute.
+
 An `open` that cannot open its file raises `undefinedfile(f)`. Without a
 handler the program stops with an error; a handler runs, and control resumes
 after the `open` with the file still closed:

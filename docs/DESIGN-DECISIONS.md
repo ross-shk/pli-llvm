@@ -14021,3 +14021,37 @@ parser/sema/irgen code. DEFERRED-WORK.md row D5 is served by this record
 **Rejected.** Building `INLIST`/`INARRAY` as an optimization (it is a language
 feature, not an optimization, plan §21); building it as TR 25.084 scope (it is
 not in the spec; no rule number).
+
+## ADR-371 — Accepted no-ops slice 4 (A2): file attributes and OPEN options
+
+Context. OPEN ... IDENT/LINESIZE/PAGESIZE/ENVIRONMENT and DECLARE ...
+ENVIRONMENT were accepted as silent no-ops; ON ... SNAP and RESERVED
+were accepted without effect. Slice 4 resolves each with observable
+behaviour, a cited diagnostic, or a documented implementation-dependent
+no-op (plan 1793954779419).
+
+Decision.
+- OPEN ... LINESIZE(n) stores a per-file linesize and auto-wraps stream
+  output when explicitly given; the default 0 keeps output unwrapped so
+  existing goldens are unchanged.
+- OPEN ... PAGESIZE(n) stores a per-file pagesize; page tracking only,
+  ENDPAGE remains a condition slice.
+- OPEN ... IDENT(expr) is parsed and type-checked but has no runtime
+  effect on regular files (implementation-dependent user labels).
+- OPEN ... ENVIRONMENT(...) is invalid in OPEN: diagnosed with rule (101)
+  and its balanced parentheses are skipped.
+- DECLARE ... ENVIRONMENT(...) is an implementation-defined file attribute:
+  accepted, sets the file attribute, skips the option list, no runtime
+  effect.
+- ON ... SNAP remains accepted with a warning (rule (91)), no runtime
+  effect.
+- RESERVED reserves storage without initialization and is diagnosed if
+  combined with INITIAL/VALUE/INITIAL(CALL ...).
+- NONPRINT/NOPRINT remain operational (ADR-204).
+
+Consequences. New runtime entry points pli_file_set_linesize and
+pli_file_set_pagesize; rt_pli_linesize/rt_pli_pagesize/rt_cur_file_slot
+state; rt_put_raw auto-wraps on a positive per-file linesize. Tests:
+open_linesize.pli, open_pagesize.pli, bad_open_environment.pli,
+bad_reserved_initial.pli. GRAMMAR-COVERAGE rows (33), (39)-(40),
+(100)-(103) updated.

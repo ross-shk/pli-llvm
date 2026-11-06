@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (15): RESERVED and INITIAL cannot be combined. */
+ badreservedinitial: procedure options(main);
+    declare x fixed bin(31) reserved initial(1);
+ end badreservedinitial;

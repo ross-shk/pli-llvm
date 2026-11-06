@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (101): ENVIRONMENT is not an OPEN option. */
+ badopenenv: procedure options(main);
+    declare f file;
+    open file(f) environment(x);
+ end badopenenv;

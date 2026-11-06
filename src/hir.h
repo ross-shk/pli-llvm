@@ -233,6 +233,10 @@ struct HStmt {
 
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
+  // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
+  HExprP openIdent = nullptr;
+  HExprP openLinesize = nullptr;
+  HExprP openPagesize = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )

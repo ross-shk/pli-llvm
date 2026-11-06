@@ -1388,6 +1388,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       std::vector<int> parentOf;
       std::vector<std::vector<int>> children;
       for (auto& item : s->decls) {
+        if (item.reserved && (item.init || !item.initItems.empty() ||
+                              item.initCall || item.valueInit))
+          d_.error(item.loc, "RESERVED and INITIAL cannot be combined", "(15)");
         if (item.entryIsFunction && !item.isEntry) {
           // RETURNS is an entry-name-attribute (rule (34)): it types an ENTRY
           // declaration, never a storage item. Never silently accepted.
@@ -5097,6 +5100,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       s->fileSym->openRecord = s->openRecord;
       s->fileSym->openKeyed = s->openKeyed;
       s->fileSym->openDirect = s->openDirect;
+      if (s->openLinesize) typeExpr(s->openLinesize.get(), sc, p);
+      if (s->openPagesize) typeExpr(s->openPagesize.get(), sc, p);
+      if (s->openIdent) typeExpr(s->openIdent.get(), sc, p);
     }
     break;
   case Stmt::Goto:

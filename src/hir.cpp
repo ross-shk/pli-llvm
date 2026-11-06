@@ -431,6 +431,9 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->openRecord = s->openRecord;
   h->openKeyed = s->openKeyed;
   h->openDirect = s->openDirect;
+  h->openIdent = lowerExpr(s->openIdent.get());
+  h->openLinesize = lowerExpr(s->openLinesize.get());
+  h->openPagesize = lowerExpr(s->openPagesize.get());
   h->keyOpt = lowerExpr(s->keyOpt.get());
   h->keyToOpt = lowerExpr(s->keyToOpt.get());
   h->keyFromOpt = lowerExpr(s->keyFromOpt.get());

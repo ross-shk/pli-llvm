@@ -239,6 +239,8 @@ PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64, I64))    /* OPEN (100-103): sl
 PLI_FN(pli_file_close, VOID, (I64))
 PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
 PLI_FN(pli_put_unselect, VOID, (VOID))
+PLI_FN(pli_file_set_linesize, VOID, (I64, I64))
+PLI_FN(pli_file_set_pagesize, VOID, (I64, I64))
 PLI_FN(pli_get_select, VOID, (I64))                   /* FILE input routing (105) */
 PLI_FN(pli_get_unselect, VOID, (VOID))
 

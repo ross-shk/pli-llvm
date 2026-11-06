@@ -187,6 +187,16 @@ void rt_flush_stdout(void) {
  * the item count stay consistent when a task writes concurrently. */
 void rt_put_raw(const char *p, size_t n) {
   if (rt_out_f) {
+    /* Auto-wrap when a per-file LINESIZE (OPEN ... LINESIZE) is set. */
+    if (rt_cur_file_slot >= 0 &&
+        rt_pli_linesize[rt_cur_file_slot] > 0 &&
+        rt_col > 0 &&
+        rt_col + (int)n > rt_pli_linesize[rt_cur_file_slot]) {
+      rt_file_out_drain();
+      pli_plat_fwrite("\n", 1, 1, rt_out_f);
+      rt_col = 0;
+      rt_items_on_line = 0;
+    }
     /* A different file starts a fresh slab; a piece larger than the slab
      * drains first and goes straight to the stream. */
     if (rt_file_out_owner != rt_out_f) {
