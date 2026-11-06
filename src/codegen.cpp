@@ -25,7 +25,10 @@
 // brew's lld ships only Common headers, so declare each driver's `link` entry
 // point with the public macro (no lld/ELF/Driver.h in the install).
 LLD_HAS_DRIVER(elf)
+#if !defined(_WIN32)
+// lldMachO is macOS-only; it does not exist on Windows.
 LLD_HAS_DRIVER(macho)
+#endif
 LLD_HAS_DRIVER(coff)
 LLD_HAS_DRIVER(mingw)
 #endif
@@ -218,7 +221,10 @@ namespace {
 // "ld.lld": its `-m i386pep` makes the dispatcher pick the MinGW driver.
 const lld::DriverDef kLldDrivers[] = {
     {lld::Gnu, &lld::elf::link},
+#if !defined(_WIN32)
+    // Mach-O driver is macOS-only; not available on Windows.
     {lld::Darwin, &lld::macho::link},
+#endif
     {lld::WinLink, &lld::coff::link},
     {lld::MinGW, &lld::mingw::link},
 };

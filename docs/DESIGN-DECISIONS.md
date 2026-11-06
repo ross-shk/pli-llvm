@@ -14022,7 +14022,81 @@ parser/sema/irgen code. DEFERRED-WORK.md row D5 is served by this record
 feature, not an optimization, plan §21); building it as TR 25.084 scope (it is
 not in the spec; no rule number).
 
-## ADR-371 — Accepted no-ops slice 4 (A2): file attributes and OPEN options
+## ADR-371 — Format iteration (rule 47) and F scale factor (rules 50, 108)
+
+Context. Format repetition counts were compile-time integer literals unrolled
+at parse time, and the F/E scale factor `p` was evaluated for side effects only.
+
+Decision. A repetition count is now a scalar expression evaluated at runtime
+(rule 47): a nonpositive count skips the format group (the data item pairs
+with the next format). Constant non-negative counts are still unrolled at
+parse time as an optimization. The F/E scale factor `p` now effectively
+multiplies the internal data value by 10^p before editing, for both input and
+output (rules 50, 108), via runtime helpers `pli_put_edit_*_scaled` and
+`pli_get_edit_num_scaled`.
+
+Consequences. `format_repeat_live.pli`, `edit_scale.pli`, `format_scale_value.pli`
+cover the new behavior; `bad_edit_iter.pli` and `bad_fixed_scale.pli` pin
+diagnostics.
+
+## ADR-372 — In-memory linking on all platforms (Windows zero-named-file extension)
+
+**Context.** ADR-360 introduced in-memory linking for Linux/macOS using
+anonymous file descriptors (`memfd_create` + `/proc/self/fd/N` on Linux,
+`mkstemp`+`unlink` + `/dev/fd/N` on macOS). Windows has no anonymous-fd
+mechanism that `lld` can reopen by path, so the Windows path materialized the
+embedded sysroot to a real `pli-sysroot-*` directory and created named
+`pli-mem-*` temp files for object blobs that `closeMemBlob` deleted on
+best-effort basis. The `no_temp_files.sh` driver test skipped on Windows.
+
+**Spike (Phase 0).** Inspected the shipped LLVM 23 `lld/Common/Driver.h`
+`lldMain` API: it accepts only `argv` (paths), `stdout`, `stderr`, and the
+driver table. No `vfs::FileSystem`, `MemoryBuffer`, or in-process VFS hook is
+exposed for the MinGW/COFF drivers. The MinGW driver opens inputs by filesystem
+path; there is no mechanism to inject anonymous handles or memory-backed files.
+`FILE_FLAG_DELETE_ON_CLOSE` with `FILE_SHARE_DELETE` keeps a directory entry
+visible while any handle is open, so literal "zero named files" (Option B) is
+infeasible without an `lld` patch (out of scope without explicit approval).
+
+**Decision.** Implement Fallback A (compiler-managed lifecycle, no persistent
+temp artifacts):
+- `src/memfd.cpp` (Windows): create temp file via `createUniqueFile`, reopen
+  with `CreateFileW(GENERIC_WRITE|DELETE, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+  FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE)`, write bytes, keep the
+  `HANDLE` open in `memFdTable`. `closeMemBlob` closes the handle — the OS
+  deletes the file when the last handle closes. This guarantees no leaked
+  compiler-managed blobs after link; transient directory entries while `lld`
+  holds the path open are acceptable and not a leak.
+- `src/main.cpp`: enable `materializeEmbeddedSysrootMem()` for COFF (remove the
+  `if (!isCOFF)` gate). The COFF/MinGW recipe resolves every CRT object and
+  import library via `sysrootPath(...)` to explicit mem-blob paths; the vendored
+  `-L` directory flag and `-l:` library args are dropped. No `pli-sysroot-*`
+  directory is ever created on Windows.
+- `tests/driver/no_temp_files.sh`: runs on Windows; asserts no `pli-sysroot-*`
+  dirs created and no leaked `pli-mem-*` files after link (count-diff against
+  pre-link snapshot). The test documents the Windows guarantee precisely:
+  "no `pli-sysroot-*` dirs and no leaked compiler-managed `pli-mem-*` blobs
+  (transient directory entries while lld holds handles open are acceptable)."
+
+**Consequences.**
+- Windows link path uses in-memory lifecycle for all compiler-managed blobs
+  (unit objects + embedded sysroot artifacts). No persistent temp files/dirs.
+- `lld`-internal `--flto` temps remain a known limitation (unchanged from
+  ADR-360).
+- Linux/macOS behavior unchanged (true anonymous fds).
+- GRAMMAR-COVERAGE.md: no rule moves (driver-only change).
+
+**Rejected.**
+- Status quo (Windows skip in `no_temp_files.sh`, disk sysroot on Windows).
+- Option B (true zero named files) — blocked by `lldMain` path-based API;
+  would require an `lld` patch not approved for this scope.
+- Keeping `-L` + `-l:` for MinGW sysroot when mem sysroot is available
+  (defeats the no-disk-sysroot goal).
+
+**Known limits.** `lld`-internal `--flto` temps are not controlled by `pli`;
+no new leaks introduced by this change.
+
+## ADR-373 — Accepted no-ops slice 4 (A2): file attributes and OPEN options
 
 Context. OPEN ... IDENT/LINESIZE/PAGESIZE/ENVIRONMENT and DECLARE ...
 ENVIRONMENT were accepted as silent no-ops; ON ... SNAP and RESERVED
@@ -14056,7 +14130,7 @@ open_linesize.pli, open_pagesize.pli, bad_open_environment.pli,
 bad_reserved_initial.pli. GRAMMAR-COVERAGE rows (33), (39)-(40),
 (100)-(103) updated.
 
-## ADR-372 — Rule (148) picture character classes round-trip (Wave 4 Slice 1)
+## ADR-374 — Rule (148) picture character classes round-trip (Wave 4 Slice 1)
 
 **Context.** TR 25.084 rules (146)–(148) define the full set of numeric picture
 characters. The prior implementation served only a small subset (`9 Z V . , + - S X A`
@@ -14100,7 +14174,7 @@ evidence for a base-2 formatting path; adding a second formatting engine (single
 interpreter invariant ADR-290); character pictures for numeric sources (stay
 diagnosed per rule (19) row).
 
-## ADR-373 — Mixed C(real,picture) in complex format items (Wave 4 Slice 2)
+## ADR-375 — Mixed C(real,picture) in complex format items (Wave 4 Slice 2)
 
 **Context.** TR 25.084 rule (51) allows a complex format item `C(real[,real])` where each
 real part is an `F`, `E`, or `P` real format. The prior implementation restricted the
@@ -14144,3 +14218,24 @@ row (51) updated. Tests: `c_picture.pli` (golden PUT EDIT), `c_picture_input.pli
 (self-checking round-trip), `bad_c_picture.pli` (diagnostics for non-complex item,
 sterling/wide in GET EDIT, binary picture char), `ir/c_picture.pli` (IR check for
 runtime calls).
+
+## ADR-376 — Format iteration: a negative count is an error
+
+**Context.** ADR-371 (remote main) made a runtime-evaluated format iteration
+count skip the group for any nonpositive value. The local branch diagnosed a
+constant negative count (rule (47) as (48)). TR 25.084 rule (47) allows an
+expression, and the repository carries no Y33-6003 text fixing the negative
+case; the local reading treats a negative count as a program error.
+
+**Decision.** A negative iteration count is an error (user decision on the
+merge). A literal negative count is diagnosed at compile time with rule (47);
+a count that evaluates negative at run time raises ERROR through
+`pli_signal_error` and skips the group when a unit resumes. Zero still skips
+the group, and constant non-negative counts keep the parse-time unroll.
+
+**Consequences.** `tests/core/bad_edit_iter.pli` pins the literal diagnostic
+(rule (47)); `tests/core/bad_edit_iter_type.pli` pins the non-numeric count;
+`tests/core/format_repeat_live.pli` covers variable, zero, nested and
+call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
+negative rule. This is a deviation from remote ADR-371's nonpositive skip and
+is recorded as such.

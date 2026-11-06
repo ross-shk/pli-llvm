@@ -42,7 +42,7 @@ pli name.pli -o name && ./name
 | Arrays     | fixed & dynamic bounds, slices `a(i,*)`, whole-array math        | `BIT(n>1)` arrays in some spots  |
 | Storage    | BASED, CONTROLLED, DEFINED with iSUB, AREA/OFFSET                | multi-axis dynamic BASED extents |
 | Conditions | ON/SIGNAL/REVERT: ERROR, SIZE, SUBSCRIPTRANGE, ZERODIVIDE, CONVERSION, STRINGRANGE (prefix-gated), FINISH (tasks), AREA, UNDERFLOW, OVERFLOW, FIXEDOVERFLOW, named; `CHECK`/`NOCHECK` prefixes | KEYED/DIRECT file conditions |
-| I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record              |
+| I/O        | PUT/GET LIST, EDIT, DATA, STRING, FILE, OPEN/CLOSE, RECORD       | KEYED/DIRECT record; OPEN options IDENT (no-op), LINESIZE (auto-wrap), PAGESIZE (stored) |
 | Built-ins  | strings, math, arrays, misc (see `builtins.md`)                  | —                                |
 | Extensions | SELECT, LEAVE/ITERATE, DO UNTIL, DO FOREVER, TRIM, PACKAGE, OPTIONAL | —                                |
 
@@ -301,6 +301,15 @@ A slice on the left writes element-by-element. A scalar on the right broadcasts:
 
 ```pli
  a(1,*) = 42;       /* fill row 1 with 42 */
+```
+
+**Dynamic later axes.** Any axis of an array may have a runtime extent (not just the first). The bounds are evaluated at block entry, and subscripting uses the live per-axis extents. `LBOUND`, `HBOUND`, and `DIM` read the live bounds. Cross-sections over a dynamic later axis use the live extent for that axis.
+
+```pli
+ dcl n fixed bin(31);
+ dcl m fixed bin(31);
+ dcl a(n, m) fixed bin(31);  /* both axes dynamic */
+ a(2, 3) = 42;               /* row-major access with live bounds */
 ```
 
 ### Whole-array math: leave the loop behind

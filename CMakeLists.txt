@@ -46,7 +46,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # ZLIB (prefer static: the import lib would add a zlib.dll startup dependency)
   if(NOT TARGET ZLIB::ZLIB)
     find_file(ZLIB_LIB NAMES zlibstatic.lib zlib.lib
-      HINTS ${PLI_ZLIB_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
+      HINTS ${PLI_ZLIB_ROOT}/lib ${PLI_LLVM_STATIC_PREFIX}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZLIB_LIB)
       add_library(ZLIB::ZLIB STATIC IMPORTED)
@@ -59,7 +59,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   endif()
   # zstd
   if(NOT TARGET zstd::libzstd_static)
-    find_file(ZSTD_LIB NAMES libzstd_static.lib zstd.lib
+    find_file(ZSTD_LIB NAMES libzstd_static.lib zstd_static.lib zstd.lib
       HINTS ${PLI_ZSTD_ROOT}/lib ${PLI_VCPKG_ROOT}/lib
       NO_DEFAULT_PATH)
     if(ZSTD_LIB)
@@ -235,13 +235,22 @@ find_library(LLD_COMMON_LIB NAMES lldCommon)
 # ADR-225: in-process lld is the ONLY link — every lld driver library is a
 # hard requirement (the old soft gate + clang fallback are gone).
 # ADR-227 adds the MinGW driver (vendored-mingw sysroot links need it).
+# lldMachO (Mach-O linker) is macOS-only; it does not exist on Windows.
 foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_MINGW_LIB LLD_COMMON_LIB)
   if(NOT ${_lld_lib} OR "${${_lld_lib}}" MATCHES "-NOTFOUND$")
-    message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND "${_lld_lib}" STREQUAL "LLD_MACHO_LIB")
+      # Mach-O linker doesn't exist on Windows — skip.
+    else()
+      message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
+    endif()
   endif()
 endforeach()
 set(PLI_HAVE_LLD 1)
-set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_MACHO_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
+# lldMachO is macOS-only; omit it from LLD_LIBRARIES on Windows.
+set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  list(APPEND LLD_LIBRARIES ${LLD_MACHO_LIB})
+endif()
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
 
 add_library(pli_rules STATIC ${CMAKE_BINARY_DIR}/rules.cpp)
@@ -559,7 +568,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
   # compiler-rt builtins (clang_rt.builtins-*.lib) are referenced as bare
   # library names on Windows; make sure lld-link finds them via /LIBPATH.
   if(PLI_LLVM_STATIC_PREFIX)
-    target_link_directories(pli PRIVATE "${PLI_LLVM_STATIC_PREFIX}/lib/windows")
+    target_link_directories(pli PRIVATE
+      "${PLI_LLVM_STATIC_PREFIX}/lib"
+      "${PLI_LLVM_STATIC_PREFIX}/lib/windows")
+  endif()
+  # zlib/zstd static libs (PLI_ZLIB_ROOT / PLI_ZSTD_ROOT) are referenced as
+  # bare library names (z, zstd) in llvm_libs_core on Windows; make sure
+  # lld-link finds them via /LIBPATH. Also search the static LLVM prefix
+  # (pli-deps ships zstd_static.lib) as a fallback.
+  if(PLI_ZLIB_ROOT)
+    target_link_directories(pli PRIVATE "${PLI_ZLIB_ROOT}/lib")
+  endif()
+  if(PLI_ZSTD_ROOT)
+    target_link_directories(pli PRIVATE "${PLI_ZSTD_ROOT}/lib")
+  endif()
+  if(PLI_LLVM_STATIC_PREFIX)
+    target_link_directories(pli PRIVATE "${PLI_LLVM_STATIC_PREFIX}/lib")
   endif()
   foreach(_sdk_lib
       "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22000.0/um/x64"
@@ -573,22 +597,34 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang
     kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib
     advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib
     libcpmt.lib)
+  # Link the zlib/zstd imported targets so CMake passes their full paths to
+  # lld-link (bare names z/zstd in llvm_libs_core would look for z.lib/zstd.lib,
+  # but the actual files are zlibstatic.lib/zstd_static.lib).
+  if(TARGET ZLIB::ZLIB)
+    target_link_libraries(pli PRIVATE ZLIB::ZLIB)
+  endif()
+  if(TARGET zstd::libzstd_static)
+    target_link_libraries(pli PRIVATE zstd::libzstd_static)
+  endif()
   # MSVC STL helper stubs for symbols missing from VS 2022 14.39 local install
   # but expected by the prebuilt LLVM 23 Windows libraries (__std_remove_8, etc.)
-  # Compiled from src/win/stl_stubs.c as part of the build. The hermetic stash
-  # is compiled with the runner's own toolset, so its libcpmt already exports
-  # these helpers; adding the stubs there produces duplicate symbols.
+  # Compiled from src/win/stl_stubs.c as part of the build. On CI runners,
+  # libcpmt.lib also exports the __std_* helpers, causing duplicate symbols.
+  # /FORCE:MULTIPLE keeps
+  # the first definition (stl_stubs.c.obj comes before libcpmt.lib on the link
+  # line), so the verified-compatible stubs win. libxml2_stubs.c is always
+  # included (its symbols are never in libcpmt.lib).
   target_sources(pli PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c)
-  # Silence expected clang warnings for the __std_*/xml* helper stubs
-  # (reserved double-underscore names, pre-C99 declaration style).
   set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/win/stl_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/win/libxml2_stubs.c PROPERTIES
     COMPILE_OPTIONS "-Wno-reserved-identifier;-Wno-missing-prototypes;-Wno-unsafe-buffer-usage;-Wno-unreachable-code-return;-Wno-declaration-after-statement;-Wno-unused-parameter")
+  # /FORCE:MULTIPLE: allow duplicate __std_* symbols between stl_stubs.c and
+  # libcpmt.lib; first definition (stubs) wins.
+  target_link_options(pli PRIVATE /FORCE:MULTIPLE)
   message(STATUS "MSVC STL helper stubs: src/win/stl_stubs.c")
-  message(STATUS "Using /MT (static CRT) to match prebuilt LLVM libraries")
 endif()
 
 # Force-include lld + host target so their symbols survive static dead-stripping.
@@ -603,7 +639,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   target_link_options(pli PRIVATE
     /WHOLEARCHIVE:${LLD_ELF_LIB}
-    /WHOLEARCHIVE:${LLD_MACHO_LIB}
     /WHOLEARCHIVE:${LLD_COFF_LIB})
 else()
   target_link_options(pli PRIVATE

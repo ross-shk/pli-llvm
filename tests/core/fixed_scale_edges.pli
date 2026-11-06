@@ -1,30 +1,56 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+ /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rules (16),(17),(135): FIXED DECIMAL/BINARY with q<0 and q>p */
- fixed_edges: procedure options(main);
-     declare d1 fixed dec(3, 5) init(1.23456);  /* q>p: rounds to 3 digits at scale 5 */
-     declare d2 fixed dec(5, -2) init(12300);   /* q<0: stored as 123 * 10^2 */
-     declare b1 fixed bin(15, -3) init(8);      /* q<0: stored as 8 * 2^3 = 64 */
-     
-     /* Check stored values via PUT EDIT with known format */
-     declare buf char(30);
-     
-     put string(buf) edit(d1) (f(10,5));
-     put skip list('d1=', buf);
-     
-     put string(buf) edit(d2) (f(10));
-     put skip list('d2=', buf);
-     
-     put string(buf) edit(b1) (f(10));
-     put skip list('b1=', buf);
-     
-     /* SIZE trap on overflow into declared digits */
-     declare caught fixed bin(31) init(0);
-     on size caught = 1;
-     declare d3 fixed dec(3, 5);
-     d3 = 1234.56;  /* 5 digits at scale 5 → exceeds 3 digits */
-     revert size;
-     put skip list('size_caught=', caught);
-     
-     put skip list('PASS fixed_scale_edges');
- end fixed_edges;
+ /* FIXED scale edges (rules (16),(17),(135)): negative scale and scale >
+    precision for DECIMAL and BINARY (Y33-6003-0 §4.5). */
+ fixed_scale_edges: procedure options(main);
+    /* Negative scale: stored = logical / base^|q|, value = raw * base^|q|. */
+    declare n2 fixed bin(15, -2);
+    declare n4 fixed dec(5, -3);
+    /* Scale > precision: a fraction with the point left of the digits. */
+    declare f2 fixed bin(3, 5);
+    declare f4 fixed dec(2, 4);
+    /* A fractional INITIAL at scale > precision (Y33-6003-0 §4.5). */
+    declare d1 fixed dec(2, 4) init(0.005);
+    declare d3 fixed dec(3, 5);
+    declare caught fixed bin(31) init(0);
+    declare buf char(20);
+
+    n2 = 5;
+    if n2 ^= 4 then do;
+       put skip list('FAIL n2', n2);
+       stop;
+    end;
+    n4 = 2500;
+    if n4 ^= 2000 then do;
+       put skip list('FAIL n4', n4);
+       stop;
+    end;
+
+    f2 = 0.125;
+    if f2 ^= 0.125 then do;
+       put skip list('FAIL f2', f2);
+       stop;
+    end;
+    f4 = 0.005;
+    if f4 ^= 0.005 then do;
+       put skip list('FAIL f4', f4);
+       stop;
+    end;
+
+    put string(buf) edit(d1) (f(10, 5));
+    if substr(buf, 1, 10) ^= '   0.00500' then do;
+       put skip list('FAIL d1', buf);
+       stop;
+    end;
+
+    /* Overflow into the declared digits raises SIZE. */
+    on size caught = 1;
+    d3 = 1234.56;
+    revert size;
+    if caught ^= 1 then do;
+       put skip list('FAIL size', caught);
+       stop;
+    end;
+
+    put skip list('PASS fixed_scale_edges');
+ end fixed_scale_edges;

@@ -1,7 +1,9 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+ /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* FIXED BINARY: scale >= precision still rejected (rule (16)) */
- bad_scale: procedure options(main);
-     declare x fixed bin(15, 15);  /* q = p -> invalid (sign bit) */
-     put skip list(x);
- end bad_scale;
+ /* F scale factor (rule (50)): non-numeric scale factor diagnosed. */
+ bad_fixed_scale: procedure options(main);
+    declare buf char(20);
+    declare a fixed bin(31);
+    a = 1;
+    put string(buf) edit(a) (f(6, 0, 'x'));
+ end bad_fixed_scale;

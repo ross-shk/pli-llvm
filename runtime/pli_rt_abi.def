@@ -61,8 +61,11 @@ PLI_FN(pli_display_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
 PLI_FN(pli_put_edit_char, VOID, (CPTR, I64, I64))
 PLI_FN(pli_put_edit_bit, VOID, (CPTR, I64, I64))
 PLI_FN(pli_put_edit_fixed, VOID, (I64, I64, I64, I64))
+PLI_FN(pli_put_edit_fixed_scaled, VOID, (I64, I64, I64, I64, I64))   /* F scale factor (rule 50) */
 PLI_FN(pli_put_edit_float, VOID, (DOUBLE, I64, I64))
 PLI_FN(pli_put_edit_float_e, VOID, (DOUBLE, I64, I64))
+PLI_FN(pli_put_edit_float_scaled, VOID, (DOUBLE, I64, I64, I64))   /* F scale factor (rule 50) */
+PLI_FN(pli_put_edit_float_e_scaled, VOID, (DOUBLE, I64, I64, I64)) /* E scale factor (rule 50) */
 PLI_FN(pli_put_edit_x, VOID, (I64))
 PLI_FN(pli_put_edit_column, VOID, (I64))
 PLI_FN(pli_put_edit_skip, VOID, (I64))
@@ -220,6 +223,7 @@ PLI_FN(pli_data_name_is, I32, (CPTR, I64, CPTR, I64))
  * (the caller converts to the target's type), A(w) reads a character field,
  * and X/SKIP advance the input position. */
 PLI_FN(pli_get_edit_num, DOUBLE, (I64))
+PLI_FN(pli_get_edit_num_scaled, DOUBLE, (I64, I64)) /* F scale factor input (rule 50) */
 PLI_FN(pli_get_edit_pic, I64, (I64, I64)) /* P input (ADR-291) */
 PLI_FN(pli_get_edit_pic_picture, I64, (I64, CPTR, I64, I64)) /* P input picture-aware */
 PLI_FN(pli_get_edit_pic_sterling, I64, (I64, CPTR, I64)) /* sterling P input (B1): (width, picture, len) */

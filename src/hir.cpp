@@ -296,10 +296,18 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
     // The lowered dynamic upper bound rides on the symbol so irgen's allocaLocals
     // can size the runtime buffer (rules (12),(13)). Safe to keep a raw pointer:
     // the HExpr is owned by this HProgram, which outlives IRGen.
-    if (hd.sym && !hd.dynBounds.empty())
-      hd.sym->dynUb = hd.dynBounds[0].get();
-    if (hd.sym && !hd.dynLbBounds.empty())
-      hd.sym->dynLb = hd.dynLbBounds[0].get();
+    if (hd.sym) {
+      hd.sym->dynUbAxes.assign(hd.dynBounds.size(), nullptr);
+      hd.sym->dynLbAxes.assign(hd.dynLbBounds.size(), nullptr);
+      for (size_t k = 0; k < hd.dynBounds.size(); ++k)
+        if (hd.dynBounds[k]) hd.sym->dynUbAxes[k] = hd.dynBounds[k].get();
+      for (size_t k = 0; k < hd.dynLbBounds.size(); ++k)
+        if (hd.dynLbBounds[k]) hd.sym->dynLbAxes[k] = hd.dynLbBounds[k].get();
+      if (!hd.sym->dynUbAxes.empty())
+        hd.sym->dynUb = hd.sym->dynUbAxes[0];
+      if (!hd.sym->dynLbAxes.empty())
+        hd.sym->dynLb = hd.sym->dynLbAxes[0];
+    }
     // The lowered adjustable-length expression rides on the symbol so irgen
     // can size CONTROLLED generations at each ALLOCATE (rules (15),(18)).
     // Same ownership shape as the dynamic bounds above.
@@ -388,13 +396,14 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->edit = s->edit;
   // Data-directed transmission (rule (106)): carry the mode flag.
   h->data = s->data;
-  for (const auto& f : s->formats) {
+
+  // Helper to recursively lower a FormatItem to HFormatItem.
+  std::function<HFormatItem(const FormatItem&)> lowerFormatItem = [&](const FormatItem& f) -> HFormatItem {
     HFormatItem hf;
     hf.kind = static_cast<HFormatItem::Kind>(f.kind);
     hf.w = lowerExpr(f.w.get());
     hf.d = lowerExpr(f.d.get());
     hf.s = lowerExpr(f.s.get());
-    hf.repeatCount = lowerExpr(f.repeatCount.get());
     hf.pic = f.pic;
     hf.remote = f.remote;
     for (const auto& sb : f.subs) {
@@ -403,7 +412,6 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hs.w = lowerExpr(sb.w.get());
       hs.d = lowerExpr(sb.d.get());
       hs.s = lowerExpr(sb.s.get());
-      hs.repeatCount = lowerExpr(sb.repeatCount.get());
       hs.pic = sb.pic;
       hs.remote = sb.remote;
       for (const auto& ssb : sb.subs) {
@@ -412,15 +420,22 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
         hss.w = lowerExpr(ssb.w.get());
         hss.d = lowerExpr(ssb.d.get());
         hss.s = lowerExpr(ssb.s.get());
-        hss.repeatCount = lowerExpr(ssb.repeatCount.get());
         hss.pic = ssb.pic;
         hss.remote = ssb.remote;
         hs.subs.push_back(std::move(hss));
       }
       hf.subs.push_back(std::move(hs));
     }
-    h->formats.push_back(std::move(hf));
-  }
+    if (f.kind == FormatItem::Repeat) {
+      hf.count = lowerExpr(f.count.get());
+      for (const auto& it : f.items)
+        hf.items.push_back(lowerFormatItem(it));
+    }
+    return hf;
+  };
+
+  for (const auto& f : s->formats)
+    h->formats.push_back(lowerFormatItem(f));
 
   // OPEN/CLOSE and the FILE ( f ) stream option (rules 100-103,105): carry the
   // resolved FILE symbol and the OPEN options across the lowering.

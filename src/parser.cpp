@@ -22,6 +22,19 @@ static int boundedNonNeg(const std::string& text, SourceLoc loc, Diags& d, const
   return (int)v;
 }
 
+// Like boundedNonNeg but allows negative values (for FIXED scale factor q).
+static int boundedInt(const std::string& text, SourceLoc loc, Diags& d, const char* what,
+                      const char* rule) {
+  errno = 0;
+  char* end = nullptr;
+  long v = strtol(text.c_str(), &end, 10);
+  if (errno == ERANGE || end == text.c_str() || *end != '\0' || v < INT_MIN || v > INT_MAX) {
+    d.error(loc, std::string(what) + " is out of range", rule);
+    return 0;
+  }
+  return (int)v;
+}
+
 // A dimension bound must fit the int a Dim carries (rules (12),(13)): a
 // 64-bit bound truncated to int silently declared a zero-element array. The
 // bound itself may be negative (a(-3:3) is a valid axis); only the range
@@ -1612,14 +1625,13 @@ StmtP Parser::parseDeclare() {
 // q < p binary digits (the sign bit takes one of the p). A scale wider than
 // the precision cannot be represented, and the runtime's fixed-point
 // formatters sized their buffers from the scale alone.
-//
-// Y33-6003-0 allows negative scale (q < 0) and scale > precision (q > p).
-// Parser accepts all values; sema validates BINARY q < p.
+// Y33-6003-0 §4.5 (lines 10590-10603) allows negative scale and scale > precision:
+// - Negative scale (-q): integer with implied decimal point q places to the right
+// - Scale > precision: fraction with implied decimal point to the left of digits
 bool Parser::fixedScaleFits(const AttrBag& bag, bool binary) {
   if (bag.prec <= 0)
     return true;
-  if (binary)
-    return bag.scale < bag.prec;
+  // Y33-6003-0: All scale values accepted; sema/IRGen handle semantics
   return true;
 }
 
@@ -1638,20 +1650,18 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       advance();
     }
     if (eat(Tok::Comma)) {
-      if (at(Tok::Minus)) {
-        if (!allowNegScale) {
-          d_.error(cur().loc, "negative scale not allowed here", rule);
-          return false;
-        }
-        advance();
-        if (!at(Tok::Number)) {
-          d_.error(cur().loc, "expected number after '-'", rule);
-          return false;
-        }
-        n2 = -boundedNonNeg(cur().text, cur().loc, d_, "scale", rule);
-        advance();
-      } else if (at(Tok::Number)) {
-        n2 = boundedNonNeg(cur().text, cur().loc, d_, "scale", rule);
+      // Y33-6003-0 §4.5: a FIXED scale factor may be negative or exceed the
+      // precision; FLOAT/BIT length groups have no scale and stay non-negative.
+      if (at(Tok::Minus) && !allowNegScale) {
+        d_.error(cur().loc, "negative scale not allowed here", rule);
+        return false;
+      }
+      bool neg = eat(Tok::Minus);
+      eat(Tok::Plus);  // consume optional '+' if present
+      if (at(Tok::Number)) {
+        n2 = boundedInt(cur().text, cur().loc, d_, "scale factor", rule);
+        if (neg)
+          n2 = -n2;
         advance();
       }
     }
@@ -1663,8 +1673,10 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.fixed = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b, true);  // FIXED allows negative scale
-      if (a > 0) {
+      parenNums(a, b, true);
+      if (a <= 0) {
+        d_.error(cur().loc, "FIXED precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }
@@ -1675,9 +1687,12 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.floating = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b, false);  // FLOAT doesn't allow negative scale
-      if (a > 0)
+      parenNums(a, b, false);
+      if (a <= 0) {
+        d_.error(cur().loc, "FLOAT precision must be positive", "(16)");
+      } else {
         bag.prec = a;
+      }
     }
     return true;
   }
@@ -1685,8 +1700,10 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.binary = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b, true);  // BINARY allows negative scale
-      if (a > 0) {
+      parenNums(a, b, true);
+      if (a <= 0) {
+        d_.error(cur().loc, "BINARY precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }
@@ -1697,8 +1714,10 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     bag.decimal = true;
     advance();
     if (at(Tok::LParen)) {
-      parenNums(a, b, true);  // DECIMAL allows negative scale
-      if (a > 0) {
+      parenNums(a, b, true);
+      if (a <= 0) {
+        d_.error(cur().loc, "DECIMAL precision must be positive", "(16)");
+      } else {
         bag.prec = a;
         bag.scale = b;
       }
@@ -1748,7 +1767,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       bag.starLen = true;
       expect(Tok::RParen, rule);
     } else if (at(Tok::LParen)) {
-      parenNums(a, b, false);  // BIT length doesn't allow negative
+      parenNums(a, b, false);
       if (a > 0)
         bag.slen = a;
     }
@@ -2351,8 +2370,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "ENVIRONMENT") {
-        // ENVIRONMENT (rule 39, Y33 6548): implementation-defined file
-        // attribute. Accept and treat as a file variable; skip the option list.
+        // ENVIRONMENT (rule 39): implementation-defined file attribute.
+        // Accepted on DECLARE and treated as a file variable; the option list
+        // is skipped and has no runtime effect (ADR-373).
         advance();
         bag.file = true;
         if (at(Tok::LParen)) skipParen("(39)");
@@ -2727,10 +2747,6 @@ void Parser::parseDeclTail(DeclItem& item) {
   item.areaSize = std::move(bag.areaSize);
   item.areaStar = bag.areaStar;
   item.sawStatic = bag.staticAttr;
-  // A static AREA is real storage; every other STATIC is still automatic
-  // (rule (15)), so the no-op warning is emitted here.
-  if (bag.staticAttr && !item.area)
-    d_.warn(staticLoc, "attribute STATIC is accepted but has no effect in this stage", "(15)");
   item.offset = bag.offset;
   item.offsetRef = std::move(bag.offsetRef);
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
@@ -3899,77 +3915,55 @@ static FormatItem cloneFormatItem(const FormatItem& f) {
   c.w = cloneFormatExpr(f.w.get());
   c.d = cloneFormatExpr(f.d.get());
   c.s = cloneFormatExpr(f.s.get());
-  c.repeatCount = cloneFormatExpr(f.repeatCount.get());
   c.remote = f.remote;
+  c.pic = f.pic;
   for (const auto& sb : f.subs)
     c.subs.push_back(cloneFormatItem(sb));
+  c.count = cloneFormatExpr(f.count.get());
+  for (const auto& it : f.items)
+    c.items.push_back(cloneFormatItem(it));
   return c;
 }
 
 bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
   if (cur().kind == Tok::LParen) {
+    SourceLoc lparenLoc = cur().loc;
     advance();
-    // Check if this is a repetition count: parse an expression
-    // It could be a literal or a variable/expression
-    if (at(Tok::Number) && !cur().isFloat) {
-      // Integer literal - parse as before for backward compat
-      int n = boundedNonNeg(cur().text, cur().loc, d_, "repetition count", "(48)");
-      advance();
-      if (!expect(Tok::RParen, "(48)"))
-        return false;
-      if (!eat(Tok::LParen)) {
-        d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
-        return false;
-      }
-      std::vector<FormatItem> group;
-      if (!at(Tok::RParen)) {
-        for (;;) {
-          if (!parseFormatItemInto(group))
-            return false;
-          if (!eat(Tok::Comma))
-            break;
-        }
-      }
-      if (!expect(Tok::RParen, "(48)"))
-        return false;
-      // Create a Repeat FormatItem
-      FormatItem fi;
-      fi.kind = FormatItem::Repeat;
-      fi.repeatCount = std::make_unique<Expr>();
-      fi.repeatCount->kind = Expr::IntLit;
-      fi.repeatCount->ival = n;
-      fi.repeatCount->ty = Type::fixedBin(31, 0);
-      fi.subs = std::move(group);
-      out.push_back(std::move(fi));
-      return true;
-    } else {
-      // Parse as expression for dynamic repetition count
-      ExprP repeatExpr = parseExpr();
-      if (!expect(Tok::RParen, "(48)"))
-        return false;
-      if (!eat(Tok::LParen)) {
-        d_.error(cur().loc, "expected '(' to open the repeated format group", "(48)");
-        return false;
-      }
-      std::vector<FormatItem> group;
-      if (!at(Tok::RParen)) {
-        for (;;) {
-          if (!parseFormatItemInto(group))
-            return false;
-          if (!eat(Tok::Comma))
-            break;
-        }
-      }
-      if (!expect(Tok::RParen, "(48)"))
-        return false;
-      // Create a Repeat FormatItem with dynamic count
-      FormatItem fi;
-      fi.kind = FormatItem::Repeat;
-      fi.repeatCount = std::move(repeatExpr);
-      fi.subs = std::move(group);
-      out.push_back(std::move(fi));
-      return true;
+    // Parse the repetition count as an expression (rule 47).
+    // A literal integer is still allowed and will be unrolled at parse time.
+    ExprP count = parseExpr();
+    if (!expect(Tok::RParen, "(47)"))
+      return false;
+    if (!eat(Tok::LParen)) {
+      d_.error(cur().loc, "expected '(' to open the repeated format group", "(47)");
+      return false;
     }
+    std::vector<FormatItem> group;
+    if (!at(Tok::RParen)) {
+      for (;;) {
+        if (!parseFormatItemInto(group))
+          return false;
+        if (!eat(Tok::Comma))
+          break;
+      }
+    }
+    if (!expect(Tok::RParen, "(47)"))
+      return false;
+    // If the count is a non-negative integer literal, unroll at parse time.
+    // Otherwise, create a Repeat node for runtime evaluation.
+    if (count->kind == Expr::IntLit && count->ival >= 0) {
+      long long n = count->ival;
+      for (long long i = 0; i < n; ++i)
+        for (const FormatItem& gi : group)
+          out.push_back(cloneFormatItem(gi));
+    } else {
+      FormatItem fi;
+      fi.kind = FormatItem::Repeat;
+      fi.count = std::move(count);
+      fi.items = std::move(group);
+      out.push_back(std::move(fi));
+    }
+    return true;
   }
   FormatItem fi;
   if (!parseSingleFormatItem(fi))
@@ -4048,7 +4042,7 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     return true;
   }
   if (fi.kind == FormatItem::C) {
-    // C(real[,real]): each part is an F, E, or P real format.
+    // C(real[,real]): each part is an F, E, or P real format (rule (51)).
     if (!expect(Tok::LParen, "(51)"))
       return false;
     for (;;) {
@@ -4752,8 +4746,8 @@ StmtP Parser::parseRecordIO() {
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
 // record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
-// (101),(112)). KEYED/DIRECT and the IDENT/LINESIZE/PAGESIZE/ENVIRONMENT
-// options stay unimplemented.
+// (101),(112)). KEYED/DIRECT stay diagnosed; IDENT/LINESIZE/PAGESIZE
+// are accepted no-ops; ENVIRONMENT is diagnosed (rule 101).
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -4834,30 +4828,48 @@ StmtP Parser::parseOpen() {
       continue;
     }
     if (atWord("IDENT")) {
+      // IDENT(expr) (rule (101)): implementation-dependent user labels; parsed
+      // and type-checked, with no runtime effect on regular files (ADR-373).
       advance();
       if (eat(Tok::LParen)) {
         st->openIdent = parseExpr();
         expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "IDENT requires a parenthesized argument", "(101)");
+        resync();
+        return nullptr;
       }
       continue;
     }
     if (atWord("LINESIZE")) {
+      // LINESIZE(expr) (rule (101)): a per-file line width; stream output
+      // auto-wraps when it is positive (ADR-373).
       advance();
       if (eat(Tok::LParen)) {
         st->openLinesize = parseExpr();
         expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "LINESIZE requires a parenthesized argument", "(101)");
+        resync();
+        return nullptr;
       }
       continue;
     }
     if (atWord("PAGESIZE")) {
+      // PAGESIZE(expr) (rule (101)): stored per file for page tracking (ADR-373).
       advance();
       if (eat(Tok::LParen)) {
         st->openPagesize = parseExpr();
         expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "PAGESIZE requires a parenthesized argument", "(101)");
+        resync();
+        return nullptr;
       }
       continue;
     }
     if (atWord("ENVIRONMENT")) {
+      // ENVIRONMENT is a DECLARE FILE attribute (rule 39), not an OPEN option.
       d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
       advance();
       if (at(Tok::LParen)) skipParen("(101)");

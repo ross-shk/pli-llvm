@@ -1,0 +1,6 @@
+ /* Rules (13): a '*' adjustable later axis is parameter-only. */
+ bad_dynamic_later_axis: procedure options(main);
+   declare n fixed bin(31);
+   n = 2;
+   declare a(n, *) fixed bin(31);
+ end bad_dynamic_later_axis;

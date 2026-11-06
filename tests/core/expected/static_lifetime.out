@@ -1,0 +1,26 @@
+recursive_static call 1 count = 1
+recursive_static call 2 count = 2
+recursive_static call 3 count = 3
+recursive_static call 1 count = 4
+recursive_static call 2 count = 5
+recursive_static call 3 count = 6
+recursive_static call 1 count = 7
+recursive_static call 2 count = 8
+recursive_static call 3 count = 9
+nested BEGIN: outer= 10 inner= 20
+nested BEGIN 2nd: outer= 11 inner= 21
+static_array_init arr( 1 ) = 1
+static_array_init arr( 2 ) = 2
+static_array_init arr( 3 ) = 3
+static_array_init arr( 4 ) = 4
+static_array_init arr( 5 ) = 5
+--- second call ---
+static_array_init arr( 1 ) = 10
+static_array_init arr( 2 ) = 20
+static_array_init arr( 3 ) = 30
+static_array_init arr( 4 ) = 40
+static_array_init arr( 5 ) = 50
+static_struct_init s.a = 100 s.b = 200
+--- second call ---
+static_struct_init s.a = 101 s.b = 202
+PASS static_lifetime

@@ -98,18 +98,23 @@ struct DefinedSub {
 // that acts without consuming data, or a remote R(label) spliced from a
 // FORMAT statement (rule (55)). F(w,d[,p]): w = field width, d =
 // fractional digits, p = scale factor (evaluated, then formatting uses
- // (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
- // formats for the real/imaginary parts; P carries a picture string (rule 53).
- struct FormatItem {
-   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P, Repeat } kind = A;
-   ExprP w;                      // field width
-   ExprP d;                      // F/E: fractional digits
-   ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
-   ExprP repeatCount;            // Repeat: repetition count expression (rule (48))
-    std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
-    std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
-    std::vector<FormatItem> subs; // C: 1-2 inner real (F/E) formats (rule (51)); Repeat: repeated group
- };
+// (w,d)); A(w)/B(w)/X(w): w = field width; C holds 1-2 inner real
+// formats for the real/imaginary parts; P carries a picture string (rule 53).
+// Repeat(iter, items): iteration factor (rule 47) - runtime-evaluated count
+// with nested format group; a zero count skips the group (a negative count is
+// diagnosed, rule 47).
+struct FormatItem {
+  enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P, Repeat } kind = A;
+  ExprP w;                       // field width
+  ExprP d;                       // F/E: fractional digits
+  ExprP s;                       // F/E: scale factor p (rule (50)); null = absent
+  std::string remote;            // R: FORMAT statement label (rule (55)); empty = none
+  std::string pic;               // P: picture string (rules (53),(146)-(148)); empty = none
+  std::vector<FormatItem> subs;  // C: 1-2 inner real (F/E/P) formats (rule (51))
+  // Repeat (rule 47):
+  ExprP count;                   // repetition count expression
+  std::vector<FormatItem> items; // nested format group
+};
 
 struct DeclItem {
   std::string name;
@@ -321,7 +326,7 @@ struct Stmt {
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
                            // direct organisation; same keyed access as KEYED
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
-  ExprP openIdent = nullptr;   // IDENT ( expression )
+  ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
   // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the

@@ -155,9 +155,12 @@ extern int rt_out_discard;
 extern int rt_pli_nonprint[PLI_MAX_FILES];
 /* Page counters per file slot (PLI PAGENO pseudo-variable). */
 extern volatile long long rt_pli_pages[PLI_MAX_FILES];
-/* Per-file LINESIZE/PAGESIZE from OPEN (slice 4). */
+/* Per-file LINESIZE/PAGESIZE from OPEN (rule (101), ADR-373): LINESIZE wraps
+ * stream output when positive; 0 = implementation default (no wrap). PAGESIZE
+ * is stored for page tracking. Defined in rt_stream.c. */
 extern int rt_pli_linesize[PLI_MAX_FILES];
 extern int rt_pli_pagesize[PLI_MAX_FILES];
+/* Slot of the file an output record currently targets, or -1 (rt_file.c). */
 extern int rt_cur_file_slot;
 
 /* Stream helpers shared across TUs (defined in rt_stream.c). */

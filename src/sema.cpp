@@ -454,10 +454,13 @@ bool Sema::run(Program& prog, bool compileOnly) {
   // Parameters resolve here too, so a caller's argument checks (rules (34),
   // (78)) see every callee's descriptors regardless of procedure order
   // (ADR-094); processProc skips re-resolving them.
+  // beginScopes_ is keyed by unique Stmt*, so one clear before the whole
+  // collection pass suffices — clearing per procedure would erase the previous
+  // procedure's BEGIN scopes before pass 2 checks them (rule (68)).
+  beginScopes_.clear();
   for (auto& p : prog.procs) {
     if (p->isPackage)
       continue;
-    beginScopes_.clear();
     collectDecls(p->body, scopeFor(p.get()), p.get(), false);
     // BASED bases resolve before params so a bare parameter base becomes a
     // POINTER parameter (rule 25), not an implicit arithmetic parameter.
@@ -1388,6 +1391,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       std::vector<int> parentOf;
       std::vector<std::vector<int>> children;
       for (auto& item : s->decls) {
+        // RESERVED reserves storage without initialization (ADR-203/ADR-373).
         if (item.reserved && (item.init || !item.initItems.empty() ||
                               item.initCall || item.valueInit))
           d_.error(item.loc, "RESERVED and INITIAL cannot be combined", "(15)");
@@ -1604,8 +1608,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // the F(n) scaling factor stay diagnosed for now.
         if (!it.picture.empty()) {
           const pli::PictureSpec spec = pli::classifyPicture(it.picture);
-          // Rule (148): a character off the classes list or a binary digit
-          // specifier diagnoses with its own rule before anything else.
+          // Rule (148): an off-class character or a binary digit specifier is
+          // diagnosed before the generic picture checks.
           if (spec.badChar) {
             d_.error(it.loc, "picture character '" + std::string(1, spec.badChar) +
                                  "' is not in a picture class",
@@ -1793,25 +1797,30 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           }
         }
         item.dynMembers = std::move(dynMs);
-        // Validate FIXED scale (rule (16)): BINARY scale must be < precision;
-        // DECIMAL scale can be any value (negative or > precision), but warn on extreme.
-        if (item.ty.isFixed()) {
-          bool binary = item.ty.k == TK::FixedBin;
-          int p = item.ty.prec;
-          int q = item.ty.scale;
-          if (binary && q >= p) {
-            d_.error(item.loc, "FIXED BINARY scale factor must be less than precision", "(16)");
-          }
-          if (!binary && (q > 31 || q < -31)) {
-            d_.warn(item.loc, "extreme FIXED DECIMAL scale may lose precision", "(16)");
-          }
-        }
         // A STATIC AREA (rule (20)) is real static storage: its region lives for
         // the whole program. AREA(*) inherits the argument's region, so the
         // storage attribute cannot apply to it.
-        bool staticItem = isStatic || (item.area && item.sawStatic && !item.areaStar);
+        // STATIC storage class (rule 23): applies to any variable, not just AREA.
+        // Non-AREA STATIC variables get true static storage (LLVM global).
+        // AREA STATIC already handled; EXTERNAL handled separately below.
+        bool staticItem = item.sawStatic && !item.areaStar;
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, staticItem);
         item.sym->owner = p; // which procedure's frame holds this variable
+        // STATIC on invalid targets (rule 23)
+        if (item.sawStatic) {
+          if (!item.basedBase.empty()) {
+            d_.error(item.loc, "STATIC attribute not allowed on BASED variable", "(23)");
+          }
+          if (!item.definedBase.empty()) {
+            d_.error(item.loc, "STATIC attribute not allowed on DEFINED variable", "(23)");
+          }
+          if (item.controlled && !(p && p->isPackage)) {
+            d_.error(item.loc, "STATIC attribute not allowed on CONTROLLED variable", "(23)");
+          }
+          if (item.fileAttr) {
+            d_.error(item.loc, "STATIC attribute not allowed on FILE variable", "(23)");
+          }
+        }
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
           // common global, so every module resolves the same symbol.
@@ -2259,6 +2268,19 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc, "a parameter has no storage of its own, so STATIC cannot apply",
                      "(20)");
         }
+        // STATIC on any parameter is invalid (rule 23)
+        // Recompute isParam for non-AREA items
+        if (item.sawStatic) {
+          bool isParam =
+              std::find(p->params.begin(), p->params.end(), item.name) != p->params.end();
+          if (!isParam)
+            for (auto& st : p->body)
+              if (st && st->kind == Stmt::Entry &&
+                  std::find(st->params.begin(), st->params.end(), item.name) != st->params.end())
+                isParam = true;
+          if (isParam)
+            d_.error(item.loc, "STATIC attribute not allowed on parameter", "(23)");
+        }
         // OFFSET (rule (22)): an opaque locator into an AREA. The optional
         // reference names the associated AREA; it is validated here and used to
         // check the ALLOCATE/FREE ... IN(area) option.
@@ -2327,10 +2349,23 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                            (item.ty.elementType().isNumeric() || item.ty.elementType().isBit());
             // A `(*)` BASED array takes its extent from each ALLOCATE
             // (rules (13),(25),(89)), like a CONTROLLED `(*)` axis.
+            // Served: leading '*' with constant later axes. Multiple '*' diagnosed.
             bool basedStar = hasStar &&
                              (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
+            bool basedMultiStar = false;
+            if (basedStar) {
+              for (size_t k = 1; k < item.ty.dims.size(); ++k)
+                if (item.ty.dims[k].adj)
+                  basedMultiStar = true;
+              if (!item.ty.dims.empty() && !item.ty.dims[0].adj)
+                basedMultiStar = true;
+            }
             if (hasStar && !isParam && !ctlStar && !basedStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
+            if (basedMultiStar)
+              d_.error(item.loc,
+                       "a BASED '*' extent needs a leading '*' with constant later axes",
+                       "(13)");
             if (hasStar && isParam) {
               // A multi-axis '*' parameter is served when only the first axis
               // is adjustable and later axes are constant (rules (13),(36)):
@@ -2353,16 +2388,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             for (auto& b : item.dynLbBounds)
               if (b)
                 typeExpr(b.get(), sc, p);
-            // A dynamic array may be multi-axis, but only the first axis may
-            // have a runtime extent; later axes must be constant in this stage.
-            // `*` CONTROLLED axes are exempt: their extents come from each
-            // ALLOCATE, not from block entry (rules (13),(89)).
-            for (size_t k = 1; k < item.ty.dims.size(); ++k)
-              if ((item.ty.dims[k].dyn || item.ty.dims[k].lbDyn) &&
-                  !(item.controlled && item.ty.dims[k].adj))
-                d_.error(item.loc,
-                         "a dynamic array may only have a dynamic first axis in this stage",
-                         "(13)");
+            // Dynamic later axes are served (rules (12),(13)): every axis may
+            // carry a runtime extent; later axes are evaluated at block entry and
+            // fold into the flat row-major index (Wave 2 contract).
             // A single-axis dynamic lower bound on a parameter is served:
             // the bound exprs name caller-supplied params read at entry.
             if (item.sym->isStatic)
@@ -2438,9 +2466,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // CONTROLLED keeps generation-stack storage even at package scope,
           // so its member INITIAL assigns per allocation (SC26-3114), never
           // as a static global initializer.
-          if (item.sym->isStatic && !item.sym->controlled) {
-            d_.error(item.loc, "INITIAL on a static structure is not implemented in this stage",
-                     "(26)");
+          // STATIC structures with INITIAL are now supported (rule 26): they
+          // get constant-folded global initializers in emitGlobals().
+          if (item.sym->controlled) {
+            // CONTROLLED: per-allocation initialization handled at runtime
+            if (hasDynamicMember(item.ty)) {
+              d_.error(item.loc,
+                       "INITIAL on a CONTROLLED structure with a dynamic member is "
+                       "not implemented in this stage",
+                       "(26)");
+            }
           } else if (hasDynamicMember(item.ty)) {
             // INITIAL covering a dynamic member (rules (13),(26), ADR-092):
             // only a trailing top-level dynamic array member is served — the
@@ -2602,13 +2637,18 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             item.sym->initExpr = folded; // consumed by code generation
         }
         if (item.initCall) {
-          // INITIAL(CALL f(...)) (rule 27): type-check the call — this resolves
-          // the function, its arguments, and its return type. Store the call on
-          // the symbol only when it returns a value; a non-function (void) call
-          // was already diagnosed in typeExpr.
-          typeExpr(item.initCall.get(), sc, p);
-          if (!item.initCall->ty.isVoid())
-            item.sym->initCall = item.initCall.get(); // consumed by codegen
+          // INITIAL(CALL f(...)) (rule 27): not allowed on STATIC variables.
+          if (item.sawStatic) {
+            d_.error(item.loc, "INITIAL CALL not allowed on STATIC variable", "(27)");
+          } else {
+            // INITIAL(CALL f(...)) (rule 27): type-check the call — this resolves
+            // the function, its arguments, and its return type. Store the call on
+            // the symbol only when it returns a value; a non-function (void) call
+            // was already diagnosed in typeExpr.
+            typeExpr(item.initCall.get(), sc, p);
+            if (!item.initCall->ty.isVoid())
+              item.sym->initCall = item.initCall.get(); // consumed by codegen
+          }
         }
         if (item.valueInit) {
           // VALUE(const) (extension, ADR-108): a scalar named constant. It
@@ -2924,35 +2964,34 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
     // declared type's scale, which is the type-directed step. A leading
     // unary sign folds with the expression, so it needs no separate case.
     ConstNum num;
+    // A constant expression folds to a decimal literal at its own scale; the
+    // codegen initializer then rescales it to the declared FIXED type.
     if (!constNumOf(lit, num) ||
-        !foldConstExpr(lit, ty, ty.scale)) {
+        !foldConstExpr(lit, ty.k == TK::FixedBin ? Type::fixedDec(num.prec, num.scale) : ty,
+                       ty.k == TK::FixedBin ? num.scale : ty.scale)) {
       d_.error(loc, "INITIAL requires a constant in this stage", "(26)");
       return nullptr;
     }
   }
   // A FIXED target carries a scale, so an integer/decimal literal must be
   // rescaled to it: the constant is expressed with the declared scale and
-  // codegen applies the declared scale (ADR-240).
+  // codegen applies the declared scale (ADR-240). Scale > precision rounds to
+  // the declared digit count (Y33-6003-0 §4.5).
   if ((lit->kind == Expr::IntLit || lit->kind == Expr::DecLit) && ty.isFixed()) {
     if (ty.k == TK::FixedDec) {
-      // For DECIMAL, fold the literal to the target precision/scale
       ConstNum num;
-      if (constNumOf(lit, num)) {
-        // Fold the value to target precision/scale
-        if (!foldConstExpr(lit, ty, ty.scale)) {
-          d_.error(loc, "INITIAL value cannot be folded to target type", "(26)");
-          return nullptr;
-        }
+      if (constNumOf(lit, num) && !foldConstExpr(lit, ty, ty.scale)) {
+        d_.error(loc, "INITIAL value cannot be folded to target type", "(26)");
+        return nullptr;
       }
-      if (lit->kind == Expr::IntLit) {
+      if (lit->kind == Expr::IntLit)
         lit->kind = Expr::DecLit;
-      }
       lit->decScale = ty.scale;
       lit->ty = Type::fixedDec(lit->decPrec, ty.scale);
       lit->folded = true;
     } else if (ty.k == TK::FixedBin) {
-      // For BINARY, the literal stays as IntLit but with target scale info
-      // The actual scaling is done by codegen
+      // The codegen initializer converts the decimal literal with
+      // binLitRescaled (value * 2^q, fraction divided by 10^scale).
       lit->ty = Type::fixedBin(ty.prec, ty.scale);
       lit->folded = true;
     }
@@ -5114,9 +5153,19 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       s->fileSym->openRecord = s->openRecord;
       s->fileSym->openKeyed = s->openKeyed;
       s->fileSym->openDirect = s->openDirect;
-      if (s->openLinesize) typeExpr(s->openLinesize.get(), sc, p);
-      if (s->openPagesize) typeExpr(s->openPagesize.get(), sc, p);
-      if (s->openIdent) typeExpr(s->openIdent.get(), sc, p);
+    }
+    if (s->kind == Stmt::Open) {
+      // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE take expressions.
+      if (s->openIdent)
+        typeExpr(s->openIdent.get(), sc, p);
+      if (s->openLinesize)
+        typeExpr(s->openLinesize.get(), sc, p);
+      if (s->openPagesize)
+        typeExpr(s->openPagesize.get(), sc, p);
+      if (s->openInput && (s->openLinesize || s->openPagesize))
+        d_.error(s->loc, "LINESIZE/PAGESIZE are not valid on an INPUT file", "(101)");
+      if (s->openRecord && (s->openLinesize || s->openPagesize))
+        d_.error(s->loc, "LINESIZE/PAGESIZE are STREAM-only options", "(101)");
     }
     break;
   case Stmt::Goto:
@@ -5278,18 +5327,20 @@ static ExprP cloneFmtExpr(const Expr* e) {
 }
 
 static FormatItem cloneFmtItem(const FormatItem& f) {
-  FormatItem c;
-  c.kind = f.kind;
-  c.w = cloneFmtExpr(f.w.get());
-  c.d = cloneFmtExpr(f.d.get());
-  c.s = cloneFmtExpr(f.s.get());
-  c.repeatCount = cloneFmtExpr(f.repeatCount.get());
-  c.pic = f.pic;
-  c.remote = f.remote;
-  for (const auto& sb : f.subs)
-    c.subs.push_back(cloneFmtItem(sb));
-  return c;
-}
+   FormatItem c;
+   c.kind = f.kind;
+   c.w = cloneFmtExpr(f.w.get());
+   c.d = cloneFmtExpr(f.d.get());
+   c.s = cloneFmtExpr(f.s.get());
+   c.pic = f.pic;
+   c.remote = f.remote;
+   for (const auto& sb : f.subs)
+     c.subs.push_back(cloneFmtItem(sb));
+   c.count = cloneFmtExpr(f.count.get());
+   for (const auto& it : f.items)
+     c.items.push_back(cloneFmtItem(it));
+   return c;
+ }
 
 // Splice R(label) items with the referenced FORMAT lists (rules (44),(55)).
 // Nested R references expand recursively; cycles and unknown labels are
@@ -5298,7 +5349,7 @@ static FormatItem cloneFmtItem(const FormatItem& f) {
 bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
   std::unordered_set<std::string> active;
   std::function<bool(std::vector<FormatItem>&, int)> expand = [&](std::vector<FormatItem>& list,
-                                                                  int depth) -> bool {
+                                                                   int depth) -> bool {
     if (depth > 16) {
       d_.error(loc, "remote format nesting too deep (possible R cycle)", "(55)");
       return false;
@@ -5306,7 +5357,14 @@ bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
     std::vector<FormatItem> out;
     for (auto& f : list) {
       if (f.kind != FormatItem::Remote) {
-        out.push_back(cloneFmtItem(f));
+        if (f.kind == FormatItem::Repeat) {
+          FormatItem copy = cloneFmtItem(f);
+          if (!expand(copy.items, depth))
+            return false;
+          out.push_back(std::move(copy));
+        } else {
+          out.push_back(cloneFmtItem(f));
+        }
         continue;
       }
       auto it = formatMap_.find(f.remote);
@@ -5344,121 +5402,133 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     return;
   for (auto& it : s->items)
     typeExpr(it.get(), sc, p);
-  for (auto& f : s->formats) {
-    typeExpr(f.w.get(), sc, p);
-    typeExpr(f.d.get(), sc, p);
-    typeExpr(f.s.get(), sc, p);
-    typeExpr(f.repeatCount.get(), sc, p);
-    for (auto& sb : f.subs) {
-      typeExpr(sb.w.get(), sc, p);
-      typeExpr(sb.d.get(), sc, p);
-      typeExpr(sb.s.get(), sc, p);
-      typeExpr(sb.repeatCount.get(), sc, p);
+  // First pass: type all format items including nested Repeat groups.
+  std::function<void(std::vector<FormatItem>&)> typeFormats = [&](std::vector<FormatItem>& fmts) {
+    for (auto& f : fmts) {
+      typeExpr(f.w.get(), sc, p);
+      typeExpr(f.d.get(), sc, p);
+      typeExpr(f.s.get(), sc, p);
+      for (auto& sb : f.subs) {
+        typeExpr(sb.w.get(), sc, p);
+        typeExpr(sb.d.get(), sc, p);
+        typeExpr(sb.s.get(), sc, p);
+      }
+      if (f.kind == FormatItem::Repeat) {
+        typeExpr(f.count.get(), sc, p);
+        // The repetition count must be an integer-compatible scalar (rule 47).
+        if (f.count && !f.count->ty.isNumeric() && !f.count->ty.isVoid())
+          d_.error(f.count->loc, "a format iteration count must be an integer expression", "(47)");
+        // A constant negative count is a compile-time error (ADR-376); a
+        // runtime-evaluated negative value traps in IRGen.
+        bool negLit = f.count && f.count->kind == Expr::IntLit && f.count->ival < 0;
+        bool negUnary = f.count && f.count->kind == Expr::Unary && f.count->op == Tok::Minus &&
+                        f.count->a && f.count->a->kind == Expr::IntLit;
+        if (negLit || negUnary)
+          d_.error(f.count->loc, "a format repetition count must not be negative", "(47)");
+        typeFormats(f.items);
+      }
+      // An F/E scale factor (rule (50)) is a numeric expression evaluated for
+      // its effects; formatting itself uses (w,d).
+      if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
+        d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
     }
-    // An F/E scale factor (rule (50)) is a numeric expression evaluated for
-    // its effects; formatting itself uses (w,d).
-    if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
-      d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
-  }
+  };
+  typeFormats(s->formats);
   // Aggregate items transmit element-wise; expansion runs before format
   // pairing so EDIT counts line up.
   if (!expandAggregateItems(s, sc, p, isGet))
     return;
   size_t dataIdx = 0;
-  for (auto& f : s->formats) {
-    if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-        f.kind == FormatItem::Line || f.kind == FormatItem::Column || f.kind == FormatItem::Repeat)
-      continue; // a control format or repetition group consumes no data item directly
-    if (f.kind == FormatItem::Remote) {
-      d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-      continue;
-    }
-    if (dataIdx >= s->items.size()) {
-      d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
-      break;
-    }
-    Expr* it = s->items[dataIdx].get();
-    if (f.kind == FormatItem::A && !it->ty.isChar())
-      d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
-    else if (f.kind == FormatItem::B && !it->ty.isBit())
-      d_.error(it->loc, "a B format requires a BIT item", "(52)");
-    else if (f.kind == FormatItem::C && !it->ty.isComplex())
-      d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
-    else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
-      const char* letter = f.kind == FormatItem::F ? "F" : "E";
-      const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
-      d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
-    }
-    if (f.kind == FormatItem::P && isGet) {
-      validatePictureFormat(f, it, isGet, false);
-    } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-      validatePictureFormat(f, it, isGet, false);
-    } else if (f.kind == FormatItem::P) {
-      d_.error(it->loc, "a P format requires a numeric item", "(53)");
-    }
-    if (f.kind == FormatItem::C) {
-      for (auto& sb : f.subs) {
-        if (sb.kind == FormatItem::P)
-          validatePictureFormat(sb, it, isGet, true);
+  // Second pass: pair data formats with data items, skipping control formats
+  // and Repeat groups (which expand at runtime).
+  std::function<void(std::vector<FormatItem>&, size_t&)> pairFormats = [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
+    for (auto& f : fmts) {
+      if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+          f.kind == FormatItem::Line || f.kind == FormatItem::Column)
+        continue; // a control format consumes no data item
+      if (f.kind == FormatItem::Remote) {
+        d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+        continue;
       }
-    }
-    if (isGet) {
-      if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
-        d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
-                 "(53)");
-      bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
-                 it->kind == Expr::Subscript;
-      if (!ref)
-        d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
-      else if (it->ty.isStruct())
-        d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
-      else
-        checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
-    } else if (it->ty.isVoid()) {
-      d_.error(it->loc, "invalid data list item", "(110)");
-}
-  ++dataIdx;
-}
-  // Count data formats, expanding repetition groups (rule (48)).
-  // If any repetition count is dynamic (not an integer literal), we cannot
-  // verify the data/format count at compile time, so we skip the check.
-  bool hasDynamicRepetition = false;
-  std::function<size_t(const std::vector<FormatItem>&)> countDataFormats;
-  countDataFormats = [&](const std::vector<FormatItem>& formats) -> size_t {
-    size_t count = 0;
-    for (const auto& f : formats) {
-      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P) {
-        ++count;
-      } else if (f.kind == FormatItem::Repeat) {
-        long long repCount = 1;
-        bool isIntLit = (f.repeatCount && f.repeatCount->kind == Expr::IntLit);
-        bool isNegIntLit = (f.repeatCount && f.repeatCount->kind == Expr::Unary &&
-                            f.repeatCount->op == Tok::Minus && f.repeatCount->a &&
-                            f.repeatCount->a->kind == Expr::IntLit);
-        if (isIntLit) {
-          repCount = f.repeatCount->ival;
-          if (repCount < 0) {
-            d_.error(f.repeatCount->loc, "repetition count must be non-negative", "(48)");
-          }
-        } else if (isNegIntLit) {
-          repCount = -f.repeatCount->a->ival;
-          d_.error(f.repeatCount->loc, "repetition count must be non-negative", "(48)");
-        } else {
-          // Dynamic repetition count: allowed but needs runtime evaluation.
-          // Mark as dynamic so codegen knows to emit a loop.
-          hasDynamicRepetition = true;
-        }
-        count += repCount * countDataFormats(f.subs);
+      if (f.kind == FormatItem::Repeat) {
+        size_t savedDi = dataIdx;
+        pairFormats(f.items, dataIdx);
+        dataIdx = savedDi;
+        continue;
       }
+      if (dataIdx >= s->items.size()) {
+        d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+        break;
+      }
+      Expr* it = s->items[dataIdx].get();
+      if (f.kind == FormatItem::A && !it->ty.isChar())
+        d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+      else if (f.kind == FormatItem::B && !it->ty.isBit())
+        d_.error(it->loc, "a B format requires a BIT item", "(52)");
+      else if (f.kind == FormatItem::C && !it->ty.isComplex())
+        d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
+      else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+        const char* letter = f.kind == FormatItem::F ? "F" : "E";
+        const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+        d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
+      }
+      if (f.kind == FormatItem::P && isGet) {
+        validatePictureFormat(f, it, isGet, false);
+      } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+        validatePictureFormat(f, it, isGet, false);
+      } else if (f.kind == FormatItem::P) {
+        d_.error(it->loc, "a P format requires a numeric item", "(53)");
+      }
+      // C(real[,real]) may hold a P picture part (rule (51)); validate it as a
+      // numeric complex part.
+      if (f.kind == FormatItem::C) {
+        for (auto& sb : f.subs)
+          if (sb.kind == FormatItem::P)
+            validatePictureFormat(sb, it, isGet, true);
+      }
+      if (isGet) {
+        if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
+          d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                   "(53)");
+        bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                   it->kind == Expr::Subscript;
+        if (!ref)
+          d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
+        else if (it->ty.isStruct())
+          d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+        else
+          checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
+      } else if (it->ty.isVoid()) {
+        d_.error(it->loc, "invalid data list item", "(110)");
+      }
+      ++dataIdx;
     }
-    return count;
   };
-  size_t dataFormats = countDataFormats(s->formats);
-  if (!hasDynamicRepetition && dataFormats < s->items.size())
+  pairFormats(s->formats, dataIdx);
+  size_t dataFormats = 0;
+  bool hasRepeat = false;
+  std::function<void(std::vector<FormatItem>&)> countDataFormats = [&](std::vector<FormatItem>& fmts) {
+    for (auto& f : fmts) {
+      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
+        ++dataFormats;
+      else if (f.kind == FormatItem::Repeat) {
+        hasRepeat = true;
+        countDataFormats(f.items);
+      }
+    }
+  };
+  countDataFormats(s->formats);
+  if (!hasRepeat && dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
 }
 
+// A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
+// (126)); a runtime index is left to the generated bounds check in IRGen.
+// Each constant subscript is checked against its own axis (rules (12),(13)).
+
+// WS-K8 (ADR-257): note that this procedure changes the variable's
+// generation, and whether the allocation used the declared extent.
 void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool complexPart) {
   const pli::PictureSpec spec = pli::classifyPicture(f.pic);
   const bool targetIsPicture = it->ty.isChar() && !it->ty.picture.empty();
@@ -5547,12 +5617,6 @@ void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool compl
   }
 }
 
-// A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule
-// (126)); a runtime index is left to the generated bounds check in IRGen.
-// Each constant subscript is checked against its own axis (rules (12),(13)).
-
-// WS-K8 (ADR-257): note that this procedure changes the variable's
-// generation, and whether the allocation used the declared extent.
 void Sema::noteCtlTouch(Symbol* sym, Proc* p, bool extentDiffers, bool starReuse) {
   if (!sym || !sym->controlled)
     return;

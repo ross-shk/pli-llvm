@@ -1,31 +1,63 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+ /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rules (52),(53): format repeat with live expression count */
+ /* Format iteration (rule 47): runtime-evaluated repetition counts with
+    nonpositive skip semantics. */
  format_repeat_live: procedure options(main);
-     declare buf char(40);
-     declare x fixed dec(5,2) init(1.23);
-     declare y fixed dec(5,2) init(4.56);
-     declare z fixed dec(5,2) init(7.89);
-     
-     /* Format repeat with live variable: (n)(F(8,2)) */
-     declare n fixed bin(15) init(2);
-     put string(buf) edit(x, y, z) ((n)(F(8,2)));
-     put skip list('repeat_var=', buf);
-     
-     /* Format repeat with live expression: (i+1)(F(8,2)) */
-     declare i fixed bin(15) init(1);
-     put string(buf) edit(x, y, z) ((i+1)(F(8,2)));
-     put skip list('repeat_expr=', buf);
-     
-     /* Format repeat with function call */
-     declare f entry(fixed bin(15)) returns(fixed bin(15));
-     put string(buf) edit(x, y, z) ((f(2))(F(8,2)));
-     put skip list('repeat_func=', buf);
-     
-     put skip list('PASS format_repeat_live');
+    declare buf char(40);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+    declare c fixed bin(31);
+    declare d fixed bin(31);
+    declare n fixed bin(31);
+    declare i fixed bin(31);
+    declare f entry(fixed bin(31)) returns(fixed bin(31));
+
+    /* Variable count: (n)(F(4)) with n=2 -> two fields. */
+    n = 2;
+    a = 7;
+    b = 9;
+    put string(buf) edit(a, b) ((n)(f(4)));
+    get string(buf) edit(c, d) (f(4), f(4));
+    if c ^= 7 then do;
+       put skip list('FAIL var count c', c);
+       stop;
+    end;
+    if d ^= 9 then do;
+       put skip list('FAIL var count d', d);
+       stop;
+    end;
+
+    /* Zero count: (0)(F(4)) -> skipped, data item pairs with next format. */
+    a = 2;
+    put string(buf) edit(a) ((0)(f(4)), f(4));
+    get string(buf) edit(c) (f(4));
+    if c ^= 2 then do;
+       put skip list('FAIL zero count', c);
+       stop;
+    end;
+
+    /* Nested: (2)((2)(F(4))) -> 4 fields. */
+    a = 1; b = 2; c = 3; d = 4;
+    put string(buf) edit(a, b, c, d) ((2)((2)(f(4))));
+    get string(buf) edit(a, b, c, d) (f(4), f(4), f(4), f(4));
+    if a ^= 1 then do; put skip list('FAIL nested 1'); stop; end;
+    if b ^= 2 then do; put skip list('FAIL nested 2'); stop; end;
+    if c ^= 3 then do; put skip list('FAIL nested 3'); stop; end;
+    if d ^= 4 then do; put skip list('FAIL nested 4'); stop; end;
+
+    /* Function-call count: (f(2))(F(4)) evaluates once. */
+    a = 5;
+    put string(buf) edit(a) ((f(2))(f(4)));
+    get string(buf) edit(c) (f(4));
+    if c ^= 5 then do;
+       put skip list('FAIL func count', c);
+       stop;
+    end;
+
+    put skip list('PASS format_repeat_live');
  end format_repeat_live;
- 
- f: proc(k) returns(fixed bin(15));
-     declare k fixed bin(15);
-     return(k);
+
+ f: proc(k) returns(fixed bin(31));
+    declare k fixed bin(31);
+    return(k);
  end f;

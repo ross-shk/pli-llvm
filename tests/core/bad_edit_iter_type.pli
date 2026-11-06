@@ -1,0 +1,8 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Format iteration (rule (47)): a non-numeric iteration count is diagnosed. */
+ bad_iter_type: procedure options(main);
+    declare k char(4);
+    k = 'ab';
+    put edit (1, 2) ((k)(f(4)));
+ end bad_iter_type;

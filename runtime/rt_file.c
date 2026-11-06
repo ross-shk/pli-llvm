@@ -4,8 +4,8 @@
 /* Split from pli_rt.c; pli_rt.h + pli_rt_abi.def stay the single ABI source. */
 #include "pli_rt.h"
 
-int rt_pli_linesize[PLI_MAX_FILES] = {0};
-int rt_pli_pagesize[PLI_MAX_FILES] = {0};
+/* LINESIZE/PAGESIZE state is defined in rt_stream.c (shared with the
+ * output writer); only the current output slot lives here. */
 int rt_cur_file_slot = -1;
 /* Record/stream files route through pli_plat_fopen/pli_plat_fclose/
  * pli_plat_fread/pli_plat_fwrite (the platform seam). */

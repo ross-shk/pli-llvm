@@ -118,10 +118,12 @@ struct HFormatItem {
   HExprP w;                      // field width
   HExprP d;                      // F/E: fractional digits
   HExprP s;                      // F/E: scale factor (evaluated for effects, formatting uses (w,d))
-  HExprP repeatCount;            // Repeat: repetition count expression (rule (48))
   std::string remote;            // R: FORMAT label (sema expands R, so HIR never carries one)
-  std::string pic;               // P: picture string (rules (53),(146)-(148)); empty = none
-  std::vector<HFormatItem> subs; // C: 1-2 inner real formats; Repeat: repeated group
+  std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
+  std::vector<HFormatItem> subs; // C: 1-2 inner real (F/E/P) formats
+  // Repeat (rule 47):
+  HExprP count;
+  std::vector<HFormatItem> items;
 };
 
 struct HStmt {

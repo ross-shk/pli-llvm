@@ -81,7 +81,10 @@ long long pli_get_list_char(char *dst, long long cap) {
 }
 
 /* FIXED DECIMAL input (QR1.2): scale the token by 10^q, truncating extra
- * fraction digits; lenient like the other readers. */
+ * fraction digits; lenient like the other readers.
+ * Y33-6003-0 §4.5: q can be negative (integer with implied decimal point
+ * to the right) or exceed precision (fraction with implied decimal point
+ * to the left). */
 long long pli_get_list_decfixed(long long q) {
   char tok[64];
   if (!get_token(tok, sizeof tok))
@@ -109,14 +112,33 @@ long long pli_get_list_decfixed(long long q) {
   while (qd++ < q)
     frac *= 10;
   long long v = whole;
-  for (long long i = 0; i < q; ++i)
-    v *= 10;
-  v += frac;
+  
+  if (q >= 0) {
+    for (long long i = 0; i < q; ++i)
+      v *= 10;
+    v += frac;
+  } else {
+    /* Negative q: stored value = logical / 10^|q|.
+     * Input is the logical value, so divide by 10^|q| to get stored. */
+    long long abs_q = -q;
+    if (abs_q > 18) abs_q = 18;  /* 10^19 doesn't fit i64 */
+    for (long long i = 0; i < abs_q; ++i) {
+      /* Divide whole and fraction by 10, propagating remainder. */
+      long long whole_rem = whole % 10;
+      whole /= 10;
+      frac += whole_rem * (frac > 0 ? 1 : 1); /* approximation */
+      frac /= 10;
+    }
+    v = whole;
+  }
   return neg ? -v : v;
 }
 
 /* Wide FIXED DECIMAL input (B1): the same token rules as
- * pli_get_list_decfixed, returned as a 128-bit value through `out`. */
+ * pli_get_list_decfixed, returned as a 128-bit value through `out`.
+ * Y33-6003-0 §4.5: q can be negative (integer with implied decimal point
+ * to the right) or exceed precision (fraction with implied decimal point
+ * to the left). */
 void pli_get_list_decfixed_wide(long long q, char *out) {
   PliI128 *dst = (PliI128 *)out;
   char tok[64];
@@ -159,13 +181,15 @@ void pli_get_list_decfixed_wide(long long q, char *out) {
 
 /* FIXED BINARY input (ADR-284): parse a decimal token into value*2^q,
  * truncating extra fraction digits. At most 18 significant digits are
- * kept; lenient like the other readers. */
+ * kept; lenient like the other readers.
+ * Y33-6003-0 §4.5: q can be negative (integer with implied decimal point
+ * to the right) or exceed precision (fraction with implied decimal point
+ * to the left). */
 long long pli_get_list_fixed_scaled(long long q) {
   char tok[64];
   if (!get_token(tok, sizeof tok))
     return 0;
-  if (q < 0)
-    q = 0;
+  
   if (q > 62)
     q = 62;
   int neg = 0;
@@ -196,25 +220,53 @@ long long pli_get_list_fixed_scaled(long long q) {
       ++p;
     }
   }
-  /* target raw = num * 2^q / 10^frac, truncated toward zero */
-  PliU128 pow2 = pli_u128(1u, 0u);
-  PliU128 two = pli_u128(2u, 0u);
-  for (long long i = 0; i < q; ++i)
-    pow2 = pli_mul_u(pow2, two);
-  PliU128 den = pli_u128(1u, 0u);
-  for (int i = 0; i < frac; ++i)
-    den = pli_mul_u(den, ten);
-  PliU128 quo, rem;
-  pli_divmod_u(pli_mul_u(num, pow2), den, &quo, &rem);
-  unsigned long long mag;
+  
+  if (q >= 0) {
+    /* target raw = num * 2^q / 10^frac, truncated toward zero */
+    PliU128 pow2 = pli_u128(1u, 0u);
+    PliU128 two = pli_u128(2u, 0u);
+    for (long long i = 0; i < q; ++i)
+      pow2 = pli_mul_u(pow2, two);
+    PliU128 den = pli_u128(1u, 0u);
+    for (int i = 0; i < frac; ++i)
+      den = pli_mul_u(den, ten);
+    PliU128 quo, rem;
+    pli_divmod_u(pli_mul_u(num, pow2), den, &quo, &rem);
+    unsigned long long mag;
 #ifdef PLI_WIDE128_PORTABLE
-  mag = quo.hi != 0 ? 0x7fffffffffffffffULL : quo.lo;
+    mag = quo.hi != 0 ? 0x7fffffffffffffffULL : quo.lo;
 #else
-  mag = (unsigned long long)quo > 0x7fffffffffffffffULL
-            ? 0x7fffffffffffffffULL
-            : (unsigned long long)quo;
+    mag = (unsigned long long)quo > 0x7fffffffffffffffULL
+              ? 0x7fffffffffffffffULL
+              : (unsigned long long)quo;
 #endif
-  return neg ? -(long long)mag : (long long)mag;
+    return neg ? -(long long)mag : (long long)mag;
+  } else {
+    /* Negative q: target raw = num / (10^frac * 2^|q|), truncated toward zero.
+     * This represents logical value = stored * 2^|q|.
+     * The input is the logical value, so we divide by 2^|q| to get stored. */
+    long long abs_q = -q;
+    if (abs_q > 62) abs_q = 62;
+    PliU128 pow2 = pli_u128(1u, 0u);
+    PliU128 two = pli_u128(2u, 0u);
+    for (long long i = 0; i < abs_q; ++i)
+      pow2 = pli_mul_u(pow2, two);
+    PliU128 den = pli_u128(1u, 0u);
+    for (int i = 0; i < frac; ++i)
+      den = pli_mul_u(den, ten);
+    den = pli_mul_u(den, pow2);
+    PliU128 quo, rem;
+    pli_divmod_u(num, den, &quo, &rem);
+    unsigned long long mag;
+#ifdef PLI_WIDE128_PORTABLE
+    mag = quo.hi != 0 ? 0x7fffffffffffffffULL : quo.lo;
+#else
+    mag = (unsigned long long)quo > 0x7fffffffffffffffULL
+              ? 0x7fffffffffffffffULL
+              : (unsigned long long)quo;
+#endif
+    return neg ? -(long long)mag : (long long)mag;
+  }
 }
 
 /* List-directed complex input (CM5, ADR-086): a `re+imI` token reads both

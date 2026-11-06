@@ -133,85 +133,39 @@ bool constNumOf(const Expr* e, ConstNum& out) {
 }
 
 bool foldConstExpr(Expr* e, const Type& ty, int scale) {
-  if (!e || (ty.k != TK::FixedDec && ty.k != TK::FixedBin))
+  if (!e || ty.k != TK::FixedDec)
     return false;
   ConstNum n;
   if (!constNumOf(e, n))
     return false;
   // Rescale to the literal's scale, rounding half away from zero (Y33-6003).
-  // Handle negative scale (multiply by base^|scale|).
   PliI128 v = n.value;
-  bool isBinary = ty.k == TK::FixedBin;
-  
   if (scale > n.scale) {
-    // Scale up: multiply by base^(scale - n.scale)
-    if (isBinary) {
-      v = v << (scale - n.scale);
-    } else {
-      v = scaleUp(v, n.scale, scale);
-    }
+    v = scaleUp(v, n.scale, scale);
   } else if (scale < n.scale) {
-    // Scale down: divide by base^(n.scale - scale), round half away from zero
     int k = n.scale - scale;
-    if (isBinary) {
-      PliI128 div = PliI128(1) << k;
-      PliI128 half = PliI128(1) << (k - 1);
-      PliI128 sign = v < 0 ? -1 : 1;
-      v = (v + half * sign) / div;
-    } else {
-      PliI128 d = pow10(k);
-      PliI128 half = pow10(k - 1) * 5;
-      PliI128 sign = v < 0 ? -1 : 1;
-      v = (v + half * sign) / d;
-    }
+    PliI128 d = pow10(k);
+    PliI128 half = pow10(k - 1) * 5;
+    PliI128 sign = v < 0 ? -1 : 1;
+    v = (v + half * sign) / d;
   }
-  
-  // If target scale > target precision, round to precision digits at target scale
-  if (scale > ty.prec) {
-    int k = scale - ty.prec;
-    if (isBinary) {
-      PliI128 div = PliI128(1) << k;
-      PliI128 half = PliI128(1) << (k - 1);
-      PliI128 sign = v < 0 ? -1 : 1;
-      v = (v + half * sign) / div;
-      v = v << k;  // restore scale
-    } else {
-      PliI128 d = pow10(k);
-      PliI128 half = pow10(k - 1) * 5;
-      PliI128 sign = v < 0 ? -1 : 1;
-      v = (v + half * sign) / d;
-      v = scaleUp(v, ty.prec, scale);  // restore scale
-    }
-  }
-  
   // The value must fit the literal's type: a fold that overflows would drop
   // the SIZE condition the runtime path raises on the assignment.
   int digits = constDigits(v);
-  // When scale > precision (q > p), the raw integer will have more digits
-  // than the precision because it includes the fractional digits.
-  // The precision check is a runtime SIZE condition, not a compile-time limit.
-  // Only check storage capacity here.
-  bool scaleGtPrec = scale > ty.prec;
-  if (!scaleGtPrec && digits > ty.prec)
-    return false;
-  if (digits > storageDigits(ty))
+  if (digits > ty.prec || digits > storageDigits(ty))
     return false;
   // The operands must fit too: the runtime path converts each operand to the
   // common type and traps (SIZE) when one does not fit.
   PliI128 leaf = 0;
-  if (!maxLeafMag(e, scale, leaf))
+  if (!maxLeafMag(e, scale, leaf) || constDigits(leaf) > ty.prec)
     return false;
-  if (!scaleGtPrec && constDigits(leaf) > ty.prec)
-    return false;
-  // Rewrite the node in place as the DECIMAL/BINARY literal. The node keeps its
+  // Rewrite the node in place as the DECIMAL literal. The node keeps its
   // identity, so the AST owner still holds the folded constant.
-  e->kind = isBinary ? Expr::IntLit : Expr::DecLit;
+  e->kind = Expr::DecLit;
   e->wideIval = v;
   e->ival = pli_to_i64(v);
-  if (!isBinary) {
-    e->decScale = scale;
-    e->decPrec = digits;
-  }
+  e->decScale = scale;
+  e->decPrec = digits;
   e->ty = ty;
   e->folded = true; // the type is the result type, not the digits' own
   e->name.clear();

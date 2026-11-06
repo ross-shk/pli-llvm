@@ -104,9 +104,14 @@ struct Symbol {
   // lowered to HIR during AST->HIR lowering; null for a constant array. Used by
   // irgen to size and bounds-check the dynamic array.
   HExpr* dynUb = nullptr;
+  // Per-axis runtime upper-bound expressions for a dynamic array (rule (13)),
+  // one entry per axis; null where that axis is constant. [0] mirrors dynUb.
+  std::vector<HExpr*> dynUbAxes;
   // The lowered runtime lower-bound expression of a dynamic array (rule (13)),
   // the mirror of `dynUb`; null when the lower bound is constant.
   HExpr* dynLb = nullptr;
+  // Per-axis runtime lower-bound expressions (rule (13)); [0] mirrors dynLb.
+  std::vector<HExpr*> dynLbAxes;
   // The lowered runtime length expression of an adjustable `CHAR(expr)`
   // declaration (rule (18)); null unless the declaration named an explicit
   // length expression. Used by irgen to size CONTROLLED generations at each

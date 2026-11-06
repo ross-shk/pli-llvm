@@ -1,0 +1,4 @@
+ bad_open_noop: procedure options(main);
+    declare f file;
+    open file(f) environment(x);
+ end bad_open_noop;
