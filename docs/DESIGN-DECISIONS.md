@@ -14239,3 +14239,29 @@ the group, and constant non-negative counts keep the parse-time unroll.
 call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
 negative rule. This is a deviation from remote ADR-371's nonpositive skip and
 is recorded as such.
+
+## ADR-377 — BIT comparison is value-width-independent
+
+**Context.** `BIT(n)` comparison previously packed each operand into an
+`i64` and so was limited to `n <= 64`; wider operands trapped in
+`packBitValue` with rule (86). Padding bits are indeterminate and
+unobservable (ADR-283), and `NOT` normalises them to zero, so a comparison
+must not let padding decide the answer.
+
+**Decision.** Comparison of two `BIT` operands of any width lowers as a
+compile-time-unrolled byte loop over the packed big-endian storage, with no
+integer wider than `i64`. Each operand is normalised to the wider width by
+right-justifying its n-bit value (zero-padding on the left), masking the
+original padding bits first, so operands of differing widths compare by numeric
+value and two values differing only in padding compare equal. Ordered
+comparison uses unsigned byte order, most-significant first; `NGT`/`NLT` are
+`<=`/`>=`. `BIT` vs. numeric comparison for `n > 64` stays diagnosed with
+rule (86), because converting a wide bit value to a number is not implemented.
+The `<= 64` packed-integer path and `emitMaskedBitTest` peephole are
+preserved.
+
+**Consequences.** `tests/core/bit_wide_cmp.pli` covers equality, inequality,
+all four ordered operators, negated comparisons, and differing-width pairs.
+`tests/ir/bit_wide_cmp.pli` (if added) pins the absence of `packBitValue`.
+GRAMMAR-COVERAGE row (18) records the width-independent comparison and the
+wide-bit-to-numeric boundary.

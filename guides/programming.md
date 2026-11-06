@@ -1488,4 +1488,6 @@ Call C like `ctypes` (Python) or `cgo` (Go). Declare the C function as an `entry
 
 ---
 
+`BIT` values of any width may be compared with `=`, `^=`, `<`, `<=`, `>`, `>=`, `¬>` and `¬<`; padding bits do not participate in the result (ADR-283/ADR-377). Converting a `BIT(n>64)` value to a number is not implemented and is diagnosed.
+
 *Next steps: [grammar coverage*](./docs/GRAMMAR-COVERAGE.md) f*or rule-by-rule status and *`tests/`* for runnable examples behind each feature.*

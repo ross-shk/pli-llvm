@@ -283,6 +283,9 @@ private:
   // packed-integer compare: pack(X) & M against E, instead of materialising
   // the byte-array AND and comparing byte by byte. False for any other shape.
   bool emitMaskedBitTest(HExpr* e, Val& out);
+  // Value-width-independent BIT comparison (Wave 4 slice 3): compares two
+  // BIT operands of any width as a byte loop, masking padding bits (ADR-283).
+  Val emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc);
   // True when `s` is a parameter of the current procedure or of one of its
   // enclosing procedures: such a symbol's storage may be the caller's.
   bool isParamOfScope(Symbol* s) const;

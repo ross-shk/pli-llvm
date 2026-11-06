@@ -365,6 +365,116 @@ std::vector<unsigned char> IRGen::packBitInit(const Expr* ini, int nbits) {
   return bytes;
 }
 
+Val IRGen::emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc) {
+  // Value-width-independent BIT comparison (Wave 4 slice 3). Padding bits
+  // (ADR-283) are masked; operands of differing widths are right-justified
+  // (zero-padded on the left) by numeric value. No i128 is introduced.
+  Val A = a, Bv = b;
+  if (A.ty.isBit() && A.ty.len == 1 && !A.reg->getType()->isArrayTy()) {
+    llvm::Value* byte = b_.CreateSelect(A.reg, b_.getInt8((int8_t)0x80),
+                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
+    A.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.a1");
+  } else if (A.ty.isBit() && A.ty.len <= 64 &&
+             !A.reg->getType()->isArrayTy()) {
+    A.reg = unpackBitValue(A.reg, A.ty.len, loc);
+  }
+  if (Bv.ty.isBit() && Bv.ty.len == 1 && !Bv.reg->getType()->isArrayTy()) {
+    llvm::Value* byte = b_.CreateSelect(Bv.reg, b_.getInt8((int8_t)0x80),
+                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
+    Bv.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.b1");
+  } else if (Bv.ty.isBit() && Bv.ty.len <= 64 &&
+             !Bv.reg->getType()->isArrayTy()) {
+    Bv.reg = unpackBitValue(Bv.reg, Bv.ty.len, loc);
+  }
+
+  Val v;
+  v.ty = Type::bit(1);
+  const int na = A.ty.len, nb = Bv.ty.len;
+  const int N  = std::max(na, nb);
+  const int Bn = (N + 7) / 8;
+
+  // Normalize each operand into an N-bit (Bn-byte) left-justified representation
+  // (right-justify the original n-bit value into N bits, i.e. zero-pad on the
+  // left), masking the original padding bits first. This matches the existing
+  // <= 64 integer-pack comparison (pack is right-justified).
+  auto normalize = [&](const Val& x, int nx) -> llvm::Value* {
+    const int Bx = (nx + 7) / 8;
+    const int S  = N - nx;
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)Bn);
+    llvm::Value* out = llvm::UndefValue::get(arrTy);
+    for (int j = 0; j < Bn; ++j) {
+      llvm::Value* byte = b_.getInt8(0);
+      for (int t = 0; t < 8; ++t) {
+        const int L = j * 8 + t - S; // original local bit index
+        if (L < 0 || L >= nx) continue;
+        const int bi = L / 8;
+        if (bi >= Bx) continue;
+        llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
+        if (bi == Bx - 1) {
+          const int keep = nx - 8 * (Bx - 1);
+          if (keep < 8) {
+            const int m = (0xFF << (8 - keep)) & 0xFF;
+            srcByte = b_.CreateAnd(srcByte, b_.getInt8((int8_t)m), "norm.m");
+          }
+        }
+        const int pos = 7 - (L % 8);
+        llvm::Value* bitv = b_.CreateLShr(srcByte, (unsigned)pos, "norm.sh");
+        bitv = b_.CreateAnd(bitv, b_.getInt8(1), "norm.bit");
+        bitv = b_.CreateShl(bitv, (unsigned)(7 - t), "norm.pl");
+        byte = b_.CreateOr(byte, bitv, "norm.or");
+      }
+      out = b_.CreateInsertValue(out, byte, (unsigned)j, "norm.i");
+    }
+    return out;
+  };
+
+  Val An, BnV;
+  An.ty = A.ty;
+  An.reg = normalize(A, na);
+  BnV.ty = Bv.ty;
+  BnV.reg = normalize(Bv, nb);
+
+  if (op == Tok::Eq || op == Tok::Ne) {
+    llvm::Value* acc = b_.getTrue();
+    for (int k = 0; k < Bn; ++k) {
+      llvm::Value* av = b_.CreateExtractValue(An.reg, (unsigned)k, "bcmp.a");
+      llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
+      acc = b_.CreateAnd(acc, b_.CreateICmpEQ(av, bv, "bcmp.eq"), "bcmp.acc");
+    }
+    if (op == Tok::Ne) acc = b_.CreateNot(acc, "bcmp.ne");
+    v.reg = acc;
+    return v;
+  }
+
+  llvm::Value* equalSoFar = b_.getTrue();
+  llvm::Value* less       = b_.getFalse();
+  for (int k = 0; k < Bn; ++k) {
+    llvm::Value* av = b_.CreateExtractValue(An.reg, (unsigned)k, "bcmp.a");
+    llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
+    llvm::Value* eq = b_.CreateICmpEQ(av, bv, "bcmp.oeq");
+    llvm::Value* lt = b_.CreateICmpULT(av, bv, "bcmp.olt");
+    llvm::Value* diff = b_.CreateAnd(equalSoFar, b_.CreateNot(eq, "bcmp.oneq"), "bcmp.diff");
+    less       = b_.CreateSelect(diff, lt, less, "bcmp.less");
+    equalSoFar = b_.CreateAnd(equalSoFar, eq, "bcmp.eqsf");
+  }
+
+  llvm::Value* res = nullptr;
+  switch (op) {
+    case Tok::Lt:  res = less; break;
+    case Tok::Le:  res = b_.CreateOr(less, equalSoFar, "bcmp.le"); break;
+    case Tok::Gt:  res = b_.CreateAnd(b_.CreateNot(less, "bcmp.ngt"),
+                                       b_.CreateNot(equalSoFar, "bcmp.neq"), "bcmp.gt"); break;
+    case Tok::Ge:  res = b_.CreateNot(less, "bcmp.ge"); break;
+    case Tok::Ngt: res = b_.CreateOr(less, equalSoFar, "bcmp.ngt2"); break;
+    case Tok::Nlt: res = b_.CreateNot(less, "bcmp.nlt"); break;
+    default:       res = b_.getFalse(); break;
+  }
+  v.reg = res;
+  return v;
+}
+
 llvm::Value* IRGen::i32(int v) { return b_.getInt32(v); }
 llvm::Value* IRGen::i64(long long v) { return b_.getInt64(v); }
 // i128 constant (ADR-191): wide FIXED DECIMAL (>18 digit) needs constants
@@ -14232,6 +14342,12 @@ Val IRGen::emitExpr(HExpr* e) {
   Val a = emitExpr(e->a.get());
   Val b = emitExpr(e->b.get());
 
+  if (isCmp && a.ty.isBit() && b.ty.isBit() &&
+      (a.ty.len > 64 || b.ty.len > 64)) {
+    // Value-width-independent BIT comparison (Wave 4 slice 3).
+    return emitBitCmp(a, b, op, e->loc);
+  }
+
   if (isCmp && a.ty.isChar() && b.ty.isChar()) { // rule (117)
     llvm::Value* c = emitCmpChar(a.ptr, a.len, b.ptr, b.len);
     llvm::CmpInst::Predicate pred = llvm::CmpInst::ICMP_EQ;
@@ -16148,11 +16264,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                b_.CreateTrunc(rlB, b_.getInt1Ty(), "ideq.b1"), "ideq.b");
       if (el.isBit()) {
         llvm::Value* w = b_.getInt1(true);
-        for (int k = 0; k < bitBytes(el.len); ++k)
-          w = b_.CreateAnd(w, b_.CreateICmpEQ(b_.CreateExtractValue(rlA, (unsigned)k, "ideq.ax"),
-                                             b_.CreateExtractValue(rlB, (unsigned)k, "ideq.bx"),
-                                             "ideq.bk"),
-                           "ideq.ba");
+        const int nb = bitBytes(el.len);
+        for (int k = 0; k < nb; ++k) {
+          llvm::Value* ba = b_.CreateExtractValue(rlA, (unsigned)k, "ideq.ax");
+          llvm::Value* bb = b_.CreateExtractValue(rlB, (unsigned)k, "ideq.bx");
+          if (k == nb - 1) {
+            int keep = el.len - 8 * (nb - 1);
+            if (keep < 8) {
+              int m = (0xFF << (8 - keep)) & 0xFF;
+              ba = b_.CreateAnd(ba, b_.getInt8((int8_t)m), "ideq.ma");
+              bb = b_.CreateAnd(bb, b_.getInt8((int8_t)m), "ideq.mb");
+            }
+          }
+          w = b_.CreateAnd(w, b_.CreateICmpEQ(ba, bb, "ideq.bk"), "ideq.ba");
+        }
         return w;
       }
       if (el.isComplex()) {
