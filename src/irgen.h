@@ -157,9 +157,7 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, std::vector<llvm::Value*>> dynLb_;
-  // First-axis compatibility accessors for the (now vector) dope slots.
-  llvm::Value* dynUbFirst(Symbol* s) const;
-  llvm::Value* dynLbFirst(Symbol* s) const;
+
   // The membership table of each constant character alphabet used by
   // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.
   std::map<std::string, llvm::GlobalVariable*> searchTables_;

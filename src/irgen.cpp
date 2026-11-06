@@ -5025,16 +5025,6 @@ void IRGen::allocaLocals(HProc* p) {
 // caller's data with no own storage, so its extent must be read once from the
 // bound argument (itself by-ref) at entry. Record it so subscripting and the
 // array built-ins bounds-check against the live extent (rules (12),(13),(34)).
-// First-axis slot of the dope maps (compat shim over the per-axis vectors).
-llvm::Value* IRGen::dynUbFirst(Symbol* s) const {
-  auto it = dynUb_.find(s);
-  return it != dynUb_.end() && !it->second.empty() ? it->second[0] : nullptr;
-}
-
-llvm::Value* IRGen::dynLbFirst(Symbol* s) const {
-  auto it = dynLb_.find(s);
-  return it != dynLb_.end() && !it->second.empty() ? it->second[0] : nullptr;
-}
 
 void IRGen::recordDynParamUbs(const std::vector<Symbol*>& params) {
   for (Symbol* s : params) {
@@ -12705,16 +12695,17 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
         return false;
     return true;
   };
-  // Fast path disabled for dynamic arrays (runtime totals not comparable at compile time).
+  // Fast path for static arrays: compare compile-time star totals.
+  long long tvTotal = 1, svTotal = 1;
+  for (size_t ks : tv.stars) tvTotal *= (tv.arr->dims[ks].ub - tv.arr->dims[ks].lb + 1);
+  for (size_t ks : sv.stars) svTotal *= (sv.arr->dims[ks].ub - sv.arr->dims[ks].lb + 1);
   if (!broadcast && !tv.arr->isDynamic() && !sv.arr->isDynamic() &&
-      tv.total == sv.total && tv.stars.size() == sv.stars.size() &&
+      tvTotal == svTotal && tv.stars.size() == sv.stars.size() &&
       suffixRun(tv) && suffixRun(sv) && sv.arr->elementType() == el && !el.isChar() &&
       !el.isStruct() && !tv.packed && !sv.packed && !t->locPtr && !x->locPtr && t->sym && x->sym &&
       !t->sym->controlled && !x->sym->controlled) {
-    // Convert runtime total to constant (both static here).
-    long long constTotal = 1;
-    for (size_t ks : tv.stars)
-      constTotal *= (tv.arr->dims[ks].ub - tv.arr->dims[ks].lb + 1);
+    // Compile-time star total (both sides static here).
+    long long constTotal = tvTotal;
     llvm::Value* dstPtr =
         b_.CreateInBoundsGEP(tgtArrTy, tv.base, {i64(0), tv.fixedFlat}, "csd");
     llvm::Value* srcPtr =
@@ -15737,7 +15728,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       return true;
     }
     // A per-axis request against a constant axis folds directly.
-    if (sel >= 0 && arr.isArray() && sel < (long long)arr.dims.size()) {
+    if (sel >= 0 && arr.isArray() && sel < (long long)arr.dims.size() &&
+        !(arr.isDynamic() && sel == 0 && !a->memberPath.empty())) {
       const Dim& d = arr.dims[(size_t)sel];
       long long val = e->name == "LBOUND" ? d.lb : e->name == "HBOUND" ? d.ub : (d.ub - d.lb + 1);
       (void)isDim;
