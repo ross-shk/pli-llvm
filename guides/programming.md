@@ -1395,6 +1395,8 @@ after the `open` with the file still closed:
 `display(x)` prints one value plus a newline (handy for quick debugging).
 `display(x) reply(v)` prints `x` and then reads the next input line into the
 character variable `v` — a prompt and its answer in one statement.
+`display(x) event(e)` completes the event `e` once the display (and any reply)
+finishes; `reply` and `event` may appear in either order.
 
 **Not yet**
 

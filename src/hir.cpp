@@ -455,6 +455,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->keyNoLock = s->keyNoLock;
   h->keySet = s->keySet;
   h->replyTarget = lowerExpr(s->replyTarget.get());
+  h->eventTarget = lowerExpr(s->eventTarget.get());
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
@@ -953,6 +954,10 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Display:
     os << " ";
     printExpr(os, s->value.get(), ind);
+    if (s->eventTarget)
+      os << " event=";
+    if (s->eventTarget)
+      printExpr(os, s->eventTarget.get(), ind);
     break;
   case HStmt::Read:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " into=";

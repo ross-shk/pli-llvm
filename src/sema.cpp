@@ -562,6 +562,8 @@ static void eachStmtExpr(const Stmt* s, Fn&& f) {
   for (const auto& p : s->args)
     e(p);
   e(s->gotoTarget);
+  e(s->replyTarget);
+  e(s->eventTarget);
   for (const auto& p : s->waitEvents)
     e(p);
   e(s->waitCount);
@@ -4641,6 +4643,15 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                  "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
       else
         checkValueTarget(rt); // VALUE constants cannot receive the reply
+    }
+    if (s->eventTarget) {
+      typeExpr(s->eventTarget.get(), sc, p);
+      Expr* et = s->eventTarget.get();
+      bool ok = et && ((et->kind == Expr::VarRef && et->sym &&
+                        et->sym->kind != Symbol::ProcName && et->ty.isEvent()) ||
+                       (et->kind == Expr::Subscript && et->sym && et->ty.isEvent()));
+      if (!ok)
+        d_.error(et ? et->loc : s->loc, "DISPLAY EVENT requires an EVENT variable or element", "(114)");
     }
     break;
   }

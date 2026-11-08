@@ -14273,3 +14273,11 @@ wide-bit-to-numeric boundary.
 **Decision.** Conversion of a `BIT(n)` value to an arithmetic type packs the big-endian byte storage into an `i128` for `64 < n <= 128` (via `packBitValueWide`), treating the bit string as an unsigned magnitude (`UIToFP` for FLOAT targets, zero-extension/truncation for integer targets). Conversion of an arithmetic value to a `BIT(n)` with `64 < n <= 128` converts the source to `i128` (float via `FPToSI`, integer via zero-extension) and unpacks it big-endian (`unpackBitValueWide`). Widths above 128 bits remain diagnosed with rule (86), since no numeric type in this compiler holds more than 128 bits. The `<= 64` paths are unchanged. `BIT(1)` widens through the `i128` path when the destination is wider than 64 bits.
 
 **Consequences.** `BIT(n>64)` round-trips through `FIXED DECIMAL`/`FLOAT`/`FIXED BINARY` within the representable range; the byte order is the same big-endian order used for `BIT` comparison (ADR-377). `tests/core/bit_wide_conv.pli` (added) exercises conversion and round-trip. GRAMMAR-COVERAGE row (18) and DEFERRED-WORK row A10 are updated.
+
+## ADR-379 — DISPLAY ... EVENT option (rule 114, Wave 5 Slice 1)
+
+**Context.** `DISPLAY` (rule 114) already supported the `REPLY (reference)` option (ADR-287). The `EVENT (reference)` option, which completes a named event when the display (and any reply read) finishes, was unimplemented.
+
+**Decision.** Parse `REPLY` and `EVENT` in an order-independent loop so both orders (and a lone `EVENT`) work. Validate the event operand with the same predicate as `CALL ... EVENT`: a scalar `EVENT` variable, an array element, or a structure member. In IRGen, resolve the event address with `taskEventAddr`, call `pli_event_reset` before any output is produced, run the existing display and reply logic unchanged, then call `pli_event_complete`. No runtime or ABI change: reuse the existing `pli_event_reset`/`pli_event_complete` exports (ADR-234). `DISPLAY` remains synchronous (ADR-233); the event is a completion notification only.
+
+**Consequences.** `display_event.pli`, `display_event_reply.pli` (self-checking) and `display_event` (IR) pass; `bad_display_event.pli` is rejected with (114). GRAMMAR-COVERAGE row (114) updated.

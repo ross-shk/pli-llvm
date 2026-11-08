@@ -7215,6 +7215,11 @@ void IRGen::emitStmt(HStmt* s) {
     // ADR-233: the value is evaluated first, then written under the output
     // lock when the program has a task.
     Val v = emitExpr(s->value.get());
+    llvm::Value* eventAddr = nullptr;
+    if (s->eventTarget)
+      eventAddr = taskEventAddr(s->eventTarget.get(), s->loc);
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
     switch (v.ty.k) {
     case TK::Char:
       deferCall("pli_display_char", {v.ptr, v.len});
@@ -7269,6 +7274,8 @@ void IRGen::emitStmt(HStmt* s) {
       rv.ty = rty;
       storeGetTarget(rt, rv, s->loc);
     }
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
     break;
   }
   case HStmt::Get:

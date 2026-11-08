@@ -249,6 +249,9 @@ struct HStmt {
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   HExprP replyTarget;
+  // DISPLAY ... EVENT ( reference ) (rule 114): the event completed when the
+  // display (and any REPLY read) finishes.
+  HExprP eventTarget;
 
   std::vector<HExprP> args; // CALL arguments
 

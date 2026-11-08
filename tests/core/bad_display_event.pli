@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* EVENT operand must be an EVENT (rule (114)). */
+  bad_display_event: procedure options(main);
+     declare n fixed bin(31);
+     display(42) event(n);
+  end bad_display_event;

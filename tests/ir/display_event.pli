@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+  display_event_ir: procedure options(main);
+     declare ev event;
+     display(42) event(ev);
+  end display_event_ir;

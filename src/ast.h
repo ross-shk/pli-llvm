@@ -342,6 +342,9 @@ struct Stmt {
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   ExprP replyTarget;
+  // DISPLAY ... EVENT ( reference ) (rule 114): the event completed when the
+  // display (and any REPLY read) finishes.
+  ExprP eventTarget;
 
    std::vector<ExprP> args; // CALL arguments
    ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))

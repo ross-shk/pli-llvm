@@ -3587,7 +3587,7 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   return st;
 }
 
-// display-statement ::= DISPLAY ( expression ) [ REPLY ( reference ) ]  rule (114)
+// display-statement ::= DISPLAY ( expression ) [ REPLY ( reference ) ] [ EVENT ( reference ) ]  rule (114)
 StmtP Parser::parseDisplay() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Display;
@@ -3598,16 +3598,22 @@ StmtP Parser::parseDisplay() {
   st->value = parseExpr();
   if (!expect(Tok::RParen, "(114)"))
     return nullptr;
-  if (atWord("REPLY")) {
-    advance();
-    if (eat(Tok::LParen)) {
-      // REPLY takes a reference (scalar character variable).
+  for (;;) {
+    if (atWord("REPLY")) {
+      advance();
+      if (!eat(Tok::LParen)) { d_.error(cur().loc, "expected '(' after REPLY", "(114)"); return nullptr; }
       st->replyTarget = parseExpr();
       expect(Tok::RParen, "(114)");
-    } else {
-      d_.error(cur().loc, "expected '(' after REPLY", "(114)");
-      return nullptr;
+      continue;
     }
+    if (atWord("EVENT")) {
+      advance();
+      if (!eat(Tok::LParen)) { d_.error(cur().loc, "expected '(' after EVENT", "(114)"); return nullptr; }
+      st->eventTarget = parseExpr();
+      expect(Tok::RParen, "(114)");
+      continue;
+    }
+    break;
   }
   expect(Tok::Semi, "(114)");
   return st;
