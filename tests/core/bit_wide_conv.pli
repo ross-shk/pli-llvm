@@ -1,0 +1,43 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Wide BIT(n>64) conversion to/from numeric (ADR-378, rule (86)): */
+ /* a BIT(n) value is an unsigned big-endian magnitude; conversion to a */
+ /* numeric type keeps all bits up to the target's width. */
+ bit_wide_conv: procedure options(main);
+    declare b bit(72);
+    declare b8 bit(8);
+    declare x fixed dec(22);
+    declare f float;
+    declare y bit(72);
+
+    /* high bits survive conversion to decimal */
+    b = '111111111111111111111111111111111111111111111111111111111111111111111111'b;
+    x = b;
+    y = x;
+    if y ^= b then do;
+       put skip list('FAIL bit_wide_conv: dec round-trip');
+       stop;
+    end;
+
+    /* float conversion keeps magnitude (approx) */
+    f = b;
+    if f <= 0.0 then do;
+       put skip list('FAIL bit_wide_conv: float');
+       stop;
+    end;
+
+    /* small values still work */
+    b8 = '10101010'b;
+    x = b8;
+    if x ^= 170 then do;
+       put skip list('FAIL bit_wide_conv: small', x);
+       stop;
+    end;
+    b8 = x;
+    if b8 ^= '10101010'b then do;
+       put skip list('FAIL bit_wide_conv: small rt');
+       stop;
+    end;
+
+    put skip list('PASS bit_wide_conv');
+ end bit_wide_conv;

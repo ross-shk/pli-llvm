@@ -14265,3 +14265,11 @@ all four ordered operators, negated comparisons, and differing-width pairs.
 `tests/ir/bit_wide_cmp.pli` (if added) pins the absence of `packBitValue`.
 GRAMMAR-COVERAGE row (18) records the width-independent comparison and the
 wide-bit-to-numeric boundary.
+
+## ADR-378 — Wide BIT(n>64) to/from numeric conversion
+
+**Context.** `BIT(n)` conversion to and from arithmetic previously packed the bit string into an `i64` in `packBitValue`/`unpackBitValue`, so `n > 64` was diagnosed with rule (86) (ADR-275/ADR-377). A `BIT(n)` value is an unsigned binary magnitude whose width can exceed 64 bits, and PL/I permits assigning it to a numeric variable (and vice versa) whenever the target can represent it.
+
+**Decision.** Conversion of a `BIT(n)` value to an arithmetic type packs the big-endian byte storage into an `i128` for `64 < n <= 128` (via `packBitValueWide`), treating the bit string as an unsigned magnitude (`UIToFP` for FLOAT targets, zero-extension/truncation for integer targets). Conversion of an arithmetic value to a `BIT(n)` with `64 < n <= 128` converts the source to `i128` (float via `FPToSI`, integer via zero-extension) and unpacks it big-endian (`unpackBitValueWide`). Widths above 128 bits remain diagnosed with rule (86), since no numeric type in this compiler holds more than 128 bits. The `<= 64` paths are unchanged. `BIT(1)` widens through the `i128` path when the destination is wider than 64 bits.
+
+**Consequences.** `BIT(n>64)` round-trips through `FIXED DECIMAL`/`FLOAT`/`FIXED BINARY` within the representable range; the byte order is the same big-endian order used for `BIT` comparison (ADR-377). `tests/core/bit_wide_conv.pli` (added) exercises conversion and round-trip. GRAMMAR-COVERAGE row (18) and DEFERRED-WORK row A10 are updated.

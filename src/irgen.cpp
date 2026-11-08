@@ -351,6 +351,47 @@ llvm::Value* IRGen::unpackBitValue(llvm::Value* intval, int nbits, SourceLoc loc
   return agg;
 }
 
+llvm::Value* IRGen::packBitValueWide(llvm::Value* agg, int nbits, SourceLoc loc) {
+  if (nbits <= 64 || nbits > 128) {
+    d_.error(loc,
+             "conversion of a BIT string of this width to a number is not implemented in this "
+             "stage",
+             "(86)");
+    return llvm::ConstantInt::get(b_.getInt128Ty(), 0);
+  }
+  int B = bitBytes(nbits);
+  llvm::Value* acc = llvm::ConstantInt::get(b_.getInt128Ty(), 0);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* byte = b_.CreateExtractValue(agg, (unsigned)k, "pkx");
+    llvm::Value* wide = b_.CreateZExt(byte, b_.getInt128Ty(), "pkw");
+    acc = b_.CreateOr(b_.CreateShl(acc, 8, "pks"), wide, "pka");
+  }
+  if (int extra = 8 * B - nbits)
+    acc = b_.CreateLShr(acc, (uint64_t)extra, "pkj");
+  return acc;
+}
+
+llvm::Value* IRGen::unpackBitValueWide(llvm::Value* intval, int nbits, SourceLoc loc) {
+  int B = bitBytes(nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  if (nbits <= 64 || nbits > 128) {
+    d_.error(loc,
+             "conversion of a number to a BIT string of this width is not implemented in this "
+             "stage",
+             "(86)");
+    return llvm::UndefValue::get(arrTy);
+  }
+  if (int extra = 8 * B - nbits)
+    intval = b_.CreateShl(intval, (uint64_t)extra, "upj");
+  llvm::Value* agg = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* shifted = b_.CreateLShr(intval, (uint64_t)(8 * (B - 1 - k)), "upsh");
+    llvm::Value* byte = b_.CreateTrunc(shifted, b_.getInt8Ty(), "upb");
+    agg = b_.CreateInsertValue(agg, byte, (unsigned)k, "upi");
+  }
+  return agg;
+}
+
 std::vector<unsigned char> IRGen::packBitInit(const Expr* ini, int nbits) {
   if (ini && ini->kind == Expr::BitLit)
     return packBitLiteral(ini->sval, nbits);
@@ -13167,7 +13208,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       // A BIT(1) rides as i1, not as a byte array: widen it through the
       // integer path so the byte copy below never extracts from a scalar.
       if (v.ty.len == 1) {
-        out.reg = unpackBitValue(b_.CreateZExt(v.reg, b_.getInt64Ty(), "b1w"), dst.len, loc);
+        if (dst.len <= 64)
+          out.reg = unpackBitValue(b_.CreateZExt(v.reg, b_.getInt64Ty(), "b1w"), dst.len, loc);
+        else
+          out.reg = unpackBitValueWide(b_.CreateZExt(v.reg, b_.getInt128Ty(), "b1w"), dst.len, loc);
         return out;
       }
       // Bit-to-bit copies bytes directly (pad/truncate on the right); an
@@ -13192,35 +13236,71 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     // zero first (range-checked like other float conversions).
     llvm::Value* iv = nullptr;
     if (v.ty.k == TK::Float) {
-      floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
-      iv = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "biv");
-    } else if (v.ty.intBits() == 64) {
-      iv = v.reg;
+      if (dst.len <= 64) {
+        floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
+        iv = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "biv");
+      } else {
+        floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
+        iv = b_.CreateFPToSI(v.reg, b_.getInt128Ty(), "biv");
+      }
+    } else if (dst.len <= 64) {
+      if (v.ty.intBits() == 64)
+        iv = v.reg;
+      else if (v.ty.intBits() >= 128)
+        iv = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "biv");
+      else
+        iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
     } else {
-      iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+      if (v.ty.intBits() >= 128)
+        iv = v.reg;
+      else if (v.ty.intBits() == 64)
+        iv = b_.CreateZExt(v.reg, b_.getInt128Ty(), "biv");
+      else
+        iv = b_.CreateZExt(v.reg, b_.getInt128Ty(), "biv");
     }
-    out.reg = unpackBitValue(iv, dst.len, loc);
+    if (dst.len <= 64)
+      out.reg = unpackBitValue(iv, dst.len, loc);
+    else
+      out.reg = unpackBitValueWide(iv, dst.len, loc);
     return out;
   }
-  if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
-    llvm::Value* iv = v.ty.len == 1 ? b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv")
-                                    : packBitValue(v.reg, v.ty.len, loc);
-    if (dstFloat) {
-      out.reg = b_.CreateSIToFP(iv, b_.getDoubleTy(), "cvt");
-    } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
-      out.reg = iv;
-    } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
-      // A genuinely wide DECIMAL target (ADR-191) holds 20+ digits in i128;
-      // a bit-string source is an unsigned magnitude that fits i64.
-      out.reg = b_.CreateSExt(iv, llvmTy(dst), "cvt");
-    } else {
-      out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
-    }
-    // A BINARY target narrower than its slot checks the declared precision.
-    if (!dstFloat && dst.k == TK::FixedBin)
-      out.reg = fixedBinPrecTrap(out.reg, dst.prec);
-    return out;
-  }
+   if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
+     llvm::Value* iv = nullptr;
+     llvm::Type* ivTy = nullptr;
+     if (v.ty.len == 1) {
+       iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+       ivTy = b_.getInt64Ty();
+     } else if (v.ty.len <= 64) {
+       iv = packBitValue(v.reg, v.ty.len, loc);
+       ivTy = b_.getInt64Ty();
+     } else if (v.ty.len <= 128) {
+       iv = packBitValueWide(v.reg, v.ty.len, loc);
+       ivTy = b_.getInt128Ty();
+     } else {
+       d_.error(loc,
+                "conversion of a BIT string longer than 128 bits to a number is not implemented "
+                "in this stage",
+                "(86)");
+       out.reg = i64(0);
+       return out;
+     }
+     if (dstFloat) {
+       out.reg = b_.CreateUIToFP(iv, b_.getDoubleTy(), "cvt");
+     } else if (llvmTy(dst)->getIntegerBitWidth() <= 64) {
+       out.reg = ivTy == b_.getInt128Ty()
+                     ? b_.CreateTrunc(iv, llvmTy(dst), "cvt")
+                     : (llvmTy(dst)->getIntegerBitWidth() == 64 ? iv
+                                                                : b_.CreateTrunc(iv, llvmTy(dst), "cvt"));
+     } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
+       out.reg = ivTy == b_.getInt128Ty() ? iv : b_.CreateZExt(iv, llvmTy(dst), "cvt");
+     } else {
+       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
+     }
+     // A BINARY target narrower than its slot checks the declared precision.
+     if (!dstFloat && dst.k == TK::FixedBin)
+       out.reg = fixedBinPrecTrap(out.reg, dst.prec);
+     return out;
+   }
   if (srcFloat && dstFloat)
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero

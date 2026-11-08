@@ -684,8 +684,12 @@ private:
   // Pack a [B x i8] aggregate (nbits <= 64) big-endian into an i64; anything
   // wider is diagnosed, never silently truncated.
   llvm::Value* packBitValue(llvm::Value* agg, int nbits, SourceLoc loc);
+  // Pack a [B x i8] aggregate (64 < nbits <= 128) big-endian into an i128.
+  llvm::Value* packBitValueWide(llvm::Value* agg, int nbits, SourceLoc loc);
   // Unpack an integer's low nbits big-endian into a [B x i8] aggregate.
   llvm::Value* unpackBitValue(llvm::Value* intval, int nbits, SourceLoc loc);
+  // Unpack an i128's low nbits big-endian into a [B x i8] aggregate.
+  llvm::Value* unpackBitValueWide(llvm::Value* intval, int nbits, SourceLoc loc);
   // Pack a bit-string literal (characters '0'/'1') into bytes, padding and
   // truncating on the right to nbits.
   static std::vector<unsigned char> packBitLiteral(const std::string& sval, int nbits);
