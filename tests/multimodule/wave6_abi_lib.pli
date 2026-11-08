@@ -1,0 +1,18 @@
+ /* Wave 6 ABI library companion. */
+ wave6_lib: package exports(sum_arr, get_shared);
+    dcl shared_counter fixed bin(31) external;
+
+    sum_arr: procedure(a) returns(fixed bin(31));
+       dcl a(*) fixed bin(31);
+       dcl i fixed bin(31);
+       dcl s fixed bin(31) init(0);
+       do i = 1 to hbound(a, 1);
+          s = s + a(i);
+       end;
+       return(s);
+    end sum_arr;
+
+    get_shared: procedure returns(fixed bin(31));
+       return(shared_counter);
+    end get_shared;
+ end wave6_lib;

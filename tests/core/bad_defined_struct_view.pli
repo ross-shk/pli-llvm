@@ -1,0 +1,9 @@
+ /* rule (24): DEFINED view whose element storage size mismatches the base. */
+ bad_defined_struct_view: procedure options(main);
+    declare 1 base,
+            2 a fixed bin(31) init(10),
+            2 b fixed bin(31) init(20);
+    declare 1 view defined base;
+    declare w fixed bin(63);
+    declare z fixed bin(31) defined w;
+ end bad_defined_struct_view;

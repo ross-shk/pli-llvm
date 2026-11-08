@@ -1,0 +1,27 @@
+ /* Wave 6 ABI: dynamic-array parameter plus shared EXTERNAL across modules. */
+ wave6_abi: procedure options(main);
+    dcl shared_counter fixed bin(31) external;
+    dcl arr(4) fixed bin(31);
+    dcl i fixed bin(31);
+    dcl n fixed bin(31);
+    dcl sum_arr entry (fixed bin(31)(*)) returns(fixed bin(31)) external;
+    dcl get_shared entry returns(fixed bin(31)) external;
+
+    n = 4;
+    do i = 1 to n;
+       arr(i) = i * 3;
+    end;
+
+    if sum_arr(arr) ^= 30 then do;
+       put skip list('FAIL wave6_abi: expected 30, got', sum_arr(arr));
+       stop;
+    end;
+
+    shared_counter = 99;
+    if get_shared() ^= 99 then do;
+       put skip list('FAIL wave6_abi: shared mismatch');
+       stop;
+    end;
+
+    put skip list('PASS wave6_abi');
+ end wave6_abi;
