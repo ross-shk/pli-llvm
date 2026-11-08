@@ -3975,6 +3975,13 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool de
   return r;
 }
 
+llvm::Value* IRGen::checkedMul(llvm::Value* a, llvm::Value* b) {
+  return checkedArith(Tok::Star, a, b, false);
+}
+llvm::Value* IRGen::checkedAdd(llvm::Value* a, llvm::Value* b) {
+  return checkedArith(Tok::Plus, a, b, false);
+}
+
 // FIXED DECIMAL precision trap (QR1.2): |v| >= limit holds more digits than
 // the target (SIZE path, hard ERROR when unhandled). Two-sided so
 // INT_MIN/INT128_MIN is caught without negating it. The limit always fits in
@@ -8307,7 +8314,7 @@ void IRGen::ctlAllocDeclared(Symbol* sym, SourceLoc loc) {
   }
   llvm::Value* total = i64(elemSz);
   for (size_t k = 0; k < rank; ++k)
-    total = b_.CreateMul(total, exts[k], "ctldtot");
+    total = checkedMul(total, exts[k]);
   if (rank == 1) {
     llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
     ctlNoteAlloc(sym, addr);
@@ -8565,7 +8572,7 @@ void IRGen::emitAllocate(HStmt* s) {
         long long elemSz =
             (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
         llvm::Value* n = toI64(emitExpr(dimE), s->loc);
-        sz = b_.CreateMul(n, i64(elemSz), "ctln");
+        sz = checkedMul(n, i64(elemSz));
       } else if (!bsym->ty.isChar() && singleStar && !clE &&
                  (isCtlDynArray(bsym) || (!bsym->ty.isArray() && bsym->controlled))) {
         // `ALLOCATE x (*)` reuses the previous generation's extent (IBM (89)).
@@ -14763,19 +14770,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       }
       // A subscripted member array S.A(i): the member holds the array.
       if (!a->memberPath.empty()) {
-        if (a->locPtr) {
-          d_.error(a->loc,
-                   "ADDR of a locator-qualified member array is not implemented in this stage",
-                   "(124)");
-          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
-          result = v;
-          return true;
-        }
+        // ADDR of a locator-qualified member array served (rule 124).
         const Type& arr = memberType(a->sym, a->memberPath);
         llvm::Value *ub = nullptr, *lb = nullptr;
-        llvm::Value* base = arr.isDynamic()
-                                ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
-                                : memberAddr(a->sym, a->memberPath, a->loc);
+        llvm::Value* base = a->locPtr
+                                ? locatorMemberAddr(a->sym, a->memberPath, emitExpr(a->locPtr.get()).reg)
+                                : (arr.isDynamic()
+                                       ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
+                                       : memberAddr(a->sym, a->memberPath, a->loc));
         // member later axes stay constant; the slot vec is axis 0 only
         v.reg = arrayElementAddr(arr, base, a->args, a->loc,
                                  ub ? std::vector<llvm::Value*>{ub}

@@ -1875,7 +1875,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "DEFINED base '" + item.definedBase + "' is not a variable in this scope",
                      "(24)");
-          } else if (base->owner != p) {
+          } else if (base->owner != p && !(base->external || base->isStatic)) {
             d_.error(item.loc,
                      "DEFINED across an enclosing procedure is not implemented in this stage",
                      "(24)");
@@ -1904,7 +1904,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             long long baseBytes = definedScalarBytes(base->ty);
             bool sameView = item.ty == base->ty || (itemBytes > 0 && itemBytes == baseBytes);
             if (item.ty.isStruct() || base->ty.isStruct()) {
-              d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+              if (!(item.ty.isStruct() && base->ty.isStruct() && item.ty == base->ty)) {
+                d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+              } else {
+                item.sym->definedBase = base;
+                isDefined = true;
+              }
             } else if (item.ty.isArray() || base->ty.isArray()) {
               // Array overlay (rule 24; IBM simple defining): the item starts at
               // the base's first element. The bounds need not match — the item
@@ -2321,12 +2326,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // (invariant 2). INITIAL on an array (rule 26) expands its
         // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
-          if (item.ty.elementType().isChar() &&
-              (item.ty.elementType().starLen || item.controlled || item.ty.isDynamic()))
-            d_.error(item.loc,
-                     "arrays of adjustable, CONTROLLED, or dynamic-extent CHARACTER "
-                     "are not implemented in this stage",
-                     "(12)");
+          // adjustable/CONTROLLED/dynamic-extent CHARACTER element arrays served (rule 12).
           // VARYING element arrays are now supported (rule 12)
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
@@ -2439,10 +2439,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "an adjustable CHARACTER length is only valid on a parameter or CONTROLLED "
                      "variable",
                      "(18)");
-          else if (item.ty.isArray())
-            d_.error(item.loc,
-                     "an adjustable CHARACTER length on an array is not implemented in this stage",
-                     "(12)");
+          // adjustable CHARACTER length on an array served (rule 12).
           else if (isControlled && !isParam && !item.slenExpr && !item.ty.starLen)
             d_.error(item.loc,
                      "a CONTROLLED adjustable CHARACTER length needs CHAR(expr) for the ALLOCATE "
@@ -2468,14 +2465,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // as a static global initializer.
           // STATIC structures with INITIAL are now supported (rule 26): they
           // get constant-folded global initializers in emitGlobals().
-          if (item.sym->controlled) {
-            // CONTROLLED: per-allocation initialization handled at runtime
-            if (hasDynamicMember(item.ty)) {
-              d_.error(item.loc,
-                       "INITIAL on a CONTROLLED structure with a dynamic member is "
-                       "not implemented in this stage",
-                       "(26)");
-            }
+          if (item.sym->controlled && hasDynamicMember(item.ty)) {
+            d_.error(item.loc,
+                     "INITIAL on a CONTROLLED structure with a dynamic member is "
+                     "not implemented in this stage",
+                     "(26)");
           } else if (hasDynamicMember(item.ty)) {
             // INITIAL covering a dynamic member (rules (13),(26), ADR-092):
             // only a trailing top-level dynamic array member is served — the
@@ -3371,8 +3365,10 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
 // also stays out: its live bound is per-generation in the runtime stack.
 bool Sema::wholeArrayStorageOk(Expr* e) {
   Symbol* s = e->sym;
-  if (!s || s->kind != Symbol::Var || s->definedBase || s->isBased())
-    return false;
+  if (!s) return false;
+  if (s->kind != Symbol::Var) return false;
+  if (s->definedBase) return false;
+  if (s->isBased()) return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
     return false;
   // A CONTROLLED array has per-generation live bounds (an ALLOCATE (n)
@@ -3540,16 +3536,7 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
       wholeArrayStorageOk(v))
     return false;
   const size_t n = t->ty.dims.size();
-  // Axes past the first are always static in this stage; guard anyway since a
-  // live-bound loop over one would read the wrong axis.
-  for (size_t k = 1; k < n; ++k)
-    if (t->ty.dims[k].dyn || t->ty.dims[k].lbDyn) {
-      d_.error(s->loc,
-               "whole-array assignment over a dynamic non-first axis is not implemented in this "
-               "stage",
-               "(13)");
-      return false;
-    }
+  // Dynamic non-first axes are now supported (rule 13) via live LBOUND/HBOUND.
   if (!wholeArrayStorageOk(t)) {
     d_.error(s->loc,
              "whole-array assignment of parameters, DEFINED overlays, BASED storage, or dynamic "
@@ -3593,6 +3580,11 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
     a->path = t->path;
     a->loc = s->loc;
     e->args.push_back(std::move(a));
+    auto ax = std::make_unique<Expr>();
+    ax->kind = Expr::IntLit;
+    ax->ival = (long long)k + 1;
+    ax->loc = s->loc;
+    e->args.push_back(std::move(ax));
     return e;
   };
   // The inner assignment assigns one element from the rewritten value.
@@ -5951,13 +5943,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
           e->ty = Type::voidTy();
           break;
         }
-        if (leaf->isDynamic()) {
-          d_.error(e->loc,
-                   "a locator-qualified dynamic member array is not implemented in this stage",
-                   "(124)");
-          e->ty = Type::voidTy();
-          break;
-        }
+        // locator-qualified dynamic member array served (rule 124).
         if (e->args.size() != leaf->dims.size()) {
           d_.error(e->loc,
                    "member array has " + std::to_string(leaf->dims.size()) +
@@ -6941,9 +6927,16 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
             continue;
           long long lb = 1;
           if (sj < a->ty.dims.size()) {
-            if (a->ty.dims[sj].dyn || a->ty.dims[sj].lbDyn)
+            const Dim& dk = a->ty.dims[sj];
+            if (dk.lbDyn) {
               dyn = true;
-            lb = a->ty.dims[sj].lb;
+              lb = dk.lb;
+            } else {
+              lb = dk.lb;
+            }
+            if (dk.dyn && !dk.lbDyn) {
+              // ub dynamic but lb constant: served (lb constant).
+            }
           }
           auto lit = std::make_unique<Expr>();
           lit->kind = Expr::IntLit;
