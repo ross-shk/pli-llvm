@@ -54,6 +54,21 @@
        stop;
     end;
 
+    /* Count expression with side effect: call counter increments once. */
+    call reset_counter();
+    a = 6;
+    put string(buf) edit(a) ((call_counter())(f(4)));
+    get string(buf) edit(c) (f(4));
+    if c ^= 6 then do;
+       put skip list('FAIL side effect count', c);
+       stop;
+    end;
+    call get_counter(d);
+    if d ^= 1 then do;
+       put skip list('FAIL count evaluated once', d);
+       stop;
+    end;
+
     put skip list('PASS format_repeat_live');
  end format_repeat_live;
 
@@ -61,3 +76,20 @@
     declare k fixed bin(31);
     return(k);
  end f;
+
+ reset_counter: procedure;
+    declare counter fixed bin(31) static initial(0);
+    counter = 0;
+ end reset_counter;
+
+ call_counter: procedure returns(fixed bin(31));
+    declare counter fixed bin(31) static initial(0);
+    counter = counter + 1;
+    return(2);
+ end call_counter;
+
+ get_counter: procedure(out_val);
+    declare out_val fixed bin(31);
+    declare counter fixed bin(31) static;
+    out_val = counter;
+ end get_counter;
