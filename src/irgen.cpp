@@ -7060,7 +7060,8 @@ void IRGen::emitStmt(HStmt* s) {
     emitPut(s);
     break;
   case HStmt::Display: {
-    // Rule (114): one scalar value plus a newline (REPLY stays diagnosed).
+    // Rule (114): one scalar value plus a newline; REPLY reads one reply line;
+    // EVENT completes the named event on finish (shared completion ABI).
     // ADR-233: the value is evaluated first, then written under the output
     // lock when the program has a task.
     Val v = emitExpr(s->value.get());
@@ -7117,6 +7118,13 @@ void IRGen::emitStmt(HStmt* s) {
       rv.len = i64(rty.len);
       rv.ty = rty;
       storeGetTarget(rt, rv, s->loc);
+    }
+    // DISPLAY ... EVENT (rule 114): complete the named event once the display
+    // (and any REPLY read) has finished, using the shared completion ABI.
+    if (s->eventRef) {
+      llvm::Value* evAddr = taskEventAddr(s->eventRef.get(), s->loc);
+      if (evAddr)
+        b_.CreateCall(runtimeFn("pli_event_complete"), {evAddr});
     }
     break;
   }

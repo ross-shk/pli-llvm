@@ -4632,8 +4632,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       typeExpr(s->replyTarget.get(), sc, p);
       Expr* rt = s->replyTarget.get();
       bool ref = rt && ((rt->kind == Expr::VarRef && rt->sym &&
-                         rt->sym->kind != Symbol::ProcName) ||
-                        rt->kind == Expr::Subscript);
+                          rt->sym->kind != Symbol::ProcName) ||
+                         rt->kind == Expr::Subscript);
       if (!ref)
         d_.error(rt ? rt->loc : s->loc, "DISPLAY REPLY requires a variable", "(114)");
       else if (!rt->ty.isChar() || rt->ty.isArray() || rt->ty.varying)
@@ -4641,6 +4641,18 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                  "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
       else
         checkValueTarget(rt); // VALUE constants cannot receive the reply
+    }
+    // DISPLAY ... EVENT ( reference ) (rule 114): the event to complete when
+    // the display (and any REPLY read) finishes.
+    if (s->eventRef) {
+      typeExpr(s->eventRef.get(), sc, p);
+      Expr* e = s->eventRef.get();
+      bool ev = e && ((e->kind == Expr::VarRef && e->sym &&
+                       e->sym->kind != Symbol::ProcName && e->ty.isEvent()) ||
+                      (e->kind == Expr::Subscript && e->sym && e->ty.isEvent()));
+      if (!ev)
+        d_.error(e ? e->loc : s->loc,
+                 "DISPLAY EVENT requires an EVENT variable or element", "(114)");
     }
     break;
   }

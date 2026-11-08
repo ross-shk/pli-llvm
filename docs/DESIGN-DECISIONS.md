@@ -14263,6 +14263,27 @@ a scaled i128 (ADR-284, ADR-289); values beyond that range are outside
 applicable scope for this dialect and keep existing diagnostic behaviour. No
 big-number type is introduced. Output width keeps the existing cap (ADR-293).
 
-**Consequences.** `tests/core/bit_wide_gt64.pli`, `tests/core/bit_pad_compare.pli`,
-`tests/core/bad_bit_wide_gt64.pli`, and `tests/ir/bit_wide_gt64.pli` pin the
-behaviour and lowering. GRAMMAR-COVERAGE rows (18) and (116)-(118) updated.
+
+## ADR-378 — DISPLAY ... EVENT completes the named event on finish (rule 114)
+
+**Status.** Accepted.
+
+**Context.** Rule (114) permits `DISPLAY ( expression ) [ REPLY ( reference ) ]
+[ EVENT ( reference ) ] ;`. The compiler already served scalar DISPLAY and
+DISPLAY ... REPLY, but the EVENT option was not parsed, so a program that
+signals a waiting task from a DISPLAY statement could not be written. The
+shared event-completion ABI (`pli_event_complete`) already existed for
+asynchronous CALL.
+
+**Decision.** `parseDisplay` now accepts `REPLY (...)` and `EVENT (...)` in
+either order, at most once each, sharing the existing `Stmt::eventRef` /
+`HStmt::eventRef` fields (already lowered by `hir.cpp` and traversed by
+`sema.cpp`). Sema type-checks `eventRef` as an EVENT variable or element,
+citing (114). IRGen calls `pli_event_complete(taskEventAddr(...))` after the
+value is written and any REPLY read, so a waiting task observes the fully
+completed display. No runtime change. Rule (113) record-I/O EVENT stays
+diagnosed; only the (114) DISPLAY EVENT option is served.
+
+**Consequences.** `tests/core/display_event.pli`, `tests/core/bad_display_event.pli`,
+`tests/driver/display_event.sh`, and `tests/ir/display_event.pli` pin the
+behaviour and lowering. GRAMMAR-COVERAGE row (114) updated.

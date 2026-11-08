@@ -3589,7 +3589,8 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   return st;
 }
 
-// display-statement ::= DISPLAY ( expression ) [ REPLY ( reference ) ]  rule (114)
+// display-statement ::= DISPLAY ( expression )
+//                      [ REPLY ( reference ) ] [ EVENT ( reference ) ]  rule (114)
 StmtP Parser::parseDisplay() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Display;
@@ -3600,17 +3601,34 @@ StmtP Parser::parseDisplay() {
   st->value = parseExpr();
   if (!expect(Tok::RParen, "(114)"))
     return nullptr;
-  if (atWord("REPLY")) {
-    advance();
-    if (eat(Tok::LParen)) {
-      // REPLY takes a reference (scalar character variable).
-      st->replyTarget = parseExpr();
-      expect(Tok::RParen, "(114)");
+  // Options may appear in either order (REPLY, EVENT), at most once each.
+  for (int seen = 0; seen < 2; ++seen) {
+    if (atWord("REPLY") && !st->replyTarget) {
+      advance();
+      if (eat(Tok::LParen)) {
+        // REPLY takes a reference (scalar character variable).
+        st->replyTarget = parseExpr();
+        expect(Tok::RParen, "(114)");
+      } else {
+        d_.error(cur().loc, "expected '(' after REPLY", "(114)");
+        return nullptr;
+      }
+    } else if (atWord("EVENT") && !st->eventRef) {
+      advance();
+      if (eat(Tok::LParen)) {
+        // EVENT takes a reference (EVENT variable or element).
+        st->eventRef = parseExpr();
+        expect(Tok::RParen, "(114)");
+      } else {
+        d_.error(cur().loc, "expected '(' after EVENT", "(114)");
+        return nullptr;
+      }
     } else {
-      d_.error(cur().loc, "expected '(' after REPLY", "(114)");
-      return nullptr;
+      break;
     }
   }
+  if (atWord("REPLY") || atWord("EVENT"))
+    d_.error(cur().loc, "duplicate DISPLAY option", "(114)");
   expect(Tok::Semi, "(114)");
   return st;
 }
