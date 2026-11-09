@@ -1,12 +1,14 @@
- /* rule (47): a negative repetition count is diagnosed. */
- bad_format_repeat_neg: procedure options(main);
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Format iteration (rule (47)): a non-integer repetition count is diagnosed. */
+bad_format_repeat_neg: procedure options(main);
     declare buf char(40);
     declare a fixed bin(31);
     a = 1;
-    put string(buf) edit(a) ((-1)(f(4)));
- end bad_format_repeat_neg;
+    put string(buf) edit(a) ((1.5)(f(4)));
+end bad_format_repeat_neg;
 
- f: proc(k) returns(fixed bin(31));
+f: proc(k) returns(fixed bin(31));
     declare k fixed bin(31);
     return(k);
- end f;
+end f;

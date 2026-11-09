@@ -5713,15 +5713,9 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       if (f.kind == FormatItem::Repeat) {
         typeExpr(f.count.get(), sc, p);
         // The repetition count must be an integer-compatible scalar (rule 47).
-        if (f.count && !f.count->ty.isNumeric() && !f.count->ty.isVoid())
+        if (f.count && (f.count->ty.k == TK::Float || f.count->ty.k == TK::FixedDec && f.count->ty.scale != 0 || f.count->ty.isChar() || f.count->ty.isBit() || f.count->ty.isVoid()))
           d_.error(f.count->loc, "a format iteration count must be an integer expression", "(47)");
-        // A constant negative count is a compile-time error (ADR-376); a
-        // runtime-evaluated negative value traps in IRGen.
-        bool negLit = f.count && f.count->kind == Expr::IntLit && f.count->ival < 0;
-        bool negUnary = f.count && f.count->kind == Expr::Unary && f.count->op == Tok::Minus &&
-                        f.count->a && f.count->a->kind == Expr::IntLit;
-        if (negLit || negUnary)
-          d_.error(f.count->loc, "a format repetition count must not be negative", "(47)");
+        // Nonpositive (≤0) counts skip at runtime per Y33-6003-0 §15675–15690.
         typeFormats(f.items);
       }
       // An F/E scale factor (rule (50)) is a numeric expression evaluated for

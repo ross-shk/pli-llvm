@@ -1,8 +1,8 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Format iteration (rule 47): runtime-evaluated repetition counts with
-    nonpositive skip semantics. */
- format_repeat_live: procedure options(main);
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Format iteration (rule 47): runtime-evaluated repetition counts with
+   nonpositive skip semantics. */
+format_repeat_live: procedure options(main);
     declare buf char(40);
     declare a fixed bin(31);
     declare b fixed bin(31);
@@ -11,6 +11,7 @@
     declare n fixed bin(31);
     declare i fixed bin(31);
     declare f entry(fixed bin(31)) returns(fixed bin(31));
+    declare counter fixed bin(31) static initial(0);
 
     /* Variable count: (n)(F(4)) with n=2 -> two fields. */
     n = 2;
@@ -54,18 +55,17 @@
        stop;
     end;
 
-    /* Count expression with side effect: call counter increments once. */
-    call reset_counter();
+    /* Count expression with side effect: counter increments once. */
+    counter = 0;
     a = 6;
-    put string(buf) edit(a) ((call_counter())(f(4)));
+    put string(buf) edit(a) ((inc_counter())(f(4)));
     get string(buf) edit(c) (f(4));
     if c ^= 6 then do;
        put skip list('FAIL side effect count', c);
        stop;
     end;
-    call get_counter(d);
-    if d ^= 1 then do;
-       put skip list('FAIL count evaluated once', d);
+    if counter ^= 1 then do;
+       put skip list('FAIL count evaluated once', counter);
        stop;
     end;
 
@@ -73,23 +73,12 @@
  end format_repeat_live;
 
  f: proc(k) returns(fixed bin(31));
-    declare k fixed bin(31);
-    return(k);
+     declare k fixed bin(31);
+     return(k);
  end f;
 
- reset_counter: procedure;
-    declare counter fixed bin(31) static initial(0);
-    counter = 0;
- end reset_counter;
-
- call_counter: procedure returns(fixed bin(31));
-    declare counter fixed bin(31) static initial(0);
-    counter = counter + 1;
-    return(2);
- end call_counter;
-
- get_counter: procedure(out_val);
-    declare out_val fixed bin(31);
-    declare counter fixed bin(31) static;
-    out_val = counter;
- end get_counter;
+ inc_counter: procedure returns(fixed bin(31)) options(external);
+     declare counter fixed bin(31) external;
+     counter = counter + 1;
+     return(2);
+ end inc_counter;
