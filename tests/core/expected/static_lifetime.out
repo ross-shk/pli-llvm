@@ -23,4 +23,8 @@ static_array_init arr( 5 ) = 50
 static_struct_init s.a = 100 s.b = 200
 --- second call ---
 static_struct_init s.a = 101 s.b = 202
+recursive_begin_static depth= 1
+recursive_begin_static depth= 2
+recursive_begin_static depth= 3
+recursive_begin_static depth= 4
 PASS static_lifetime

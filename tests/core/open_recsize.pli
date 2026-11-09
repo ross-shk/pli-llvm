@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN RECSIZE/BLKSIZE — implementation-dependent. */
+open_recsize: procedure options(main);
+    declare f file;
+    open file(f) title('recsize.dat') output recsize(80) blksize(800);
+    put file(f) list('test');
+    close file(f);
+    put skip list('PASS open_recsize');
+end open_recsize;

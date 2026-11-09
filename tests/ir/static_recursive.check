@@ -1,0 +1,6 @@
+CHECK: @pli_g_COUNTER = internal global i32 0
+CHECK: define {{.*}}@REC_STATIC
+CHECK: load i32, ptr @pli_g_COUNTER
+CHECK: call {{.*}}sadd.with.overflow.i32
+CHECK: store i32 {{.*}}, ptr @pli_g_COUNTER
+CHECK-NOT: alloca i32.*COUNTER

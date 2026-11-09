@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Factored INITIAL CALL — each name invokes function independently
+    (rules 11, 26, 27). */
+ FACTORED_INITCALL: PROCEDURE OPTIONS(MAIN);
+
+   DECLARE (V1, V2, V3) FIXED BIN(31) INITIAL(CALL FACTORY());
+
+   PUT LIST('Values:'); PUT SKIP LIST(V1, V2, V3);
+   /* Expect three distinct calls: 1, 2, 3 */
+
+ FACTORY: PROCEDURE RETURNS(FIXED BIN(31));
+   DECLARE SEQ STATIC FIXED BIN(31) INITIAL(0);
+   SEQ = SEQ + 1;
+   RETURN(SEQ);
+ END FACTORY;
+
+ END FACTORED_INITCALL;

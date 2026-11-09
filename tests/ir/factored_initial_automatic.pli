@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* IR check: factored AUTOMATIC INITIAL emits entry-block stores, no globals
+    (rules 11, 26). */
+ FACTORED_AUTO_IR: PROCEDURE OPTIONS(MAIN);
+   DECLARE (X, Y)(2) FIXED BIN(31) INITIAL(1, 2);
+   /* Automatic: stores in entry block, not globals */
+ END FACTORED_AUTO_IR;

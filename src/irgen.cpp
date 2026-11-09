@@ -4143,6 +4143,13 @@ llvm::Value* IRGen::checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool de
   return r;
 }
 
+llvm::Value* IRGen::checkedMul(llvm::Value* a, llvm::Value* b) {
+  return checkedArith(Tok::Star, a, b, false);
+}
+llvm::Value* IRGen::checkedAdd(llvm::Value* a, llvm::Value* b) {
+  return checkedArith(Tok::Plus, a, b, false);
+}
+
 // FIXED DECIMAL precision trap (QR1.2): |v| >= limit holds more digits than
 // the target (SIZE path, hard ERROR when unhandled). Two-sided so
 // INT_MIN/INT128_MIN is caught without negating it. The limit always fits in
@@ -7228,13 +7235,14 @@ void IRGen::emitStmt(HStmt* s) {
     emitPut(s);
     break;
   case HStmt::Display: {
-    // Rule (114): one scalar value plus a newline (REPLY stays diagnosed).
+    // Rule (114): one scalar value plus a newline; REPLY reads one reply line;
+    // EVENT completes the named event on finish (shared completion ABI).
     // ADR-233: the value is evaluated first, then written under the output
     // lock when the program has a task.
     Val v = emitExpr(s->value.get());
     llvm::Value* eventAddr = nullptr;
-    if (s->eventTarget)
-      eventAddr = taskEventAddr(s->eventTarget.get(), s->loc);
+    if (s->eventRef)
+      eventAddr = taskEventAddr(s->eventRef.get(), s->loc);
     if (eventAddr)
       b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
     switch (v.ty.k) {
@@ -7291,8 +7299,13 @@ void IRGen::emitStmt(HStmt* s) {
       rv.ty = rty;
       storeGetTarget(rt, rv, s->loc);
     }
-    if (eventAddr)
-      b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+// DISPLAY ... EVENT (rule 114): complete the named event once the display
+    // (and any REPLY read) has finished, using the shared completion ABI.
+    if (s->eventRef) {
+      llvm::Value* evAddr = taskEventAddr(s->eventRef.get(), s->loc);
+      if (evAddr)
+        b_.CreateCall(runtimeFn("pli_event_complete"), {evAddr});
+    }
     break;
   }
   case HStmt::Get:
@@ -8482,7 +8495,7 @@ void IRGen::ctlAllocDeclared(Symbol* sym, SourceLoc loc) {
   }
   llvm::Value* total = i64(elemSz);
   for (size_t k = 0; k < rank; ++k)
-    total = b_.CreateMul(total, exts[k], "ctldtot");
+    total = checkedMul(total, exts[k]);
   if (rank == 1) {
     llvm::Value* addr = b_.CreateCall(runtimeFn("pli_ctl_alloc"), {ctlKeyOf(sym), total});
     ctlNoteAlloc(sym, addr);
@@ -8740,7 +8753,7 @@ void IRGen::emitAllocate(HStmt* s) {
         long long elemSz =
             (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
         llvm::Value* n = toI64(emitExpr(dimE), s->loc);
-        sz = b_.CreateMul(n, i64(elemSz), "ctln");
+        sz = checkedMul(n, i64(elemSz));
       } else if (!bsym->ty.isChar() && singleStar && !clE &&
                  (isCtlDynArray(bsym) || (!bsym->ty.isArray() && bsym->controlled))) {
         // `ALLOCATE x (*)` reuses the previous generation's extent (IBM (89)).
@@ -9173,7 +9186,10 @@ void IRGen::emitRecordWriteKeyed(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
   Val v = emitExpr(s->value.get());
-  Val k = emitExpr(s->keyOpt.get());
+  // WRITE accepts the key via either KEY(...) or KEYFROM(...); both supply the
+  // key of the record being written (rules (112),(113)).
+  HExpr* keyExpr = s->keyOpt ? s->keyOpt.get() : s->keyFromOpt.get();
+  Val k = emitExpr(keyExpr);
   switch (v.ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
@@ -14724,8 +14740,87 @@ Val IRGen::emitExpr(HExpr* e) {
 
   if (isCmp && a.ty.isBit() && b.ty.isBit() &&
       (a.ty.len > 64 || b.ty.len > 64)) {
-    // Value-width-independent BIT comparison (Wave 4 slice 3).
-    return emitBitCmp(a, b, op, e->loc);
+    // Value-width-independent BIT comparison for wide operands: right-justify
+    // each operand into N = max(na, nb) bits (zero-pad on the left) so operands
+    // of differing widths compare by numeric value, then ask the runtime
+    // pli_bit_cmp to compare the N-bit buffers (padding-safe).
+    const int na = a.ty.len, nb = b.ty.len;
+    const int N = std::max(na, nb);
+    // Right-justify an nx-bit value into an N-bit (BN-byte) big-endian buffer,
+    // masking the original padding bits of the final source byte first.
+    auto normalize = [&](const Val& x, int nx) -> llvm::Value* {
+      const int Bx = (nx + 7) / 8;
+      const int BN = (N + 7) / 8;
+      const int S = N - nx; // left-pad bit count
+      llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)BN);
+      llvm::Value* out = llvm::UndefValue::get(arrTy);
+      for (int j = 0; j < BN; ++j) {
+        llvm::Value* byte = b_.getInt8(0);
+        for (int t = 0; t < 8; ++t) {
+          const int L = j * 8 + t - S; // original local bit index
+          if (L < 0 || L >= nx) continue;
+          const int bi = L / 8;
+          if (bi >= Bx) continue;
+          llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
+          if (bi == Bx - 1) {
+            const int keep = nx - 8 * (Bx - 1);
+            if (keep < 8)
+              srcByte = b_.CreateAnd(srcByte, b_.getInt8((int8_t)((0xFF << (8 - keep)) & 0xFF)),
+                                     "norm.m");
+          }
+          const int pos = 7 - (L % 8);
+          llvm::Value* bitv = b_.CreateLShr(srcByte, (unsigned)pos, "norm.sh");
+          bitv = b_.CreateAnd(bitv, b_.getInt8(1), "norm.bit");
+          bitv = b_.CreateShl(bitv, (unsigned)(7 - t), "norm.pl");
+          byte = b_.CreateOr(byte, bitv, "norm.or");
+        }
+        out = b_.CreateInsertValue(out, byte, (unsigned)j, "norm.i");
+      }
+      return out;
+    };
+    auto slotFor = [&](llvm::Value* arr, llvm::Type* ty) -> llvm::Value* {
+      llvm::Value* slot = b_.CreateAlloca(ty, nullptr, "bitcmp.slot");
+      b_.CreateStore(arr, slot);
+      return b_.CreateBitCast(slot, b_.getPtrTy());
+    };
+    llvm::Type* normTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)((N + 7) / 8));
+    llvm::Value* pa = slotFor(normalize(a, na), normTy);
+    llvm::Value* pb = slotFor(normalize(b, nb), normTy);
+    llvm::Value* cmp = b_.CreateCall(runtimeFn("pli_bit_cmp"),
+                                     {pa, pb, i64((long long)N)}, "bitcmp");
+    llvm::Value* r = nullptr;
+    switch (op) {
+    case Tok::Eq:
+      r = b_.CreateICmpEQ(cmp, b_.getInt32(0), "bitcmp.eq");
+      break;
+    case Tok::Ne:
+      r = b_.CreateICmpNE(cmp, b_.getInt32(0), "bitcmp.ne");
+      break;
+    case Tok::Lt:
+      r = b_.CreateICmpSLT(cmp, b_.getInt32(0), "bitcmp.lt");
+      break;
+    case Tok::Le:
+      r = b_.CreateICmpSLE(cmp, b_.getInt32(0), "bitcmp.le");
+      break;
+    case Tok::Gt:
+      r = b_.CreateICmpSGT(cmp, b_.getInt32(0), "bitcmp.gt");
+      break;
+    case Tok::Ge:
+      r = b_.CreateICmpSGE(cmp, b_.getInt32(0), "bitcmp.ge");
+      break;
+    case Tok::Ngt:
+      r = b_.CreateICmpSLE(cmp, b_.getInt32(0), "bitcmp.ngt");
+      break;
+    case Tok::Nlt:
+      r = b_.CreateICmpSGE(cmp, b_.getInt32(0), "bitcmp.nlt");
+      break;
+    default:
+      r = b_.CreateICmpEQ(cmp, b_.getInt32(0), "bitcmp.d");
+      break;
+    }
+    v.ty = Type::bit(1);
+    v.reg = r;
+    return v;
   }
 
   if (isCmp && a.ty.isChar() && b.ty.isChar()) { // rule (117)
@@ -15259,19 +15354,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       }
       // A subscripted member array S.A(i): the member holds the array.
       if (!a->memberPath.empty()) {
-        if (a->locPtr) {
-          d_.error(a->loc,
-                   "ADDR of a locator-qualified member array is not implemented in this stage",
-                   "(124)");
-          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
-          result = v;
-          return true;
-        }
+        // ADDR of a locator-qualified member array served (rule 124).
         const Type& arr = memberType(a->sym, a->memberPath);
         llvm::Value *ub = nullptr, *lb = nullptr;
-        llvm::Value* base = arr.isDynamic()
-                                ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
-                                : memberAddr(a->sym, a->memberPath, a->loc);
+        llvm::Value* base = a->locPtr
+                                ? locatorMemberAddr(a->sym, a->memberPath, emitExpr(a->locPtr.get()).reg)
+                                : (arr.isDynamic()
+                                       ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
+                                       : memberAddr(a->sym, a->memberPath, a->loc));
         // member later axes stay constant; the slot vec is axis 0 only
         v.reg = arrayElementAddr(arr, base, a->args, a->loc,
                                  ub ? std::vector<llvm::Value*>{ub}

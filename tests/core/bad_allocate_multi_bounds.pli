@@ -1,0 +1,8 @@
+ /* rules (25),(89): ALLOCATE with a runtime extent on a multi-axis based heap. */
+ bad_allocate_multi_bounds: procedure options(main);
+    declare n fixed bin(31) init(2);
+    declare 1 rec based(p),
+            2 a(n, 3) fixed bin(31);
+    declare p pointer;
+    allocate rec(n) set(p);
+ end bad_allocate_multi_bounds;

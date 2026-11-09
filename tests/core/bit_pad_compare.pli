@@ -1,0 +1,32 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* BIT(n>64) padding safety (ADR-283): padding bits are indeterminate and
+    do not affect equality or ordering. */
+ bit_pad_compare: procedure options(main);
+    declare a bit(67);
+    declare b bit(67);
+    declare d bit(67);
+    declare pad bit(72);
+    declare hits fixed bin(31);
+
+    hits = 0;
+
+    /* Raw storage with padding bits set to 1; value bits all 1. */
+    pad = '111111111111111111111111111111111111111111111111111111111111111111111111'b;
+    unspec(a) = pad;
+
+    /* Same value bits, padding bits zero: compares equal. */
+    b = '1111111111111111111111111111111111111111111111111111111111111111111'b;
+    if a = b then hits = hits + 1;
+    if ^(a ^= b) then hits = hits + 1;
+
+    /* NOT normalises padding to zero; round-trip compares equal. */
+    d = ^(^a);
+    if a = d then hits = hits + 1;
+
+    if hits ^= 3 then do;
+       put skip list('FAIL bit_pad_compare', hits);
+       stop;
+    end;
+    put skip list('PASS bit_pad_compare');
+ end bit_pad_compare;

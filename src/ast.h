@@ -346,9 +346,6 @@ struct Stmt {
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   ExprP replyTarget;
-  // DISPLAY ... EVENT ( reference ) (rule 114): the event completed when the
-  // display (and any REPLY read) finishes.
-  ExprP eventTarget;
 
    std::vector<ExprP> args; // CALL arguments
    ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
@@ -357,6 +354,7 @@ struct Stmt {
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT
   // variable (taskRef null = bare TASK with no name); priority is evaluated
   // and ignored in this stage (best-effort, ADR-016).
+  // Also used for DISPLAY ... EVENT ( rule 114 ).
   bool hasTaskOpt = false; // bare TASK present (named or not)
   ExprP taskRef;           // TASK(name) — null when bare TASK
   ExprP eventRef;          // EVENT(name)

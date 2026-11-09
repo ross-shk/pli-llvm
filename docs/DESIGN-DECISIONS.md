@@ -14296,3 +14296,171 @@ wide-bit-to-numeric boundary.
 **Limitations.** Keyed `IGNORE` works for CHAR records; FIXED BIN keyed read has a pre-existing bug (not introduced here). Structure `LOCATE` diagnosed. `SET` pointer lifetime is until next I/O. `NOLOCK`/`UNLOCK` are no-ops without threading.
 
 **Consequences.** New runtime entry points in `rt_file.c`: `pli_record_skip_keyed`, `pli_record_position_keyed`, `pli_record_read_keyed_next_{fixed,float,char,bit}`. Added to `pli_rt_abi.def`. IRGen `emitRecordReadKeyed` updated for IGNORE with/without KEY. Tests: `record_ignore.pli`, `record_ignore_keyed_char.pli`, `record_set.pli`, `record_locate_simple.pli`, `bad_record_*.pli`. GRAMMAR-COVERAGE.md row (112),(113) updated.
+
+## ADR-381 (originally remote ADR-381) — BIT(n>64) value-width-independent, padding-safe comparison
+
+**Context.** `BIT(n)` for n > 64 could not be compared except by truncation to
+the low 64 bits (ADR-275). `bitLitToU64` rejected widths above 64, so wider
+values either failed to compile or compared only their low 64 bits. Padding bits
+in the final storage byte are indeterminate (ADR-283) and must not affect
+equality or ordering.
+
+**Decision.** Retain the packed byte-buffer representation `[ceil(n/8) x i8]`
+with no i128 shortcut and no big-number type. For `BIT` comparisons of any
+width, when either operand exceeds 64 bits, emit addresses of both packed
+buffers and call the platform-agnostic runtime helper `pli_bit_cmp(ptr a, ptr b,
+i64 nbits) -> i32`, which compares full bytes except the last and masks the
+padding bits of the final byte with `0xFF << (8 - (n mod 8))` (or `0xFF` when
+n is a multiple of 8). The n <= 64 path is unchanged. `BIT` comparison in sema
+requires matching widths; mismatched widths are diagnosed with (117). `BIT(0)`
+and `BIT(-1)` are diagnosed with (18).
+
+Numeric precision evaluation (no representation change): `FIXED DECIMAL` remains
+a scaled i128 (ADR-284, ADR-289); values beyond that range are outside
+applicable scope for this dialect and keep existing diagnostic behaviour. No
+big-number type is introduced. Output width keeps the existing cap (ADR-293).
+
+
+## ADR-382 (originally remote ADR-382) — DISPLAY ... EVENT completes the named event on finish (rule 114)
+
+**Status.** Accepted.
+
+**Context.** Rule (114) permits `DISPLAY ( expression ) [ REPLY ( reference ) ]
+[ EVENT ( reference ) ] ;`. The compiler already served scalar DISPLAY and
+DISPLAY ... REPLY, but the EVENT option was not parsed, so a program that
+signals a waiting task from a DISPLAY statement could not be written. The
+shared event-completion ABI (`pli_event_complete`) already existed for
+asynchronous CALL.
+
+**Decision.** `parseDisplay` now accepts `REPLY (...)` and `EVENT (...)` in
+either order, at most once each, sharing the existing `Stmt::eventRef` /
+`HStmt::eventRef` fields (already lowered by `hir.cpp` and traversed by
+`sema.cpp`). Sema type-checks `eventRef` as an EVENT variable or element,
+citing (114). IRGen calls `pli_event_complete(taskEventAddr(...))` after the
+value is written and any REPLY read, so a waiting task observes the fully
+completed display. No runtime change. Rule (113) record-I/O EVENT stays
+diagnosed; only the (114) DISPLAY EVENT option is served.
+
+**Consequences.** `tests/core/display_event.pli`, `tests/core/bad_display_event.pli`,
+`tests/driver/display_event.sh`, and `tests/ir/display_event.pli` pin the
+behaviour and lowering. GRAMMAR-COVERAGE row (114) updated.
+
+
+## ADR-383 (originally remote ADR-383) — DEFINED structure overlays (rule 24): storage-size and alignedness model
+
+**Context.** TR 25.084 rule (24) defines the `DEFINED` attribute for whole-base
+overlays (`Y DEFINED X`), subscripted bases (`Y DEFINED X(...)`), and `POSITION`
+string overlays. The prior implementation accepted scalar and array overlays
+when the item and base had the same storage size, but diagnosed any structure
+overlay as "not implemented in this stage" even when the types were identical.
+IBM Enterprise PL/I (Y33-6003-0:7936-8075) requires that a structure overlay
+(redefining a record layout over another variable's storage) is valid when:
+1. The item and base agree in ALIGNED/UNALIGNED.
+2. The item's storage size fits within the base's storage size (containment).
+3. The base is in the same or an enclosing scope (cross-procedure DEFINED
+   stays diagnosed per ADR-048).
+
+**Decision.** Extend the whole-base overlay branch in sema to accept structure
+overlays under the above constraints:
+
+1. If the item has no explicit structure members (e.g., `DECLARE 1 VIEW DEFINED BASE;`)
+   it inherits the base's structure type (same-type view).
+2. If the item declares its own structure, the two structures may differ in
+   shape provided:
+   - `item.ty.unaligned == base->ty.unaligned` (alignedness agreement).
+   - `typeStorageBytes(item.ty) <= typeStorageBytes(base->ty)` (size containment).
+3. A scalar or array item over a structure base (or vice versa) is still
+   diagnosed — POSITION string overlay remains CHARACTER-only.
+4. The cross-procedure restriction (`DEFINED across an enclosing procedure`)
+   remains.
+
+A new helper `typeStorageBytes(Type)` computes the storage size in bytes for
+scalars, arrays, structures (aligned and packed), and unions, mirroring the
+LLVM layout emitted by `IRGen::llvmTy` (ADR-037, ADR-169). An `aligned`
+structure pads each member to its natural alignment and adds tail padding to
+the struct alignment; an `UNALIGNED` structure is packed with no padding; a
+`UNION` is a byte array sized to the largest member (ADR-202). The helper
+returns -1 when the size cannot be determined at compile time (runtime extent,
+VARYING, POINTER/OFFSET/AREA/ENTRY/VOID leaf), causing the overlay to be
+diagnosed.
+
+The existing IRGen paths (`addressOf` for `definedBase` symbols, member
+access via `structMemberGEP` through the item's type) already work for
+structure overlays without allocation changes — verification confirmed that
+`view.x` lowers to a GEP off the base's address with no `alloca` for `view`.
+
+**Consequences.** New tests: `tests/core/defined_struct_view.pli` (same-type
+overlay), `tests/core/defined_struct_view_diff.pli` (different shapes, same
+size, packed), `tests/core/bad_defined_struct.pli` (negatives: size mismatch,
+alignedness mismatch, scalar base too small), `tests/ir/defined_struct_view.pli`
++ `.check` (IR pin). GRAMMAR-COVERAGE.md row (24) updated to "M2" (served)
+with the new tests and ADR-383 cited. `guides/programming.md` example added.
+Cross-procedure DEFINED stays diagnosed; lifting it requires frame-lifetime
+work ("parent frame", Wave 3 group 3).
+
+
+## ADR-384 (originally remote ADR-384) — STATIC INITIAL requires compile-time constants (rules (23),(26))
+
+**Context.** TR 25.084 rule (23) gives `STATIC` variables program-lifetime
+storage: allocated once, retained across procedure activations, recursion, and
+nested-block re-entries. Y33-6003 (init semantics) initialises such storage as
+part of program preparation, so an `INITIAL` itemlist for a STATIC variable
+must be computable before the program runs. Until this change, `STATIC
+INITIAL` itemlists were folded wherever the existing sides happened to be
+constant, but a side with a runtime expression silently produced a wrong or
+possibly non-restartable initialization — the compiler accepted it and could
+not build a valid global initializer.
+
+The same audit found two adjacent gaps:
+
+1. `STATIC` declared *inside* a `BEGIN` block or an `ON` unit (a nested
+   activating scope) — its storage must outlive block activations, which the
+   stage's global-per-declaration model does not tie to, so it was accepted
+   with procedure-level scope falling out by accident.
+2. `VALUE` on a `STATIC` variable — the VALUE machinery (ADR-108) treats the
+   constant as an autonomous name; grafting it onto program-lifetime storage
+   conflicts with how the write checker binds targets.
+
+**Decision.** Enforce the compile-time-constant requirement in sema, at each
+place an `INITIAL` itemlist is expanded and stored (`initElems`, `initExpr`):
+
+1. A new helper `Sema::isConstantExpr(Expr*)` classifies what a STATIC
+   initializer may contain: numeric, character, and BIT literals plus signed
+   unary forms. Anything else is diagnosed within that scope's typing.
+   `Sema::checkStaticConstants` runs it over each expanded `INITIAL` list so
+   every call site shares one message and one rule citation.
+2. Every `INITIAL` expansion for a variable with static storage (`STATIC`, or
+   `EXTERNAL`, whose storage is program-lifetime too) runs the helper per
+   element and per scalar; a non-constant side is diagnosed
+   "STATIC INITIAL requires constant expressions" with rule citation
+   `(23),(26)`. `VALUE` on a variable carrying the explicit `STATIC`
+   attribute is diagnosed with rule `(23)`; a plain `EXTERNAL` variable with
+   `VALUE` keeps the homogeneous ADR-108 path it had before this decision.
+3. `STATIC` in a nested block (`BEGIN` body, `ON` unit body) is
+   diagnosed — not warned — "STATIC in a nested block is not implemented in
+   this stage" with rule citation `(23)`. A warning would leave a declaration
+   whose storage silently becomes a procedure-level global; the semantics the
+   source asked for (per-block lifetime) cannot be served, and declining
+   loudly is the only honest answer. A `STATIC` `AREA` (rule (20)) is exempt:
+   its region is whole-program static storage regardless of declaring scope,
+   which `emitGlobals` already serves, so `tests/core/area_static.pli` keeps
+   working unchanged.
+4. Folded constant expressions keep working and are the accepted form:
+   `INITIAL(5+3)` on a scalar STATIC arrives already folded (ADR-240) and
+   stays accepted; the check runs after folding.
+5. `CLOSE FILE(f) IDENT(expr)` (rule (103), implementation-dependent) is
+   parsed and discarded with no AST or HIR field: the option has no shape
+   anywhere in the tree, so later stages cannot accidentally observe it.
+
+**Consequences.** New and updated tests: `tests/core/static_folded_const.pli`
+(scalar STATIC with folded expression initializers runs PASS),
+`tests/core/bad_static_initial.pli`, `tests/core/bad_struct_static.pli`,
+`tests/core/bad_array_static.pli` (all rejected), and
+`tests/core/bad_static_nested.pli` rejected for STATIC inside a `BEGIN`
+block. `STATIC` in a nested block, a `VALUE` on `STATIC`, and non-constant
+`STATIC INITIAL` now all fail compilation instead of producing storage the
+runtime cannot honour. GRAMMAR-COVERAGE.md rows (23), (26), (42), (91),
+(100)-(103) updated accordingly. Lifting the nested-block restriction needs
+program-lifetime storage keyed on declaring scope, not procedure (same bullet
+as the "parent frame" work planned in Wave 3 group 3); supporting
+expression-valued `INITIAL` on STATIC arrays is a later fold-user extension.

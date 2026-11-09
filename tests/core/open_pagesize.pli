@@ -1,10 +1,10 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* rule (101): PAGESIZE(n) is stored per file. */
- open_pagesize: procedure options(main);
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN PAGESIZE option — page tracking only. */
+open_pagesize: procedure options(main);
     declare f file;
-    open file(f) output title('tests/core/out/open_pagesize.dat') pagesize(5);
-    put file(f) list('x');
+    open file(f) title('open_pagesize.dat') output pagesize(10);
+    put file(f) list('test');
     close file(f);
     put skip list('PASS open_pagesize');
- end open_pagesize;
+end open_pagesize;

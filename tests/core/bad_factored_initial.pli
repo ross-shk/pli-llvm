@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Negative tests for factored INITIAL: dynamic bounds (rule 13),
+    nested factoring (rule 11), INITIAL CALL not implemented (rule 27). */
+ BAD_FACTORED_INIT: PROCEDURE OPTIONS(MAIN);
+
+   /* Dynamic bounds in factored declaration — rule (13) */
+   DECLARE (X, Y)(N) FIXED BIN(31);  /* ERROR (13) */
+
+   /* INITIAL CALL in factored with wrong arity — rule (27) */
+   DECLARE (A, B) FIXED BIN(31) INITIAL(CALL NO_ARGS());  /* OK if FACTORY() exists */
+
+   /* Nested factored INITIAL not allowed */
+   DECLARE ((A, B), (C, D)) FIXED BIN(31) INITIAL(0);  /* ERROR (11) */
+
+ NO_ARGS: PROCEDURE RETURNS(FIXED BIN(31));
+   RETURN(1);
+ END NO_ARGS;
+
+ END BAD_FACTORED_INIT;

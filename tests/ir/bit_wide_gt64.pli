@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ bit_wide_gt64: procedure options(main);
+    declare a bit(67);
+    declare b bit(67);
+    declare c bit(67);
+    a = '1010101010101010101010101010101010101010101010101010101010101010101'b;
+    b = a;
+    c = ^a;
+    if a = b then c = c;
+ end bit_wide_gt64;

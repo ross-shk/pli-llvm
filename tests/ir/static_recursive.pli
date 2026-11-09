@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* STATIC in recursive procedure: verify exactly one global for STATIC
+   variable, no re-initialization per activation. Rule (23). */
+static_recursive: procedure options(main);
+    call rec_static(1);
+    call rec_static(2);
+    put skip list('PASS static_recursive');
+end static_recursive;
+
+rec_static: proc(n) recursive options(bypass);
+    dcl n fixed bin(31);
+    dcl counter fixed bin(31) static initial(0);
+    counter = counter + n;
+    put skip list('counter =', counter);
+    return;
+end rec_static;

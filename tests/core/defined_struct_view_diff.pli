@@ -1,0 +1,25 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* DEFINED (rule 24): a structure overlay with different */
+   /* member layout but same total size and ALIGNED/UNALIGNED */
+   /* agreement aliases storage. */
+     defined_struct_view_diff: procedure options(main);
+       declare 1 rec unaligned,
+                2 a fixed bin(31),
+                2 b fixed bin(31),
+                2 c fixed bin(31);
+       declare 1 view defined rec unaligned,
+                2 lo fixed bin(15),
+                2 hi fixed bin(15),
+                2 rest fixed bin(31);
+       /* view overlays rec's storage as a packed layout */
+       rec.a = 0; rec.b = 0; rec.c = 0;
+       view.lo = 42; view.hi = 7;
+       if view.lo ^= 42 then do; put skip list('FAIL lo', view.lo);
+          stop; end;
+       if view.hi ^= 7 then do; put skip list('FAIL hi', view.hi);
+          stop; end;
+       if rec.a = 0 then do; put skip list('FAIL no-alias');
+          stop; end;
+       put skip list('PASS defined_struct_view_diff');
+     end defined_struct_view_diff;
