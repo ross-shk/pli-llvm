@@ -243,19 +243,28 @@ struct HStmt {
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )
   HExprP keyFromOpt = nullptr;// KEYFROM( expression )
-  bool keyNoLock = false;     // NOLOCK option (diagnosed (113))
-  bool keySet = false;        // SET option (diagnosed (113))
+  // Rule (113) record options (keyed/direct + sequential):
+  bool keyNoLock = false;     // NOLOCK                READ/REWRITE/DELETE
+  HExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
+  HExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
+  HExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;     // UNLOCK                READ/REWRITE (release lock)
+  HExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   HExprP replyTarget;
+  // DISPLAY ... EVENT ( reference ) (rule 114): the event completed when the
+  // display (and any REPLY read) finishes. Reuses the CALL TASK eventRef field
+  // since a statement cannot be both DISPLAY and CALL.
+  // HExprP eventTarget;  // removed: unified with eventRef
 
   std::vector<HExprP> args; // CALL arguments
 
   // CALL task options (rule (79), QR2.8): mirrors the AST fields.
   bool hasTaskOpt = false;
   HExprP taskRef;
-  HExprP eventRef;
+  HExprP eventRef;          // EVENT(name) for DISPLAY EVENT or CALL TASK EVENT
   HExprP priorityExpr;
   // WAIT (rule (82)): event list + optional count.
   std::vector<HExprP> waitEvents;

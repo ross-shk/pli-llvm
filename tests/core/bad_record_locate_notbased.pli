@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): LOCATE on non-BASED variable should be diagnosed. */
+bad_record_locate_notbased: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  open file(f) record sequential output title('bad_locate.dat');
+  write file(f) locate(x);  /* x is not BASED */
+  close file(f);
+end bad_record_locate_notbased;

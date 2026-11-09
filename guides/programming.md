@@ -1448,6 +1448,8 @@ after the `open` with the file still closed:
 `display(x)` prints one value plus a newline (handy for quick debugging).
 `display(x) reply(v)` prints `x` and then reads the next input line into the
 character variable `v` — a prompt and its answer in one statement.
+`display(x) event(e)` completes the event `e` once the display (and any reply)
+finishes; `reply` and `event` may appear in either order.
 
 **Not yet**
 
@@ -1540,5 +1542,7 @@ Call C like `ctypes` (Python) or `cgo` (Go). Declare the C function as an `entry
 > **Run the full example:** [`examples/c_interop.pli`](../examples/c_interop.pli) with [`examples/c_interop_helper.c`](../examples/c_interop_helper.c) — `clang -c c_interop_helper.c && pli c_interop.pli c_interop_helper.o -o cinterop && ./cinterop`.
 
 ---
+
+`BIT` values of any width may be compared with `=`, `^=`, `<`, `<=`, `>`, `>=`, `¬>` and `¬<`; padding bits do not participate in the result (ADR-283/ADR-377). Converting a `BIT(n>64)` value to a number is not implemented and is diagnosed.
 
 *Next steps: [grammar coverage*](./docs/GRAMMAR-COVERAGE.md) f*or rule-by-rule status and *`tests/`* for runnable examples behind each feature.*

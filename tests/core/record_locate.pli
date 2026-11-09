@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): RECORD LOCATE option — WRITE LOCATE for BASED variables. */
+record_locate: procedure options(main);
+  declare f file;
+  declare 1 rec based(p),
+    2 fd fixed binary(31);
+  declare p pointer;
+  declare i fixed binary(31);
+
+  /* Allocate the based variable */
+  allocate rec set(p);
+
+  open file(f) record sequential output
+     title('tests/core/out/record_locate.dat');
+  /* Fill the based variable */
+  rec.fd = 42;
+  /* Write using LOCATE - writes from the based variable's buffer */
+  write file(f) locate(rec);
+  close file(f);
+
+  free rec;
+
+  open file(f) record sequential input
+     title('tests/core/out/record_locate.dat');
+  read file(f) into(i);
+  put skip list('read back: ' || i);
+  close file(f);
+  put skip list('PASS record_locate');
+end record_locate;

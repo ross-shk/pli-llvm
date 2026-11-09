@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): NOLOCK on WRITE should be diagnosed. */
+bad_record_nolock_write: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  open file(f) record sequential output title('bad_nolock.dat');
+  write file(f) nolock from(x);  /* NOLOCK not valid on WRITE */
+  close file(f);
+end bad_record_nolock_write;

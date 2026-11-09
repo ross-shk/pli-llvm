@@ -2,6 +2,6 @@
 /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* rule (114): DISPLAY ... EVENT lowers a pli_event_complete call. */
 display_event_ir: procedure options(main);
-    declare ev event;
-    display (42) event(ev);
+   declare ev event;
+   display (42) event(ev);
 end display_event_ir;

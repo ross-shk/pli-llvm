@@ -1,0 +1,4 @@
+CHECK: store i32 1, ptr %A.addr
+CHECK: store i32 3, ptr %B.addr
+CHECK: store i32 4, ptr %C.addr
+CHECK: store i32 50, ptr %D.addr

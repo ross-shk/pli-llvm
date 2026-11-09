@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): IGNORE + INTO should be diagnosed (one data clause only). 
+   Actually IGNORE + INTO is valid - IGNORE skips, INTO receives.
+   Let me test something else - SET on WRITE. */
+bad_record_set_write: proc options(main);
+  dcl f file;
+  dcl x based(p) fixed bin(31);
+  dcl p pointer;
+  open file(f) record sequential output title('bad_set.dat');
+  write file(f) set(p) locate(x);  /* SET not valid on WRITE (only READ/LOCATE) */
+  close file(f);
+end bad_record_set_write;

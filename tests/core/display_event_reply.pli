@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (114): DISPLAY ... EVENT in either order with REPLY. */
+  display_event_reply: procedure options(main);
+     declare ev event;
+     declare buf char(20);
+     display(42) event(ev) reply(buf);
+     display(7) reply(buf) event(ev);
+     if event(ev) = 0 then do;
+        put skip list('FAIL display_event_reply');
+        stop;
+     end;
+     put skip list('PASS display_event_reply');
+  end display_event_reply;

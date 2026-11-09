@@ -290,6 +290,18 @@ PLI_FN(pli_record_read_keyed_float, DOUBLE, (I64, PTR, I64))
 PLI_FN(pli_record_read_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, buf, buflen */
 PLI_FN(pli_record_read_keyed_bit, I8, (I64, PTR, I64))
 
+/* Record I/O options (rule 113): IGNORE, SET, LOCATE, UNLOCK */
+PLI_FN(pli_record_skip, VOID, (I64, I64, I64))                    /* IGNORE(n, rec_size): skip n records */
+PLI_FN(pli_record_skip_keyed, VOID, (I64, I64))                  /* KEYED IGNORE(n): skip n records in index */
+PLI_FN(pli_record_position_keyed, I32, (I64, PTR, I64))          /* KEYED POSITION: find key, set current_idx = idx+1 */
+PLI_FN(pli_record_read_keyed_next_fixed, I64, (I64))             /* KEYED READ NEXT: read at current_idx */
+PLI_FN(pli_record_read_keyed_next_float, DOUBLE, (I64))
+PLI_FN(pli_record_read_keyed_next_char, VOID, (I64, PTR, I64))
+PLI_FN(pli_record_read_keyed_next_bit, I8, (I64))
+PLI_FN(pli_record_unlock, VOID, (I64))                       /* UNLOCK: release current record lock */
+PLI_FN(pli_record_locate_begin, PTR, (I64))                  /* LOCATE: get buffer address for WRITE LOCATE */
+PLI_FN(pli_record_locate_commit, VOID, (I64))                /* LOCATE: commit the located record */
+
 /* Scale helpers for FIXED with negative scale and scale > precision */
 PLI_FN(pli_scale_decimal, VOID, (I64, I64, I64))     /* (val_lo, val_hi, scale) - 128-bit value as lo,hi halves */
 PLI_FN(pli_scale_binary, VOID, (I64, I64))           /* (val, scale) */

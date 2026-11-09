@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): RECORD IGNORE option — skip n records without transferring data. */
+record_ignore: procedure options(main);
+  declare f file;
+  declare x fixed binary(31);
+  declare i fixed binary(31);
+
+  open file(f) record sequential output
+     title('tests/core/out/record_ignore.dat');
+  do i = 1 to 5;
+    x = i * 10;
+    write file(f) from(x);
+  end;
+  close file(f);
+
+  open file(f) record sequential input
+     title('tests/core/out/record_ignore.dat');
+  /* Skip first 2 records (10, 20), read the 3rd (30) */
+  read file(f) ignore(2) into(x);
+  put skip list('after ignore(2), x=' || x);
+  /* Skip next 1 record (40), read the next (50) */
+  read file(f) ignore(1) into(x);
+  put skip list('after ignore(1), x=' || x);
+  close file(f);
+  put skip list('PASS record_ignore');
+end record_ignore;

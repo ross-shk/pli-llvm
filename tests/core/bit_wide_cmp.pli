@@ -1,0 +1,61 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* BIT comparison is value-width-independent (Wave 4 slice 3). Rule (117). */
+ bit_wide_cmp: procedure options(main);
+ declare x bit(100);
+ declare y bit(100);
+ declare z bit(100);
+ declare w bit(128);
+ declare a bit(4);
+ declare b bit(8);
+ declare hits fixed bin(31);
+
+ hits = 0;
+
+ /* Wide equality / inequality. */
+ x = '1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+ y = '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+ if x ^= y then hits = hits + 1;
+ if ^(x = y) then hits = hits + 1;
+ z = '1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+ if z = x then hits = hits + 1;
+ if z ^= y then hits = hits + 1;
+
+ /* Ordered on wide values. */
+ if x > y then hits = hits + 1;
+ if y < x then hits = hits + 1;
+ if x >= y then hits = hits + 1;
+ if y <= x then hits = hits + 1;
+ if ^(x < y) then hits = hits + 1;
+ if ^(y > x) then hits = hits + 1;
+
+ /* Negated comparisons. */
+ if x ¬> y then hits = hits + 0;
+ if y ¬< x then hits = hits + 0;
+ if x ¬< y then hits = hits + 1;
+ if y ¬> x then hits = hits + 1;
+
+ /* Cross-width equality/order via top bit. */
+ w = '10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+ if w ^= x then hits = hits + 1;
+
+ /* Differing widths zero-padded. */
+ a = '1000'b;
+ b = '00001000'b;
+ if a = b then hits = hits + 1;
+ if ^(a ^= b) then hits = hits + 1;
+ if a <= b then hits = hits + 1;
+ if a >= b then hits = hits + 1;
+
+ /* Low bit value is greater than zero. */
+ x = '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001'b;
+ if x > y then hits = hits + 1;
+ if x >= y then hits = hits + 1;
+
+ if hits ^= 19 then do;
+    put skip list('FAIL bit_wide_cmp: expected 19, got', hits);
+    stop;
+ end;
+
+ put skip list('PASS bit_wide_cmp');
+ end bit_wide_cmp;

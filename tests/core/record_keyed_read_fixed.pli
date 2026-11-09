@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): KEYED READ with KEY for FIXED BIN */
+
+record_keyed_read_fixed: procedure options(main);
+  declare f file;
+  declare rk char(8);
+  declare rec fixed binary(31);
+  declare i fixed binary(31);
+
+  /* Phase 1: write five records by KEY */
+  open file(f) record keyed output
+     title('tests/core/out/record_keyed_read_fixed.dat');
+  do i = 1 to 5;
+    rk = 'K' || i;
+    rec = i * 10;
+    write file(f) from(rec) key(rk);
+  end;
+  close file(f);
+
+  /* Phase 2: read by KEY */
+  open file(f) record keyed input
+     title('tests/core/out/record_keyed_read_fixed.dat');
+  rk = 'K3';
+  read file(f) into(rec) key(rk);
+  put skip list('rec=' || rec);
+  close file(f);
+  put skip list('PASS');
+end record_keyed_read_fixed;

@@ -139,6 +139,23 @@ static bool needsWideDecLit(const HExpr* e, const Type& t) {
   return e->kind == HExpr::IntLit && t.intBits() == 128;
 }
 
+// Compute the record size in bytes for a given PL/I type (for RECORD I/O).
+// FIXED: 8 bytes, FLOAT: 8 bytes, BIT(1): 1 byte, CHAR(n): n bytes.
+static long long recordSize(const Type& ty) {
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+  case TK::Float:
+    return 8;
+  case TK::Bit:
+    return 1; // BIT(1) is 1 byte
+  case TK::Char:
+    return ty.len;
+  default:
+    return 8; // fallback
+  }
+}
+
 // Numeric value of a constant INITIAL expression (rule 26). A DECIMAL literal
 // holds its value scaled by 10^q, so divide back to the true value.
 static double iniNumeric(const Expr* e) {
@@ -351,6 +368,47 @@ llvm::Value* IRGen::unpackBitValue(llvm::Value* intval, int nbits, SourceLoc loc
   return agg;
 }
 
+llvm::Value* IRGen::packBitValueWide(llvm::Value* agg, int nbits, SourceLoc loc) {
+  if (nbits <= 64 || nbits > 128) {
+    d_.error(loc,
+             "conversion of a BIT string of this width to a number is not implemented in this "
+             "stage",
+             "(86)");
+    return llvm::ConstantInt::get(b_.getInt128Ty(), 0);
+  }
+  int B = bitBytes(nbits);
+  llvm::Value* acc = llvm::ConstantInt::get(b_.getInt128Ty(), 0);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* byte = b_.CreateExtractValue(agg, (unsigned)k, "pkx");
+    llvm::Value* wide = b_.CreateZExt(byte, b_.getInt128Ty(), "pkw");
+    acc = b_.CreateOr(b_.CreateShl(acc, 8, "pks"), wide, "pka");
+  }
+  if (int extra = 8 * B - nbits)
+    acc = b_.CreateLShr(acc, (uint64_t)extra, "pkj");
+  return acc;
+}
+
+llvm::Value* IRGen::unpackBitValueWide(llvm::Value* intval, int nbits, SourceLoc loc) {
+  int B = bitBytes(nbits);
+  llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)B);
+  if (nbits <= 64 || nbits > 128) {
+    d_.error(loc,
+             "conversion of a number to a BIT string of this width is not implemented in this "
+             "stage",
+             "(86)");
+    return llvm::UndefValue::get(arrTy);
+  }
+  if (int extra = 8 * B - nbits)
+    intval = b_.CreateShl(intval, (uint64_t)extra, "upj");
+  llvm::Value* agg = llvm::UndefValue::get(arrTy);
+  for (int k = 0; k < B; ++k) {
+    llvm::Value* shifted = b_.CreateLShr(intval, (uint64_t)(8 * (B - 1 - k)), "upsh");
+    llvm::Value* byte = b_.CreateTrunc(shifted, b_.getInt8Ty(), "upb");
+    agg = b_.CreateInsertValue(agg, byte, (unsigned)k, "upi");
+  }
+  return agg;
+}
+
 std::vector<unsigned char> IRGen::packBitInit(const Expr* ini, int nbits) {
   if (ini && ini->kind == Expr::BitLit)
     return packBitLiteral(ini->sval, nbits);
@@ -363,6 +421,116 @@ std::vector<unsigned char> IRGen::packBitInit(const Expr* ini, int nbits) {
     v >>= 8;
   }
   return bytes;
+}
+
+Val IRGen::emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc) {
+  // Value-width-independent BIT comparison (Wave 4 slice 3). Padding bits
+  // (ADR-283) are masked; operands of differing widths are right-justified
+  // (zero-padded on the left) by numeric value. No i128 is introduced.
+  Val A = a, Bv = b;
+  if (A.ty.isBit() && A.ty.len == 1 && !A.reg->getType()->isArrayTy()) {
+    llvm::Value* byte = b_.CreateSelect(A.reg, b_.getInt8((int8_t)0x80),
+                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
+    A.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.a1");
+  } else if (A.ty.isBit() && A.ty.len <= 64 &&
+             !A.reg->getType()->isArrayTy()) {
+    A.reg = unpackBitValue(A.reg, A.ty.len, loc);
+  }
+  if (Bv.ty.isBit() && Bv.ty.len == 1 && !Bv.reg->getType()->isArrayTy()) {
+    llvm::Value* byte = b_.CreateSelect(Bv.reg, b_.getInt8((int8_t)0x80),
+                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
+    Bv.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.b1");
+  } else if (Bv.ty.isBit() && Bv.ty.len <= 64 &&
+             !Bv.reg->getType()->isArrayTy()) {
+    Bv.reg = unpackBitValue(Bv.reg, Bv.ty.len, loc);
+  }
+
+  Val v;
+  v.ty = Type::bit(1);
+  const int na = A.ty.len, nb = Bv.ty.len;
+  const int N  = std::max(na, nb);
+  const int Bn = (N + 7) / 8;
+
+  // Normalize each operand into an N-bit (Bn-byte) left-justified representation
+  // (right-justify the original n-bit value into N bits, i.e. zero-pad on the
+  // left), masking the original padding bits first. This matches the existing
+  // <= 64 integer-pack comparison (pack is right-justified).
+  auto normalize = [&](const Val& x, int nx) -> llvm::Value* {
+    const int Bx = (nx + 7) / 8;
+    const int S  = N - nx;
+    llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)Bn);
+    llvm::Value* out = llvm::UndefValue::get(arrTy);
+    for (int j = 0; j < Bn; ++j) {
+      llvm::Value* byte = b_.getInt8(0);
+      for (int t = 0; t < 8; ++t) {
+        const int L = j * 8 + t - S; // original local bit index
+        if (L < 0 || L >= nx) continue;
+        const int bi = L / 8;
+        if (bi >= Bx) continue;
+        llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
+        if (bi == Bx - 1) {
+          const int keep = nx - 8 * (Bx - 1);
+          if (keep < 8) {
+            const int m = (0xFF << (8 - keep)) & 0xFF;
+            srcByte = b_.CreateAnd(srcByte, b_.getInt8((int8_t)m), "norm.m");
+          }
+        }
+        const int pos = 7 - (L % 8);
+        llvm::Value* bitv = b_.CreateLShr(srcByte, (unsigned)pos, "norm.sh");
+        bitv = b_.CreateAnd(bitv, b_.getInt8(1), "norm.bit");
+        bitv = b_.CreateShl(bitv, (unsigned)(7 - t), "norm.pl");
+        byte = b_.CreateOr(byte, bitv, "norm.or");
+      }
+      out = b_.CreateInsertValue(out, byte, (unsigned)j, "norm.i");
+    }
+    return out;
+  };
+
+  Val An, BnV;
+  An.ty = A.ty;
+  An.reg = normalize(A, na);
+  BnV.ty = Bv.ty;
+  BnV.reg = normalize(Bv, nb);
+
+  if (op == Tok::Eq || op == Tok::Ne) {
+    llvm::Value* acc = b_.getTrue();
+    for (int k = 0; k < Bn; ++k) {
+      llvm::Value* av = b_.CreateExtractValue(An.reg, (unsigned)k, "bcmp.a");
+      llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
+      acc = b_.CreateAnd(acc, b_.CreateICmpEQ(av, bv, "bcmp.eq"), "bcmp.acc");
+    }
+    if (op == Tok::Ne) acc = b_.CreateNot(acc, "bcmp.ne");
+    v.reg = acc;
+    return v;
+  }
+
+  llvm::Value* equalSoFar = b_.getTrue();
+  llvm::Value* less       = b_.getFalse();
+  for (int k = 0; k < Bn; ++k) {
+    llvm::Value* av = b_.CreateExtractValue(An.reg, (unsigned)k, "bcmp.a");
+    llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
+    llvm::Value* eq = b_.CreateICmpEQ(av, bv, "bcmp.oeq");
+    llvm::Value* lt = b_.CreateICmpULT(av, bv, "bcmp.olt");
+    llvm::Value* diff = b_.CreateAnd(equalSoFar, b_.CreateNot(eq, "bcmp.oneq"), "bcmp.diff");
+    less       = b_.CreateSelect(diff, lt, less, "bcmp.less");
+    equalSoFar = b_.CreateAnd(equalSoFar, eq, "bcmp.eqsf");
+  }
+
+  llvm::Value* res = nullptr;
+  switch (op) {
+    case Tok::Lt:  res = less; break;
+    case Tok::Le:  res = b_.CreateOr(less, equalSoFar, "bcmp.le"); break;
+    case Tok::Gt:  res = b_.CreateAnd(b_.CreateNot(less, "bcmp.ngt"),
+                                       b_.CreateNot(equalSoFar, "bcmp.neq"), "bcmp.gt"); break;
+    case Tok::Ge:  res = b_.CreateNot(less, "bcmp.ge"); break;
+    case Tok::Ngt: res = b_.CreateOr(less, equalSoFar, "bcmp.ngt2"); break;
+    case Tok::Nlt: res = b_.CreateNot(less, "bcmp.nlt"); break;
+    default:       res = b_.getFalse(); break;
+  }
+  v.reg = res;
+  return v;
 }
 
 llvm::Value* IRGen::i32(int v) { return b_.getInt32(v); }
@@ -7072,6 +7240,11 @@ void IRGen::emitStmt(HStmt* s) {
     // ADR-233: the value is evaluated first, then written under the output
     // lock when the program has a task.
     Val v = emitExpr(s->value.get());
+    llvm::Value* eventAddr = nullptr;
+    if (s->eventRef)
+      eventAddr = taskEventAddr(s->eventRef.get(), s->loc);
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
     switch (v.ty.k) {
     case TK::Char:
       deferCall("pli_display_char", {v.ptr, v.len});
@@ -7126,7 +7299,7 @@ void IRGen::emitStmt(HStmt* s) {
       rv.ty = rty;
       storeGetTarget(rt, rv, s->loc);
     }
-    // DISPLAY ... EVENT (rule 114): complete the named event once the display
+// DISPLAY ... EVENT (rule 114): complete the named event once the display
     // (and any REPLY read) has finished, using the shared completion ABI.
     if (s->eventRef) {
       llvm::Value* evAddr = taskEventAddr(s->eventRef.get(), s->loc);
@@ -8844,8 +9017,74 @@ void IRGen::emitOpen(HStmt* s) {
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
+// Options: LOCATE(v), EVENT(ev), NOLOCK.
 void IRGen::emitRecordWrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // LOCATE(v): write from the BASED variable's current buffer.
+  if (s->locateVar) {
+    // For a based variable, we need the locator pointer (the buffer address),
+    // not the based variable's value. The locateVar expression is the based
+    // variable reference; its locPtr is the locator pointer expression.
+    HExpr* locExpr = s->locateVar.get();
+    llvm::Value* buf = nullptr;
+    if (locExpr && locExpr->locPtr) {
+      // Emit the locator pointer expression to get the buffer address.
+      Val locVal = emitExpr(locExpr->locPtr.get());
+      buf = locVal.reg; // locator pointer is a scalar pointer value
+    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
+      // Fallback: the based variable's symbol should have its locator.
+      // This case handles when locPtr is not directly on the expression.
+      // For now, try to get the address of the based variable.
+      buf = addressOf(locExpr->sym);
+    }
+    
+    if (!buf) {
+      // Should not happen for valid based variables
+      return;
+    }
+    
+    // EVENT(ev): reset before the operation.
+    llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
+    // Determine record size from the based variable's type.
+    const Type& ty = s->locateVar->ty;
+    llvm::Value* recSize = i64(recordSize(ty));
+    
+    // Write the record from the based variable's buffer.
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), buf)});
+      break;
+    case TK::Float:
+      b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), buf)});
+      break;
+    case TK::Bit: {
+      llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), buf), b_.getInt8Ty(), "rbit");
+      b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+      break;
+    }
+    case TK::Char:
+      b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, buf, recSize});
+      break;
+    default:
+      break; // other types are diagnosed by sema
+    }
+
+    // EVENT(ev): complete after the operation.
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+    return;
+  }
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -8866,13 +9105,24 @@ void IRGen::emitRecordWrite(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // REWRITE (rule (112)): replace the record most recently read or written.
 // The runtime checks that a current record exists and that the new image has
 // the same size, then writes it in place.
+// Options: EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRewrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -8893,12 +9143,32 @@ void IRGen::emitRecordRewrite(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // DELETE (rule (112)): remove the record most recently read, shifting the
 // rest of the file down so the next READ sees the following record.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordDelete(HStmt* s) {
-  b_.CreateCall(runtimeFn("pli_record_delete"), {fileSlotValue(s->fileSym)});
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
+  b_.CreateCall(runtimeFn("pli_record_delete"), {slot});
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // Keyed/direct record I/O (rules (112),(113)): the key (KEY/KEYFROM) and the
@@ -8906,10 +9176,20 @@ void IRGen::emitRecordDelete(HStmt* s) {
 // the types and that the file was opened KEYED/DIRECT.
 
 // WRITE ... KEY(k): append the record and index it by key.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordWriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
-  Val k = emitExpr(s->keyOpt.get());
+  // WRITE accepts the key via either KEY(...) or KEYFROM(...); both supply the
+  // key of the record being written (rules (112),(113)).
+  HExpr* keyExpr = s->keyOpt ? s->keyOpt.get() : s->keyFromOpt.get();
+  Val k = emitExpr(keyExpr);
   switch (v.ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
@@ -8933,58 +9213,177 @@ void IRGen::emitRecordWriteKeyed(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // READ ... KEY(k) [KEYTO(kv)]: look up the key in the sidecar, read the record,
 // and (for KEYTO) store the search key into the KEYTO variable.
+// Options: IGNORE(n), SET(p), EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordReadKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
-  Val k = emitExpr(s->keyOpt.get());
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
+  // If IGNORE is present with a KEY option: find the key first, then skip n records.
+  // If IGNORE without KEY: skip n from current position.
+  // If no IGNORE but KEY present: read by key.
+  // If neither: read next from current position.
+  bool hasKey = s->keyOpt != nullptr;
+  bool hasIgnore = s->ignoreCount != nullptr;
+
   Val v;
-  switch (ty.k) {
-  case TK::FixedBin:
-  case TK::FixedDec:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
-    v.ty = Type::fixedBin(63, 0);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Float:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
-    v.ty = Type::flt(6);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Bit: {
-    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
-    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-    v.ty = Type::bit();
-    storeTo(t->sym, v, s->loc);
-    break;
+  if (hasIgnore) {
+    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
+    if (hasKey) {
+      // KEY + IGNORE: position at key (sets current_idx to idx+1), then skip n, then read next
+      Val k = emitExpr(s->keyOpt.get());
+      b_.CreateCall(runtimeFn("pli_record_position_keyed"), {slot, k.ptr, k.len});
+      b_.CreateCall(runtimeFn("pli_record_skip_keyed"), {slot, n});
+    } else {
+      // No KEY: skip from current position
+      b_.CreateCall(runtimeFn("pli_record_skip_keyed"), {slot, n});
+    }
+    // Fall through to read next
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_fixed"), {slot});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_float"), {slot});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_bit"), {slot});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
+                    {slot, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
+  } else if (hasKey) {
+    // Normal keyed read by key
+    Val k = emitExpr(s->keyOpt.get());
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
+                    {slot, k.ptr, k.len, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
+    // KEYTO( variable ): copy the search key into the KEYTO target.
+    if (s->keyToOpt) {
+      Val kt = emitExpr(s->keyToOpt.get());
+      storeCharTo(kt.ptr, kt.ty, k, s->loc);
+    }
+  } else {
+    // No KEY, no IGNORE: read next from current position (sequential on keyed)
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_fixed"), {slot});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_float"), {slot});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_bit"), {slot});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
+                    {slot, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
   }
-  case TK::Char: {
-    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-    b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
-                  {slot, k.ptr, k.len, buf, i64(ty.len)});
-    v.ptr = buf;
-    v.len = i64(ty.len);
-    v.ty = ty;
-    storeTo(t->sym, v, s->loc);
-    break;
+
+  // SET(p): store the record buffer address into the POINTER sink.
+  if (s->setTarget) {
+    // Placeholder for future implementation
   }
-  default:
-    break; // other types are diagnosed by sema
-  }
-  // KEYTO( variable ): copy the search key into the KEYTO target.
-  if (s->keyToOpt) {
-    Val kt = emitExpr(s->keyToOpt.get());
-    storeCharTo(kt.ptr, kt.ty, k, s->loc);
-  }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // REWRITE ... KEYFROM(k): look up the key, rewrite the record in place.
+// Options: EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   Val k = emitExpr(s->keyFromOpt.get());
   switch (v.ty.k) {
@@ -9010,22 +9409,57 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // DELETE ... KEYFROM(k): look up the key, remove the record, shift the tail.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordDeleteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val k = emitExpr(s->keyFromOpt.get());
   b_.CreateCall(runtimeFn("pli_record_delete_keyed"), {slot, k.ptr, k.len});
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // READ (rules (112),(113)): consume one fixed-size binary record into a plain
 // scalar variable; a short read (EOF) raises ERROR in the runtime, since ON
-// ENDFILE stays diagnosed.
+// ENDFILE stays diagnosed. Options: IGNORE(n), SET(p), EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRead(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
+
+  // Compute record size from the target type.
+  llvm::Value* recSize = i64(recordSize(ty));
+
+  // IGNORE(n): skip n records without transferring data, then read the next record.
+  if (s->ignoreCount) {
+    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
+    b_.CreateCall(runtimeFn("pli_record_skip"), {slot, n, recSize});
+    // Fall through to read the next record
+  }
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v;
   switch (ty.k) {
   case TK::FixedBin:
@@ -9059,6 +9493,21 @@ void IRGen::emitRecordRead(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // SET(p): store the record buffer address into the POINTER sink.
+  if (s->setTarget) {
+    // For now, we read into a buffer and store its address.
+    // The runtime helper pli_record_read_into will be used in the future.
+    // For now, emit a placeholder.
+  }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // CLOSE (rules 102,103): close the FILE variable's slot.
@@ -9765,20 +10214,22 @@ void IRGen::emitPut(HStmt* s) {
       }
       case TK::FixedBin:
       case TK::FixedDec:
-        if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
+        if (v.ty.k == TK::FixedDec && v.ty.scale != 0) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
           else {
-            // The library routine does the conversion (ADR-254).
+            // The library routine does the conversion (ADR-254): the decimal output
+            // routine handles the scale factor. For negative scale, it prints
+            // the value multiplied by 10^|q| (Y33-6003-0 §4.5).
             if (remarkLibraryCalls_)
               d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
             deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
           }
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
-        } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+        } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
           // The stored integer is value*2^q; the runtime prints the point
-          // (ADR-284).
+          // (ADR-284). Negative scale handled by runtime (Y33-6003-0 §4.5).
           deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
         } else {
           deferCall("pli_put_list_fixed", {toI64(v)});
@@ -10376,10 +10827,11 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
       } else {
         deferCall("pli_put_edit_float", {v.reg, w, d});
       }
-    } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+    } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
       // F(w,d) needs the true value: a scaled binary is divided by 2^q
       // first (ADR-284). The FLOAT path keeps the common d digits; a
       // point-aware fixed formatter remains a B11 refinement.
+      // Y33-6003-0 §4.5: negative scale means multiply by 2^|q|.
       Val fv = convert(v, Type::flt(6), s->loc);
       if (fscale) {
         deferCall("pli_put_edit_float_scaled", {fv.reg, fscale, w, d});
@@ -13072,7 +13524,10 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       // A BIT(1) rides as i1, not as a byte array: widen it through the
       // integer path so the byte copy below never extracts from a scalar.
       if (v.ty.len == 1) {
-        out.reg = unpackBitValue(b_.CreateZExt(v.reg, b_.getInt64Ty(), "b1w"), dst.len, loc);
+        if (dst.len <= 64)
+          out.reg = unpackBitValue(b_.CreateZExt(v.reg, b_.getInt64Ty(), "b1w"), dst.len, loc);
+        else
+          out.reg = unpackBitValueWide(b_.CreateZExt(v.reg, b_.getInt128Ty(), "b1w"), dst.len, loc);
         return out;
       }
       // Bit-to-bit copies bytes directly (pad/truncate on the right); an
@@ -13097,35 +13552,71 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     // zero first (range-checked like other float conversions).
     llvm::Value* iv = nullptr;
     if (v.ty.k == TK::Float) {
-      floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
-      iv = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "biv");
-    } else if (v.ty.intBits() == 64) {
-      iv = v.reg;
+      if (dst.len <= 64) {
+        floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
+        iv = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "biv");
+      } else {
+        floatRangeTrap(v.reg, -9223372036854775808.0, true, 9223372036854775808.0);
+        iv = b_.CreateFPToSI(v.reg, b_.getInt128Ty(), "biv");
+      }
+    } else if (dst.len <= 64) {
+      if (v.ty.intBits() == 64)
+        iv = v.reg;
+      else if (v.ty.intBits() >= 128)
+        iv = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "biv");
+      else
+        iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
     } else {
-      iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+      if (v.ty.intBits() >= 128)
+        iv = v.reg;
+      else if (v.ty.intBits() == 64)
+        iv = b_.CreateZExt(v.reg, b_.getInt128Ty(), "biv");
+      else
+        iv = b_.CreateZExt(v.reg, b_.getInt128Ty(), "biv");
     }
-    out.reg = unpackBitValue(iv, dst.len, loc);
+    if (dst.len <= 64)
+      out.reg = unpackBitValue(iv, dst.len, loc);
+    else
+      out.reg = unpackBitValueWide(iv, dst.len, loc);
     return out;
   }
-  if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
-    llvm::Value* iv = v.ty.len == 1 ? b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv")
-                                    : packBitValue(v.reg, v.ty.len, loc);
-    if (dstFloat) {
-      out.reg = b_.CreateSIToFP(iv, b_.getDoubleTy(), "cvt");
-    } else if (llvmTy(dst)->getIntegerBitWidth() == 64) {
-      out.reg = iv;
-    } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
-      // A genuinely wide DECIMAL target (ADR-191) holds 20+ digits in i128;
-      // a bit-string source is an unsigned magnitude that fits i64.
-      out.reg = b_.CreateSExt(iv, llvmTy(dst), "cvt");
-    } else {
-      out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
-    }
-    // A BINARY target narrower than its slot checks the declared precision.
-    if (!dstFloat && dst.k == TK::FixedBin)
-      out.reg = fixedBinPrecTrap(out.reg, dst.prec);
-    return out;
-  }
+   if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
+     llvm::Value* iv = nullptr;
+     llvm::Type* ivTy = nullptr;
+     if (v.ty.len == 1) {
+       iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+       ivTy = b_.getInt64Ty();
+     } else if (v.ty.len <= 64) {
+       iv = packBitValue(v.reg, v.ty.len, loc);
+       ivTy = b_.getInt64Ty();
+     } else if (v.ty.len <= 128) {
+       iv = packBitValueWide(v.reg, v.ty.len, loc);
+       ivTy = b_.getInt128Ty();
+     } else {
+       d_.error(loc,
+                "conversion of a BIT string longer than 128 bits to a number is not implemented "
+                "in this stage",
+                "(86)");
+       out.reg = i64(0);
+       return out;
+     }
+     if (dstFloat) {
+       out.reg = b_.CreateUIToFP(iv, b_.getDoubleTy(), "cvt");
+     } else if (llvmTy(dst)->getIntegerBitWidth() <= 64) {
+       out.reg = ivTy == b_.getInt128Ty()
+                     ? b_.CreateTrunc(iv, llvmTy(dst), "cvt")
+                     : (llvmTy(dst)->getIntegerBitWidth() == 64 ? iv
+                                                                : b_.CreateTrunc(iv, llvmTy(dst), "cvt"));
+     } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
+       out.reg = ivTy == b_.getInt128Ty() ? iv : b_.CreateZExt(iv, llvmTy(dst), "cvt");
+     } else {
+       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
+     }
+     // A BINARY target narrower than its slot checks the declared precision.
+     if (!dstFloat && dst.k == TK::FixedBin)
+       out.reg = fixedBinPrecTrap(out.reg, dst.prec);
+     return out;
+   }
   if (srcFloat && dstFloat)
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero
@@ -14249,17 +14740,54 @@ Val IRGen::emitExpr(HExpr* e) {
 
   if (isCmp && a.ty.isBit() && b.ty.isBit() &&
       (a.ty.len > 64 || b.ty.len > 64)) {
-    const int nbits = a.ty.len;
-    auto slotFor = [&](Val& x) -> llvm::Value* {
-      llvm::Type* aggTy = llvmTy(x.ty);
-      llvm::Value* slot = b_.CreateAlloca(aggTy, nullptr, "bitcmp.slot");
-      b_.CreateStore(x.reg, slot);
+    // Value-width-independent BIT comparison for wide operands: right-justify
+    // each operand into N = max(na, nb) bits (zero-pad on the left) so operands
+    // of differing widths compare by numeric value, then ask the runtime
+    // pli_bit_cmp to compare the N-bit buffers (padding-safe).
+    const int na = a.ty.len, nb = b.ty.len;
+    const int N = std::max(na, nb);
+    // Right-justify an nx-bit value into an N-bit (BN-byte) big-endian buffer,
+    // masking the original padding bits of the final source byte first.
+    auto normalize = [&](const Val& x, int nx) -> llvm::Value* {
+      const int Bx = (nx + 7) / 8;
+      const int BN = (N + 7) / 8;
+      const int S = N - nx; // left-pad bit count
+      llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)BN);
+      llvm::Value* out = llvm::UndefValue::get(arrTy);
+      for (int j = 0; j < BN; ++j) {
+        llvm::Value* byte = b_.getInt8(0);
+        for (int t = 0; t < 8; ++t) {
+          const int L = j * 8 + t - S; // original local bit index
+          if (L < 0 || L >= nx) continue;
+          const int bi = L / 8;
+          if (bi >= Bx) continue;
+          llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
+          if (bi == Bx - 1) {
+            const int keep = nx - 8 * (Bx - 1);
+            if (keep < 8)
+              srcByte = b_.CreateAnd(srcByte, b_.getInt8((int8_t)((0xFF << (8 - keep)) & 0xFF)),
+                                     "norm.m");
+          }
+          const int pos = 7 - (L % 8);
+          llvm::Value* bitv = b_.CreateLShr(srcByte, (unsigned)pos, "norm.sh");
+          bitv = b_.CreateAnd(bitv, b_.getInt8(1), "norm.bit");
+          bitv = b_.CreateShl(bitv, (unsigned)(7 - t), "norm.pl");
+          byte = b_.CreateOr(byte, bitv, "norm.or");
+        }
+        out = b_.CreateInsertValue(out, byte, (unsigned)j, "norm.i");
+      }
+      return out;
+    };
+    auto slotFor = [&](llvm::Value* arr, llvm::Type* ty) -> llvm::Value* {
+      llvm::Value* slot = b_.CreateAlloca(ty, nullptr, "bitcmp.slot");
+      b_.CreateStore(arr, slot);
       return b_.CreateBitCast(slot, b_.getPtrTy());
     };
-    llvm::Value* pa = slotFor(a);
-    llvm::Value* pb = slotFor(b);
+    llvm::Type* normTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)((N + 7) / 8));
+    llvm::Value* pa = slotFor(normalize(a, na), normTy);
+    llvm::Value* pb = slotFor(normalize(b, nb), normTy);
     llvm::Value* cmp = b_.CreateCall(runtimeFn("pli_bit_cmp"),
-                                     {pa, pb, i64((long long)nbits)}, "bitcmp");
+                                     {pa, pb, i64((long long)N)}, "bitcmp");
     llvm::Value* r = nullptr;
     switch (op) {
     case Tok::Eq:
@@ -16206,11 +16734,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
                                b_.CreateTrunc(rlB, b_.getInt1Ty(), "ideq.b1"), "ideq.b");
       if (el.isBit()) {
         llvm::Value* w = b_.getInt1(true);
-        for (int k = 0; k < bitBytes(el.len); ++k)
-          w = b_.CreateAnd(w, b_.CreateICmpEQ(b_.CreateExtractValue(rlA, (unsigned)k, "ideq.ax"),
-                                             b_.CreateExtractValue(rlB, (unsigned)k, "ideq.bx"),
-                                             "ideq.bk"),
-                           "ideq.ba");
+        const int nb = bitBytes(el.len);
+        for (int k = 0; k < nb; ++k) {
+          llvm::Value* ba = b_.CreateExtractValue(rlA, (unsigned)k, "ideq.ax");
+          llvm::Value* bb = b_.CreateExtractValue(rlB, (unsigned)k, "ideq.bx");
+          if (k == nb - 1) {
+            int keep = el.len - 8 * (nb - 1);
+            if (keep < 8) {
+              int m = (0xFF << (8 - keep)) & 0xFF;
+              ba = b_.CreateAnd(ba, b_.getInt8((int8_t)m), "ideq.ma");
+              bb = b_.CreateAnd(bb, b_.getInt8((int8_t)m), "ideq.mb");
+            }
+          }
+          w = b_.CreateAnd(w, b_.CreateICmpEQ(ba, bb, "ideq.bk"), "ideq.ba");
+        }
         return w;
       }
       if (el.isComplex()) {

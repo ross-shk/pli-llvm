@@ -329,15 +329,19 @@ struct Stmt {
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
-  // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
-  // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
-  // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE). NOLOCK/SET/LOCATE
-  // stay diagnosed with rule (113).
+// Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
+// record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
+// KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
   ExprP keyOpt = nullptr;    // KEY( expression )
   ExprP keyToOpt = nullptr;  // KEYTO( variable )
   ExprP keyFromOpt = nullptr;// KEYFROM( expression )
-  bool keyNoLock = false;    // NOLOCK option (diagnosed (113))
-  bool keySet = false;       // SET option (diagnosed (113))
+  // Rule (113) record options (keyed/direct + sequential):
+  bool keyNoLock = false;    // NOLOCK                READ/REWRITE/DELETE
+  ExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
+  ExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
+  ExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;    // UNLOCK                READ/REWRITE (release lock)
+  ExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
@@ -350,6 +354,7 @@ struct Stmt {
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT
   // variable (taskRef null = bare TASK with no name); priority is evaluated
   // and ignored in this stage (best-effort, ADR-016).
+  // Also used for DISPLAY ... EVENT ( rule 114 ).
   bool hasTaskOpt = false; // bare TASK present (named or not)
   ExprP taskRef;           // TASK(name) — null when bare TASK
   ExprP eventRef;          // EVENT(name)

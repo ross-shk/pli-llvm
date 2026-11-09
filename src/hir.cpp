@@ -454,8 +454,14 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->keyToOpt = lowerExpr(s->keyToOpt.get());
   h->keyFromOpt = lowerExpr(s->keyFromOpt.get());
   h->keyNoLock = s->keyNoLock;
-  h->keySet = s->keySet;
+  h->setTarget = lowerExpr(s->setTarget.get());
+  h->ignoreCount = lowerExpr(s->ignoreCount.get());
+  h->locateVar = lowerExpr(s->locateVar.get());
+  h->unlockOpt = s->unlockOpt;
+  h->recordEventTarget = lowerExpr(s->recordEventTarget.get());
   h->replyTarget = lowerExpr(s->replyTarget.get());
+  // DISPLAY EVENT uses eventRef (unified with CALL TASK EVENT)
+  // h->eventTarget = lowerExpr(s->eventTarget.get());  // removed
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
@@ -954,21 +960,38 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Display:
     os << " ";
     printExpr(os, s->value.get(), ind);
+    if (s->eventRef)
+      os << " event=";
+    if (s->eventRef)
+      printExpr(os, s->eventRef.get(), ind);
     break;
   case HStmt::Read:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " into=";
     printExpr(os, s->target.get(), ind);
+    if (s->ignoreCount) { os << " ignore="; printExpr(os, s->ignoreCount.get(), ind); }
+    if (s->setTarget) { os << " set="; printExpr(os, s->setTarget.get(), ind); }
+    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
+    if (s->keyNoLock) os << " nolock";
+    if (s->unlockOpt) os << " unlock";
     break;
   case HStmt::Write:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
     printExpr(os, s->value.get(), ind);
+    if (s->locateVar) { os << " locate="; printExpr(os, s->locateVar.get(), ind); }
+    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
+    if (s->keyNoLock) os << " nolock";
     break;
   case HStmt::Rewrite:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
     printExpr(os, s->value.get(), ind);
+    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
+    if (s->keyNoLock) os << " nolock";
+    if (s->unlockOpt) os << " unlock";
     break;
   case HStmt::Delete:
     os << " " << (s->fileSym ? s->fileSym->name : s->name);
+    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
+    if (s->keyNoLock) os << " nolock";
     break;
   case HStmt::Allocate:
     for (size_t i = 0; i < s->allocBase.size(); ++i) {

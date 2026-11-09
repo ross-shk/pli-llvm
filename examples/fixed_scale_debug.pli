@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Fixed scale IR verification - debug. */
+
+fixed_scale_debug: procedure options(main);
+    declare b fixed dec(5, -3) init(2500);
+    put skip list('b =', b);
+end fixed_scale_debug;

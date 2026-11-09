@@ -1,0 +1,11 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ bit_wide_cmp_ir: procedure options(main);
+    declare x bit(100);
+    declare y bit(100);
+    declare r bit(1);
+    x = '1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+    y = '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+    r = (x > y);
+    if r then put skip list('ok');
+ end bit_wide_cmp_ir;

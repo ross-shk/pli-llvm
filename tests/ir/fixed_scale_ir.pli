@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Fixed scale IR verification (rules (16),(17),(135)): verify stored integer in globals. */
+
+fixed_scale_ir: procedure options(main);
+    /* Negative scale: stored = logical / base^|q| */
+    declare a fixed bin(15, -2) init(5);      /* stored = 5/4 = 1 */
+    declare b fixed dec(5, -3) init(2500);    /* stored = 2500/1000 = 2 */
+    /* Scale > precision: stored = logical * base^q */
+    declare c fixed bin(3, 5) init(0.125);    /* stored = 0.125*32 = 4 */
+    declare d fixed dec(2, 4) init(0.005);    /* stored = 0.005*10000 = 50 */
+
+end fixed_scale_ir;

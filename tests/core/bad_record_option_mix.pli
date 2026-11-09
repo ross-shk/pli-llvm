@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): LOCATE + FROM should be diagnosed (one data clause only). */
+bad_record_option_mix: proc options(main);
+  dcl f file;
+  dcl 1 rec based(p),
+    2 fd fixed bin(31);
+  dcl p pointer;
+  open file(f) record sequential output title('bad_mix.dat');
+  write file(f) locate(rec) from(fd);  /* LOCATE + FROM not allowed */
+  close file(f);
+end bad_record_option_mix;

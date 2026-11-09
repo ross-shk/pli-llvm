@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): UNLOCK on DELETE should be diagnosed. */
+bad_record_unlock_verb: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  dcl k char(8);
+  open file(f) record keyed output title('bad_unlock.dat');
+  write file(f) from(x) key(k);
+  close file(f);
+  
+  open file(f) record keyed input title('bad_unlock.dat');
+  delete file(f) unlock keyfrom(k);  /* UNLOCK not valid on DELETE */
+  close file(f);
+end bad_record_unlock_verb;

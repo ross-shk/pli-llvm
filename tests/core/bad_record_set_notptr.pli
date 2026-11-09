@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): SET on non-POINTER should be diagnosed. */
+bad_record_set_notptr: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  dcl y fixed bin(31);
+  open file(f) record sequential input title('bad_set.dat');
+  read file(f) set(y) into(x);  /* y is not POINTER */
+  close file(f);
+end bad_record_set_notptr;

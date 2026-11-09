@@ -32,6 +32,11 @@ benchmarks/tasking/out/
 
 # runtime-generated test data files
 test_rec.dat
+declare_env.dat
+open_ident.dat
+open_linesize.dat
+open_pagesize.dat
+noop.dat
 pli_fileio_test.tmp
 
 AGENTS.md

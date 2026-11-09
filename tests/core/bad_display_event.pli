@@ -1,8 +1,16 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* rule (114): DISPLAY EVENT requires an EVENT variable. */
+/* EVENT operand must be an EVENT (rule (114)). */
 bad_display_event: procedure options(main);
-    declare x fixed bin(31);
-    display (1) event(x);
-    put skip list('FAIL: should have diagnosed');
+   declare n fixed bin(31);
+   display(42) event(n);
 end bad_display_event;
+
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (114): DISPLAY EVENT requires an EVENT variable. */
+bad_display_event_2: procedure options(main);
+   declare x fixed bin(31);
+   display (1) event(x);
+   put skip list('FAIL: should have diagnosed');
+end bad_display_event_2;

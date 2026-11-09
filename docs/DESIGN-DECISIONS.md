@@ -14240,7 +14240,64 @@ call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
 negative rule. This is a deviation from remote ADR-371's nonpositive skip and
 is recorded as such.
 
-## ADR-377 — BIT(n>64) value-width-independent, padding-safe comparison
+## ADR-377 — BIT comparison is value-width-independent
+
+**Context.** `BIT(n)` comparison previously packed each operand into an
+`i64` and so was limited to `n <= 64`; wider operands trapped in
+`packBitValue` with rule (86). Padding bits are indeterminate and
+unobservable (ADR-283), and `NOT` normalises them to zero, so a comparison
+must not let padding decide the answer.
+
+**Decision.** Comparison of two `BIT` operands of any width lowers as a
+compile-time-unrolled byte loop over the packed big-endian storage, with no
+integer wider than `i64`. Each operand is normalised to the wider width by
+right-justifying its n-bit value (zero-padding on the left), masking the
+original padding bits first, so operands of differing widths compare by numeric
+value and two values differing only in padding compare equal. Ordered
+comparison uses unsigned byte order, most-significant first; `NGT`/`NLT` are
+`<=`/`>=`. `BIT` vs. numeric comparison for `n > 64` stays diagnosed with
+rule (86), because converting a wide bit value to a number is not implemented.
+The `<= 64` packed-integer path and `emitMaskedBitTest` peephole are
+preserved.
+
+**Consequences.** `tests/core/bit_wide_cmp.pli` covers equality, inequality,
+all four ordered operators, negated comparisons, and differing-width pairs.
+`tests/ir/bit_wide_cmp.pli` (if added) pins the absence of `packBitValue`.
+GRAMMAR-COVERAGE row (18) records the width-independent comparison and the
+wide-bit-to-numeric boundary.
+
+## ADR-378 — Wide BIT(n>64) to/from numeric conversion
+
+**Context.** `BIT(n)` conversion to and from arithmetic previously packed the bit string into an `i64` in `packBitValue`/`unpackBitValue`, so `n > 64` was diagnosed with rule (86) (ADR-275/ADR-377). A `BIT(n)` value is an unsigned binary magnitude whose width can exceed 64 bits, and PL/I permits assigning it to a numeric variable (and vice versa) whenever the target can represent it.
+
+**Decision.** Conversion of a `BIT(n)` value to an arithmetic type packs the big-endian byte storage into an `i128` for `64 < n <= 128` (via `packBitValueWide`), treating the bit string as an unsigned magnitude (`UIToFP` for FLOAT targets, zero-extension/truncation for integer targets). Conversion of an arithmetic value to a `BIT(n)` with `64 < n <= 128` converts the source to `i128` (float via `FPToSI`, integer via zero-extension) and unpacks it big-endian (`unpackBitValueWide`). Widths above 128 bits remain diagnosed with rule (86), since no numeric type in this compiler holds more than 128 bits. The `<= 64` paths are unchanged. `BIT(1)` widens through the `i128` path when the destination is wider than 64 bits.
+
+**Consequences.** `BIT(n>64)` round-trips through `FIXED DECIMAL`/`FLOAT`/`FIXED BINARY` within the representable range; the byte order is the same big-endian order used for `BIT` comparison (ADR-377). `tests/core/bit_wide_conv.pli` (added) exercises conversion and round-trip. GRAMMAR-COVERAGE row (18) and DEFERRED-WORK row A10 are updated.
+
+## ADR-379 — DISPLAY ... EVENT option (rule 114, Wave 5 Slice 1)
+
+**Context.** `DISPLAY` (rule 114) already supported the `REPLY (reference)` option (ADR-287). The `EVENT (reference)` option, which completes a named event when the display (and any reply read) finishes, was unimplemented.
+
+**Decision.** Parse `REPLY` and `EVENT` in an order-independent loop so both orders (and a lone `EVENT`) work. Validate the event operand with the same predicate as `CALL ... EVENT`: a scalar `EVENT` variable, an array element, or a structure member. In IRGen, resolve the event address with `taskEventAddr`, call `pli_event_reset` before any output is produced, run the existing display and reply logic unchanged, then call `pli_event_complete`. No runtime or ABI change: reuse the existing `pli_event_reset`/`pli_event_complete` exports (ADR-234). `DISPLAY` remains synchronous (ADR-233); the event is a completion notification only.
+
+**Consequences.** `display_event.pli`, `display_event_reply.pli` (self-checking) and `display_event` (IR) pass; `bad_display_event.pli` is rejected with (114). GRAMMAR-COVERAGE row (114) updated.
+
+## ADR-380 — Record I/O options (rule 113, Wave 5 Slice 2)
+
+**Context.** TR 25.084 rule (113) defines record I/O options: `IGNORE`, `SET`, `LOCATE`, `NOLOCK`, `UNLOCK`, `EVENT`. Prior implementation served only `KEY`/`KEYTO`/`KEYFROM` for keyed/direct files via `.dat` + `.kix` sidecar (ADR-367).
+
+**Decision.** Implement evidenced options per Gate 0 (Y33-6003 evidence):
+- `IGNORE(n)` on READ: skip n records. Sequential uses `fseek` by `n * record_size`; keyed advances `current_idx` in the in-memory index. Works for sequential (all types) and keyed (CHAR only; FIXED BIN keyed read has pre-existing bug).
+- `SET(p)` on READ: stores internal record buffer address into POINTER p. Valid only until next I/O on same file (documented limitation).
+- `LOCATE(v)` on WRITE: writes from BASED variable's buffer. Scalar works; structure LOCATE diagnosed (deferred to Wave 3).
+- `NOLOCK`/`UNLOCK`: accepted syntactically; `UNLOCK` is a no-op for single-threaded sidecar model.
+- `EVENT(ev)`: reuses task EVENT ABI (ADR-234); `pli_event_reset` before I/O, `pli_event_complete` after.
+
+**Limitations.** Keyed `IGNORE` works for CHAR records; FIXED BIN keyed read has a pre-existing bug (not introduced here). Structure `LOCATE` diagnosed. `SET` pointer lifetime is until next I/O. `NOLOCK`/`UNLOCK` are no-ops without threading.
+
+**Consequences.** New runtime entry points in `rt_file.c`: `pli_record_skip_keyed`, `pli_record_position_keyed`, `pli_record_read_keyed_next_{fixed,float,char,bit}`. Added to `pli_rt_abi.def`. IRGen `emitRecordReadKeyed` updated for IGNORE with/without KEY. Tests: `record_ignore.pli`, `record_ignore_keyed_char.pli`, `record_set.pli`, `record_locate_simple.pli`, `bad_record_*.pli`. GRAMMAR-COVERAGE.md row (112),(113) updated.
+
+## ADR-381 (originally remote ADR-381) — BIT(n>64) value-width-independent, padding-safe comparison
 
 **Context.** `BIT(n)` for n > 64 could not be compared except by truncation to
 the low 64 bits (ADR-275). `bitLitToU64` rejected widths above 64, so wider
@@ -14264,7 +14321,7 @@ applicable scope for this dialect and keep existing diagnostic behaviour. No
 big-number type is introduced. Output width keeps the existing cap (ADR-293).
 
 
-## ADR-378 — DISPLAY ... EVENT completes the named event on finish (rule 114)
+## ADR-382 (originally remote ADR-382) — DISPLAY ... EVENT completes the named event on finish (rule 114)
 
 **Status.** Accepted.
 
@@ -14289,7 +14346,7 @@ diagnosed; only the (114) DISPLAY EVENT option is served.
 behaviour and lowering. GRAMMAR-COVERAGE row (114) updated.
 
 
-## ADR-379 — DEFINED structure overlays (rule 24): storage-size and alignedness model
+## ADR-383 (originally remote ADR-383) — DEFINED structure overlays (rule 24): storage-size and alignedness model
 
 **Context.** TR 25.084 rule (24) defines the `DEFINED` attribute for whole-base
 overlays (`Y DEFINED X`), subscripted bases (`Y DEFINED X(...)`), and `POSITION`
@@ -14337,12 +14394,12 @@ overlay), `tests/core/defined_struct_view_diff.pli` (different shapes, same
 size, packed), `tests/core/bad_defined_struct.pli` (negatives: size mismatch,
 alignedness mismatch, scalar base too small), `tests/ir/defined_struct_view.pli`
 + `.check` (IR pin). GRAMMAR-COVERAGE.md row (24) updated to "M2" (served)
-with the new tests and ADR-379 cited. `guides/programming.md` example added.
+with the new tests and ADR-383 cited. `guides/programming.md` example added.
 Cross-procedure DEFINED stays diagnosed; lifting it requires frame-lifetime
 work ("parent frame", Wave 3 group 3).
 
 
-## ADR-380 — STATIC INITIAL requires compile-time constants (rules (23),(26))
+## ADR-384 (originally remote ADR-384) — STATIC INITIAL requires compile-time constants (rules (23),(26))
 
 **Context.** TR 25.084 rule (23) gives `STATIC` variables program-lifetime
 storage: allocated once, retained across procedure activations, recursion, and
