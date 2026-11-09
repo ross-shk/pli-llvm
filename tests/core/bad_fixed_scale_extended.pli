@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Fixed scale (rules (16),(17)): invalid forms diagnosed. */
+
+bad_fixed_scale_extended: procedure options(main);
+    /* FLOAT with scale factor — should be diagnosed at parse time */
+    declare x float(6, 2);
+
+    /* BIT with scale factor — should be diagnosed at parse time */
+    declare y bit(8, 2);
+
+end bad_fixed_scale_extended;

@@ -10120,20 +10120,22 @@ void IRGen::emitPut(HStmt* s) {
       }
       case TK::FixedBin:
       case TK::FixedDec:
-        if (v.ty.k == TK::FixedDec && v.ty.scale > 0) {
+        if (v.ty.k == TK::FixedDec && v.ty.scale != 0) {
           if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
             emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
           else {
-            // The library routine does the conversion (ADR-254).
+            // The library routine does the conversion (ADR-254): the decimal output
+            // routine handles the scale factor. For negative scale, it prints
+            // the value multiplied by 10^|q| (Y33-6003-0 §4.5).
             if (remarkLibraryCalls_)
               d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
             deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
           }
         } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
           emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
-        } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+        } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
           // The stored integer is value*2^q; the runtime prints the point
-          // (ADR-284).
+          // (ADR-284). Negative scale handled by runtime (Y33-6003-0 §4.5).
           deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
         } else {
           deferCall("pli_put_list_fixed", {toI64(v)});
@@ -10731,10 +10733,11 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
       } else {
         deferCall("pli_put_edit_float", {v.reg, w, d});
       }
-    } else if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+    } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
       // F(w,d) needs the true value: a scaled binary is divided by 2^q
       // first (ADR-284). The FLOAT path keeps the common d digits; a
       // point-aware fixed formatter remains a B11 refinement.
+      // Y33-6003-0 §4.5: negative scale means multiply by 2^|q|.
       Val fv = convert(v, Type::flt(6), s->loc);
       if (fscale) {
         deferCall("pli_put_edit_float_scaled", {fv.reg, fscale, w, d});

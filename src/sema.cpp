@@ -238,8 +238,9 @@ Type mulResultType(const Type& a, const Type& b) {
 // quotient keeps its fraction instead of widening to FLOAT. Same-base DECIMAL
 // stays decimal; every other FIXED pair is binary, after converting a DECIMAL
 // operand to its binary view (IBM Appendix 1, ADR-362). A negative scale (the
-// integer part is wider than the raw quotient) is clamped to 0; the lowering
-// then scales the raw quotient up and raises FIXEDOVERFLOW past the maximum.
+// integer part is wider than the raw quotient) is allowed per Y33-6003-0 §4.5;
+// the lowering then scales the raw quotient up and raises FIXEDOVERFLOW past
+// the maximum.
 Type divResultType(const Type& a, const Type& b) {
   const bool bothDec = a.k == TK::FixedDec && b.k == TK::FixedDec;
   const int maxP = bothDec ? 31 : 63;
@@ -256,8 +257,9 @@ Type divResultType(const Type& a, const Type& b) {
       q2 = std::min(62, decToBinScale(b.scale));
   }
   int q = maxP - p1 + q1 - q2;
-  return bothDec ? Type::fixedDec(31, std::max(q, 0))
-                 : Type::fixedBin(63, std::max(q, 0));
+  // Y33-6003-0 §4.5: result scale may be negative; do not clamp.
+  return bothDec ? Type::fixedDec(31, q)
+                 : Type::fixedBin(63, q);
 }
 
 // Cross-section (rule 126): a subscript list containing at least one '*'. The

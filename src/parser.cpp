@@ -1688,6 +1688,9 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     if (at(Tok::LParen)) {
       parenNums(a, b, false);
+      if (b != 0) {
+        d_.error(cur().loc, "FLOAT does not take a scale factor", "(16)");
+      }
       if (a <= 0) {
         d_.error(cur().loc, "FLOAT precision must be positive", "(16)");
       } else {
@@ -1768,6 +1771,9 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
       expect(Tok::RParen, rule);
     } else if (at(Tok::LParen)) {
       parenNums(a, b, false);
+      if (b != 0) {
+        d_.error(cur().loc, "BIT does not take a scale factor", "(16)");
+      }
       if (a > 0)
         bag.slen = a;
     }
@@ -2728,12 +2734,9 @@ void Parser::parseDeclTail(DeclItem& item) {
   } else {
     // FIXED is the default scale attribute; DECIMAL the default base. The
     // scale factor q is kept as a static property (ADR-006, rule (16)).
+    // Y33-6003-0 §4.5 allows negative scale and scale > precision.
+    // fixedScaleFits() now accepts all scales; validation deferred to sema if needed.
     bool binary = bag.binary && !bag.decimal;
-    if (!fixedScaleFits(bag, binary))
-      d_.error(item.loc,
-               binary ? "a FIXED BINARY scale factor must be less than the precision"
-                      : "a FIXED DECIMAL scale factor must not exceed the precision",
-               "(16)");
     if (binary)
       item.ty = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
     else
@@ -3178,15 +3181,13 @@ bool Parser::parseDescriptorType(Type& out) {
       out.dims.push_back(d);
     out.controlled = bag.controlled;
   } else if (bag.binary) {
-    if (!fixedScaleFits(bag, true))
-      d_.error(cur().loc, "a FIXED BINARY scale factor must be less than the precision", "(16)");
+    // Y33-6003-0 §4.5: negative scale and scale > precision allowed.
     out = Type::fixedBin(bag.prec > 0 ? bag.prec : 15, bag.scale);
     for (const auto& d : starDims)
       out.dims.push_back(d);
     out.controlled = bag.controlled;
   } else {
-    if (!fixedScaleFits(bag, false))
-      d_.error(cur().loc, "a FIXED DECIMAL scale factor must not exceed the precision", "(16)");
+    // Y33-6003-0 §4.5: negative scale and scale > precision allowed.
     out = Type::fixedDec(bag.prec > 0 ? bag.prec : 5, bag.scale);
     for (const auto& d : starDims)
       out.dims.push_back(d);
