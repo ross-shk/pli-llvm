@@ -1,0 +1,38 @@
+ /* SPDX-License-Identifier: Apache-2.0
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (113): KEYED IGNORE option — with CHAR records */
+ 
+ record_ignore_keyed_char: procedure options(main);
+   declare f file;
+   declare rk char(8);
+   declare rec char(16);
+   declare i fixed binary(31);
+ 
+   /* Phase 1: write five records by KEY */
+   open file(f) record keyed output
+      title('tests/core/out/record_ignore_keyed_char.dat');
+   do i = 1 to 5;
+     rk = 'K' || i;
+     rec = 'record ' || i;
+     write file(f) from(rec) key(rk);
+   end;
+   close file(f);
+ 
+   /* Phase 2: read first record by KEY */
+   open file(f) record keyed input
+      title('tests/core/out/record_ignore_keyed_char.dat');
+   rk = 'K1';
+   read file(f) into(rec) key(rk);
+   put skip list('first=' || rec);
+ 
+   /* Phase 3: skip 2 records using IGNORE without KEY */
+   read file(f) ignore(2) into(rec);
+   put skip list('after ignore(2)=' || rec);
+ 
+   /* Phase 4: read next */
+   read file(f) into(rec);
+   put skip list('next=' || rec);
+ 
+   close file(f);
+   put skip list('PASS');
+ end record_ignore_keyed_char;

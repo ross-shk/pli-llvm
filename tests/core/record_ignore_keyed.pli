@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): KEYED IGNORE option — skip n records without transferring data. */
+
+record_ignore_keyed: procedure options(main);
+  declare f file;
+  declare x fixed binary(31);
+  declare k char(10);
+  declare i fixed binary(31);
+
+  /* Create keyed file with records keyed by "rec1", "rec2", etc. */
+  open file(f) record keyed output
+     title('tests/core/out/record_ignore_keyed.dat');
+  do i = 1 to 5;
+    k = 'rec' || i;
+    x = i * 10;
+    write file(f) keyfrom(k) from(x);
+  end;
+  close file(f);
+
+  open file(f) record keyed input
+     title('tests/core/out/record_ignore_keyed.dat');
+  /* Read first record directly by key */
+  k = 'rec1';
+  read file(f) key(k) into(x);
+  put skip list('rec1=' || x);
+
+  /* Skip next 2 records (rec2, rec3), read rec4 */
+  k = 'rec2';  /* Start from rec2 */
+  read file(f) key(k) ignore(2) into(x);
+  put skip list('after ignore(2) from rec2, x=' || x);
+
+  /* Read next (rec5) */
+  read file(f) into(x);
+  put skip list('next=' || x);
+  close file(f);
+
+  put skip list('PASS record_ignore_keyed');
+end record_ignore_keyed;

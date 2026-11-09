@@ -169,6 +169,7 @@ struct kix_state {
   long long cap;
   int dirty;
   int is_keyed;    /* 1 when this slot was opened KEYED/DIRECT */
+  long long current_idx; /* current index position for sequential READ (IGNORE) */
   char kixpath[512]; /* sidecar path, populated at open for save-on-close */
 };
 static struct kix_state rt_kix[PLI_MAX_FILES];
@@ -286,6 +287,7 @@ static void kix_reset(long long slot) {
   st->count = st->cap = 0;
   st->dirty = 0;
   st->is_keyed = 0;
+  st->current_idx = 0;
 }
 
 static long long kix_find(long long slot, char *key, long long keylen) {
@@ -841,7 +843,8 @@ void pli_record_write_keyed_bit(long long slot, char *key, long long keylen,
   kix_insert(slot, key, keylen, off, (long long)sizeof v);
 }
 
-/* READ ... KEY(k): look up the key and read the record into the buffer. */
+/* READ ... KEY(k): look up the key and read the record into the buffer.
+ * Sets current_idx to idx + 1 for sequential reads. */
 long long pli_record_read_keyed_fixed(long long slot, char *key, long long keylen) {
   FILE *f = rec_file(slot, "READ");
   long long v = 0, idx;
@@ -854,6 +857,7 @@ long long pli_record_read_keyed_fixed(long long slot, char *key, long long keyle
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
+  rt_kix[slot].current_idx = idx + 1;
   return v;
 }
 
@@ -869,6 +873,7 @@ double pli_record_read_keyed_float(long long slot, char *key, long long keylen) 
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
+  rt_kix[slot].current_idx = idx + 1;
   return v;
 }
 
@@ -886,6 +891,7 @@ void pli_record_read_keyed_char(long long slot, char *key, long long keylen,
     pli_signal_error("READ from keyed file failed");
     return;
   }
+  rt_kix[slot].current_idx = idx + 1;
 }
 
 unsigned char pli_record_read_keyed_bit(long long slot, char *key, long long keylen) {
@@ -900,6 +906,7 @@ unsigned char pli_record_read_keyed_bit(long long slot, char *key, long long key
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
+  rt_kix[slot].current_idx = idx + 1;
   return v;
 }
 
@@ -1021,6 +1028,130 @@ void pli_record_skip(long long slot, long long n, long long rec_size) {
   long long skip_bytes = n * rec_size;
   if (pli_plat_fseek(f, skip_bytes, SEEK_CUR) != 0)
     rt_rec_endfile(slot);
+}
+
+/* KEYED IGNORE(n): skip n records in the keyed index. Advances the current index
+ * position by n. If past end, raises ENDFILE. */
+void pli_record_skip_keyed(long long slot, long long n) {
+  if (slot < 0 || slot >= PLI_MAX_FILES || n <= 0)
+    return;
+  struct kix_state *st = &rt_kix[slot];
+  if (!st->is_keyed || !st->ent || st->count == 0) {
+    rt_rec_endfile(slot);
+    return;
+  }
+  long long new_idx = st->current_idx + n;
+  if (new_idx >= st->count) {
+    rt_rec_endfile(slot);
+    return;
+  }
+  st->current_idx = new_idx;
+}
+
+/* KEYED POSITION: find the key and set current_idx to idx + 1 for subsequent
+ * sequential reads (used for KEY with IGNORE). Returns 1 on success, 0 on failure. */
+int pli_record_position_keyed(long long slot, char *key, long long keylen) {
+  if (slot < 0 || slot >= PLI_MAX_FILES) return 0;
+  FILE *f = rt_pli_files[slot];
+  struct kix_state *st = &rt_kix[slot];
+  if (!f || !st->is_keyed || !st->ent || st->count == 0) return 0;
+  long long idx = kix_find(slot, key, keylen);
+  if (idx < 0) return 0;
+  st->current_idx = idx + 1;
+  return 1;
+}
+
+/* KEYED READ NEXT: read the record at current index position and advance.
+ * Used after IGNORE or for sequential READ on keyed files. */
+long long pli_record_read_keyed_next_fixed(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES) return 0;
+  FILE *f = rt_pli_files[slot];
+  struct kix_state *st = &rt_kix[slot];
+  if (!f || !st->is_keyed || !st->ent || st->count == 0) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  if (st->current_idx >= st->count) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  long long idx = st->current_idx++;
+  long long off = st->ent[idx].off;
+  long long v = 0;
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
+}
+
+double pli_record_read_keyed_next_float(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES) return 0;
+  FILE *f = rt_pli_files[slot];
+  struct kix_state *st = &rt_kix[slot];
+  if (!f || !st->is_keyed || !st->ent || st->count == 0) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  if (st->current_idx >= st->count) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  long long idx = st->current_idx++;
+  long long off = st->ent[idx].off;
+  double v = 0;
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
+}
+
+void pli_record_read_keyed_next_char(long long slot, char *p, long long len) {
+  if (slot < 0 || slot >= PLI_MAX_FILES || len <= 0) return;
+  FILE *f = rt_pli_files[slot];
+  struct kix_state *st = &rt_kix[slot];
+  if (!f || !st->is_keyed || !st->ent || st->count == 0) {
+    rt_rec_endfile(slot);
+    return;
+  }
+  if (st->current_idx >= st->count) {
+    rt_rec_endfile(slot);
+    return;
+  }
+  long long idx = st->current_idx++;
+  long long off = st->ent[idx].off;
+  long long rlen = st->ent[idx].len;
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fread(p, 1, (size_t)(rlen < len ? rlen : len), f) != (size_t)(rlen < len ? rlen : len)) {
+    pli_signal_error("READ from keyed file failed");
+    return;
+  }
+}
+
+unsigned char pli_record_read_keyed_next_bit(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES) return 0;
+  FILE *f = rt_pli_files[slot];
+  struct kix_state *st = &rt_kix[slot];
+  if (!f || !st->is_keyed || !st->ent || st->count == 0) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  if (st->current_idx >= st->count) {
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  long long idx = st->current_idx++;
+  long long off = st->ent[idx].off;
+  unsigned char v = 0;
+  if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
+      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  return v;
 }
 
 /* UNLOCK: release the current record's lock on a keyed/direct file. */

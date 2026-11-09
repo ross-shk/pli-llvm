@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): KEYED sequential READ without KEY - matching basic test */
+
+record_sequential_keyed: procedure options(main);
+  declare f file;
+  declare rk char(8);
+  declare rec char(16);
+  declare i fixed binary(31);
+
+  /* Phase 1: write five records by KEY */
+  open file(f) record keyed output
+     title('tests/core/out/record_seq_keyed.dat');
+  do i = 1 to 5;
+    rk = 'K' || i;
+    rec = 'record ' || i;
+    write file(f) from(rec) key(rk);
+  end;
+  close file(f);
+
+  /* Phase 2: read sequentially without KEY */
+  open file(f) record keyed input
+     title('tests/core/out/record_seq_keyed.dat');
+  do i = 1 to 5;
+    read file(f) into(rec);
+    put skip list('rec=' || rec);
+  end;
+  close file(f);
+  put skip list('PASS');
+end record_sequential_keyed;

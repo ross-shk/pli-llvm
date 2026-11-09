@@ -14281,3 +14281,18 @@ wide-bit-to-numeric boundary.
 **Decision.** Parse `REPLY` and `EVENT` in an order-independent loop so both orders (and a lone `EVENT`) work. Validate the event operand with the same predicate as `CALL ... EVENT`: a scalar `EVENT` variable, an array element, or a structure member. In IRGen, resolve the event address with `taskEventAddr`, call `pli_event_reset` before any output is produced, run the existing display and reply logic unchanged, then call `pli_event_complete`. No runtime or ABI change: reuse the existing `pli_event_reset`/`pli_event_complete` exports (ADR-234). `DISPLAY` remains synchronous (ADR-233); the event is a completion notification only.
 
 **Consequences.** `display_event.pli`, `display_event_reply.pli` (self-checking) and `display_event` (IR) pass; `bad_display_event.pli` is rejected with (114). GRAMMAR-COVERAGE row (114) updated.
+
+## ADR-380 — Record I/O options (rule 113, Wave 5 Slice 2)
+
+**Context.** TR 25.084 rule (113) defines record I/O options: `IGNORE`, `SET`, `LOCATE`, `NOLOCK`, `UNLOCK`, `EVENT`. Prior implementation served only `KEY`/`KEYTO`/`KEYFROM` for keyed/direct files via `.dat` + `.kix` sidecar (ADR-367).
+
+**Decision.** Implement evidenced options per Gate 0 (Y33-6003 evidence):
+- `IGNORE(n)` on READ: skip n records. Sequential uses `fseek` by `n * record_size`; keyed advances `current_idx` in the in-memory index. Works for sequential (all types) and keyed (CHAR only; FIXED BIN keyed read has pre-existing bug).
+- `SET(p)` on READ: stores internal record buffer address into POINTER p. Valid only until next I/O on same file (documented limitation).
+- `LOCATE(v)` on WRITE: writes from BASED variable's buffer. Scalar works; structure LOCATE diagnosed (deferred to Wave 3).
+- `NOLOCK`/`UNLOCK`: accepted syntactically; `UNLOCK` is a no-op for single-threaded sidecar model.
+- `EVENT(ev)`: reuses task EVENT ABI (ADR-234); `pli_event_reset` before I/O, `pli_event_complete` after.
+
+**Limitations.** Keyed `IGNORE` works for CHAR records; FIXED BIN keyed read has a pre-existing bug (not introduced here). Structure `LOCATE` diagnosed. `SET` pointer lifetime is until next I/O. `NOLOCK`/`UNLOCK` are no-ops without threading.
+
+**Consequences.** New runtime entry points in `rt_file.c`: `pli_record_skip_keyed`, `pli_record_position_keyed`, `pli_record_read_keyed_next_{fixed,float,char,bit}`. Added to `pli_rt_abi.def`. IRGen `emitRecordReadKeyed` updated for IGNORE with/without KEY. Tests: `record_ignore.pli`, `record_ignore_keyed_char.pli`, `record_set.pli`, `record_locate_simple.pli`, `bad_record_*.pli`. GRAMMAR-COVERAGE.md row (112),(113) updated.

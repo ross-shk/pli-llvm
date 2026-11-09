@@ -9210,60 +9210,138 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
-  Val k = emitExpr(s->keyOpt.get());
-
-  // Compute record size from the target type.
-  llvm::Value* recSize = i64(recordSize(ty));
-
-  // IGNORE(n): skip n records without transferring data, then read the next record.
-  if (s->ignoreCount) {
-    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
-    b_.CreateCall(runtimeFn("pli_record_skip"), {slot, n, recSize});
-    // Fall through to read the next record
-  }
 
   // EVENT(ev): reset before the operation.
   llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
+  // If IGNORE is present with a KEY option: find the key first, then skip n records.
+  // If IGNORE without KEY: skip n from current position.
+  // If no IGNORE but KEY present: read by key.
+  // If neither: read next from current position.
+  bool hasKey = s->keyOpt != nullptr;
+  bool hasIgnore = s->ignoreCount != nullptr;
+
   Val v;
-  switch (ty.k) {
-  case TK::FixedBin:
-  case TK::FixedDec:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
-    v.ty = Type::fixedBin(63, 0);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Float:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
-    v.ty = Type::flt(6);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Bit: {
-    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
-    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-    v.ty = Type::bit();
-    storeTo(t->sym, v, s->loc);
-    break;
-  }
-  case TK::Char: {
-    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-    b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
-                  {slot, k.ptr, k.len, buf, i64(ty.len)});
-    v.ptr = buf;
-    v.len = i64(ty.len);
-    v.ty = ty;
-    storeTo(t->sym, v, s->loc);
-    break;
-  }
-  default:
-    break; // other types are diagnosed by sema
-  }
-  // KEYTO( variable ): copy the search key into the KEYTO target.
-  if (s->keyToOpt) {
-    Val kt = emitExpr(s->keyToOpt.get());
-    storeCharTo(kt.ptr, kt.ty, k, s->loc);
+  if (hasIgnore) {
+    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
+    if (hasKey) {
+      // KEY + IGNORE: position at key (sets current_idx to idx+1), then skip n, then read next
+      Val k = emitExpr(s->keyOpt.get());
+      b_.CreateCall(runtimeFn("pli_record_position_keyed"), {slot, k.ptr, k.len});
+      b_.CreateCall(runtimeFn("pli_record_skip_keyed"), {slot, n});
+    } else {
+      // No KEY: skip from current position
+      b_.CreateCall(runtimeFn("pli_record_skip_keyed"), {slot, n});
+    }
+    // Fall through to read next
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_fixed"), {slot});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_float"), {slot});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_bit"), {slot});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
+                    {slot, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
+  } else if (hasKey) {
+    // Normal keyed read by key
+    Val k = emitExpr(s->keyOpt.get());
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
+                    {slot, k.ptr, k.len, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
+    // KEYTO( variable ): copy the search key into the KEYTO target.
+    if (s->keyToOpt) {
+      Val kt = emitExpr(s->keyToOpt.get());
+      storeCharTo(kt.ptr, kt.ty, k, s->loc);
+    }
+  } else {
+    // No KEY, no IGNORE: read next from current position (sequential on keyed)
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_fixed"), {slot});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_float"), {slot});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_next_bit"), {slot});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
+                    {slot, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
   }
 
   // SET(p): store the record buffer address into the POINTER sink.
