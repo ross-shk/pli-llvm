@@ -4824,8 +4824,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       typeExpr(s->replyTarget.get(), sc, p);
       Expr* rt = s->replyTarget.get();
       bool ref = rt && ((rt->kind == Expr::VarRef && rt->sym &&
-                         rt->sym->kind != Symbol::ProcName) ||
-                        rt->kind == Expr::Subscript);
+                          rt->sym->kind != Symbol::ProcName) ||
+                         rt->kind == Expr::Subscript);
       if (!ref)
         d_.error(rt ? rt->loc : s->loc, "DISPLAY REPLY requires a variable", "(114)");
       else if (!rt->ty.isChar() || rt->ty.isArray() || rt->ty.varying)
@@ -4833,6 +4833,18 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                  "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
       else
         checkValueTarget(rt); // VALUE constants cannot receive the reply
+    }
+    // DISPLAY ... EVENT ( reference ) (rule 114): the event to complete when
+    // the display (and any REPLY read) finishes.
+    if (s->eventRef) {
+      typeExpr(s->eventRef.get(), sc, p);
+      Expr* e = s->eventRef.get();
+      bool ev = e && ((e->kind == Expr::VarRef && e->sym &&
+                       e->sym->kind != Symbol::ProcName && e->ty.isEvent()) ||
+                      (e->kind == Expr::Subscript && e->sym && e->ty.isEvent()));
+      if (!ev)
+        d_.error(e ? e->loc : s->loc,
+                 "DISPLAY EVENT requires an EVENT variable or element", "(114)");
     }
     break;
   }
@@ -6571,9 +6583,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // but complex-or-numeric is diagnosed.
         if (!(A.isComplex() || A.isNumeric()) || !(B.isComplex() || B.isNumeric()))
           d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      } else if (A.isChar() != B.isChar())
-        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      e->ty = Type::bit(1);
+} else if (A.isChar() != B.isChar())
+         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+       else if (A.isBit() && B.isBit() && A.len != B.len)
+         d_.error(e->loc, "BIT comparison requires identical widths", "(117)");
+       e->ty = Type::bit(1);
       break;
     case Tok::Lt:
     case Tok::Le:
@@ -6586,9 +6600,11 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         d_.error(e->loc, "ordered comparison of a COMPLEX value is not allowed", "(117)");
       else if (A.isLocator() || B.isLocator())
         d_.error(e->loc, "ordered comparison of a POINTER or OFFSET is not allowed", "(117)");
-      else if (A.isChar() != B.isChar())
-        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-      e->ty = Type::bit(1);
+       else if (A.isChar() != B.isChar())
+         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+       else if (A.isBit() && B.isBit() && A.len != B.len)
+         d_.error(e->loc, "BIT comparison requires identical widths", "(117)");
+       e->ty = Type::bit(1);
       break;
     default:
       e->ty = Type::fixedBin(31, 0);
@@ -7824,18 +7840,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     int p = 0, q = 0;
-    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-      ConstNum c;
-      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-          c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-        d_.error(e->args[idx]->loc,
-                 std::string("FIXED ") + what + " must be an integer constant",
-                 "(123)");
-        return false;
-      }
-      out = (int)c.value;
-      return true;
-    };
+auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+        ConstNum c;
+        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+          d_.error(e->args[idx]->loc,
+                   std::string("FIXED ") + what + " must be an integer constant",
+                   "(123)");
+          return false;
+        }
+        out = (int)pli_to_i64(c.value);
+        return true;
+      };
     if (!readInteger(1, "precision", p)) {
       e->ty = Type::voidTy();
       return true;
@@ -7889,18 +7905,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
      int p = 0, q = 0;
      const bool haveP = e->args.size() >= 2;
      const bool haveQ = e->args.size() >= 3;
-     auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-       ConstNum c;
-       if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-           c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-         d_.error(e->args[idx]->loc,
-                  std::string(nm) + " " + what + " must be an integer constant",
-                  "(123)");
-         return false;
-       }
-       out = (int)c.value;
-       return true;
-     };
+auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+        ConstNum c;
+        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+          d_.error(e->args[idx]->loc,
+                   std::string(nm) + " " + what + " must be an integer constant",
+                   "(123)");
+          return false;
+        }
+        out = (int)pli_to_i64(c.value);
+        return true;
+      };
      if (haveP && !readInteger(1, "precision", p)) {
        e->ty = Type::voidTy();
        return true;

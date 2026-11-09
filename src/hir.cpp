@@ -10,6 +10,7 @@
 #include "hir.h"
 
 #include <algorithm>
+#include <functional>
 #include <ostream>
 #include <string>
 

@@ -1,0 +1,6 @@
+ /* rule (113): READ ... SET is not implemented on a sequential file. */
+ bad_record_option_state: procedure options(main);
+    declare f file;
+    declare p pointer;
+    read file(f) set(p);
+ end bad_record_option_state;

@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* bad BIT(n>64) cases (rules (18),(117)). */
+ bad_bit_wide_gt64: procedure options(main);
+    declare a bit(0);
+    declare b bit(-1);
+    declare c bit(64);
+    declare d bit(128);
+    if c < d then put skip list('x');
+ end bad_bit_wide_gt64;

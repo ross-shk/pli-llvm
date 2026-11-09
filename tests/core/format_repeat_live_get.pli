@@ -1,0 +1,17 @@
+/* rules (47),(108): GET EDIT with runtime repetition. */
+format_repeat_live_get: procedure options(main);
+    declare n fixed bin(31);
+    declare buf char(30);
+    declare a fixed bin(31);
+    declare b fixed bin(31);
+
+    n = 2;
+    buf = '  10  20';
+    get string(buf) edit(a, b) ((n)(f(4)));
+    if a ^= 10 | b ^= 20 then do;
+       put skip list('FAIL get_repeat', a, b);
+       stop;
+    end;
+
+    put skip list('PASS format_repeat_live_get');
+end format_repeat_live_get;

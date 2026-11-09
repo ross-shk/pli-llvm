@@ -1,0 +1,6 @@
+ /* rules (23),(26): STATIC persists across activations — IR check. */
+ static_lifetime_ir: procedure options(main);
+    declare saved fixed bin(31) static initial(0);
+    saved = saved + 1;
+    put skip list(saved);
+ end static_lifetime_ir;

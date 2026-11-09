@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (114): DISPLAY ... EVENT completes the named event. */
+display_event: procedure options(main);
+    declare ev event;
+    display (42) event(ev);
+    if event(ev) then
+       put skip list('PASS display_event');
+    else do;
+       put skip list('FAIL display_event');
+       stop;
+    end;
+end display_event;

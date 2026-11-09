@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* CONTROLLED factored — INITIAL runs on each ALLOCATE (rules 11, 26, 28). */
+ FACTORED_CTL: PROCEDURE OPTIONS(MAIN);
+
+   /* CONTROLLED factored — INITIAL runs on each ALLOCATE */
+   DECLARE (C1, C2) FIXED BIN(31) CONTROLLED INITIAL(42);
+
+   ALLOCATE C1, C2;
+   PUT LIST('First alloc:'); PUT SKIP LIST(C1, C2);  /* Both 42 */
+
+   C1 = 100; C2 = 200;
+   FREE C1, C2;
+
+   ALLOCATE C1, C2;
+   PUT LIST('Second alloc:'); PUT SKIP LIST(C1, C2);  /* Both 42 again */
+
+   FREE C1, C2;
+
+ END FACTORED_CTL;

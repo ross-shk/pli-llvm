@@ -14240,7 +14240,56 @@ call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
 negative rule. This is a deviation from remote ADR-371's nonpositive skip and
 is recorded as such.
 
-## ADR-377 — DEFINED structure overlays (rule 24): storage-size and alignedness model
+## ADR-377 — BIT(n>64) value-width-independent, padding-safe comparison
+
+**Context.** `BIT(n)` for n > 64 could not be compared except by truncation to
+the low 64 bits (ADR-275). `bitLitToU64` rejected widths above 64, so wider
+values either failed to compile or compared only their low 64 bits. Padding bits
+in the final storage byte are indeterminate (ADR-283) and must not affect
+equality or ordering.
+
+**Decision.** Retain the packed byte-buffer representation `[ceil(n/8) x i8]`
+with no i128 shortcut and no big-number type. For `BIT` comparisons of any
+width, when either operand exceeds 64 bits, emit addresses of both packed
+buffers and call the platform-agnostic runtime helper `pli_bit_cmp(ptr a, ptr b,
+i64 nbits) -> i32`, which compares full bytes except the last and masks the
+padding bits of the final byte with `0xFF << (8 - (n mod 8))` (or `0xFF` when
+n is a multiple of 8). The n <= 64 path is unchanged. `BIT` comparison in sema
+requires matching widths; mismatched widths are diagnosed with (117). `BIT(0)`
+and `BIT(-1)` are diagnosed with (18).
+
+Numeric precision evaluation (no representation change): `FIXED DECIMAL` remains
+a scaled i128 (ADR-284, ADR-289); values beyond that range are outside
+applicable scope for this dialect and keep existing diagnostic behaviour. No
+big-number type is introduced. Output width keeps the existing cap (ADR-293).
+
+
+## ADR-378 — DISPLAY ... EVENT completes the named event on finish (rule 114)
+
+**Status.** Accepted.
+
+**Context.** Rule (114) permits `DISPLAY ( expression ) [ REPLY ( reference ) ]
+[ EVENT ( reference ) ] ;`. The compiler already served scalar DISPLAY and
+DISPLAY ... REPLY, but the EVENT option was not parsed, so a program that
+signals a waiting task from a DISPLAY statement could not be written. The
+shared event-completion ABI (`pli_event_complete`) already existed for
+asynchronous CALL.
+
+**Decision.** `parseDisplay` now accepts `REPLY (...)` and `EVENT (...)` in
+either order, at most once each, sharing the existing `Stmt::eventRef` /
+`HStmt::eventRef` fields (already lowered by `hir.cpp` and traversed by
+`sema.cpp`). Sema type-checks `eventRef` as an EVENT variable or element,
+citing (114). IRGen calls `pli_event_complete(taskEventAddr(...))` after the
+value is written and any REPLY read, so a waiting task observes the fully
+completed display. No runtime change. Rule (113) record-I/O EVENT stays
+diagnosed; only the (114) DISPLAY EVENT option is served.
+
+**Consequences.** `tests/core/display_event.pli`, `tests/core/bad_display_event.pli`,
+`tests/driver/display_event.sh`, and `tests/ir/display_event.pli` pin the
+behaviour and lowering. GRAMMAR-COVERAGE row (114) updated.
+
+
+## ADR-379 — DEFINED structure overlays (rule 24): storage-size and alignedness model
 
 **Context.** TR 25.084 rule (24) defines the `DEFINED` attribute for whole-base
 overlays (`Y DEFINED X`), subscripted bases (`Y DEFINED X(...)`), and `POSITION`
@@ -14288,12 +14337,12 @@ overlay), `tests/core/defined_struct_view_diff.pli` (different shapes, same
 size, packed), `tests/core/bad_defined_struct.pli` (negatives: size mismatch,
 alignedness mismatch, scalar base too small), `tests/ir/defined_struct_view.pli`
 + `.check` (IR pin). GRAMMAR-COVERAGE.md row (24) updated to "M2" (served)
-with the new tests and ADR-377 cited. `guides/programming.md` example added.
+with the new tests and ADR-379 cited. `guides/programming.md` example added.
 Cross-procedure DEFINED stays diagnosed; lifting it requires frame-lifetime
 work ("parent frame", Wave 3 group 3).
 
 
-## ADR-378 — STATIC INITIAL requires compile-time constants (rules (23),(26))
+## ADR-380 — STATIC INITIAL requires compile-time constants (rules (23),(26))
 
 **Context.** TR 25.084 rule (23) gives `STATIC` variables program-lifetime
 storage: allocated once, retained across procedure activations, recursion, and

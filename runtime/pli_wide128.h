@@ -33,6 +33,23 @@ typedef struct PliI128 {
 #ifdef __cplusplus
   PliI128() : lo(0), hi(0) {}
   PliI128(long long v) : lo((uint64_t)v), hi(v < 0 ? (int64_t)-1 : (int64_t)0) {}
+  /* Compound assignment operators */
+  PliI128& operator+=(PliI128 b) { return *this = *this + b; }
+  PliI128& operator-=(PliI128 b) { return *this = *this - b; }
+  PliI128& operator*=(PliI128 b) { return *this = *this * b; }
+  PliI128& operator/=(PliI128 b) { return *this = *this / b; }
+  /* Friend operators for ADL */
+  friend PliI128 operator+(PliI128 a, PliI128 b);
+  friend PliI128 operator-(PliI128 a, PliI128 b);
+  friend PliI128 operator-(PliI128 a);
+  friend PliI128 operator*(PliI128 a, PliI128 b);
+  friend PliI128 operator/(PliI128 a, PliI128 b);
+  friend bool operator==(PliI128 a, PliI128 b);
+  friend bool operator!=(PliI128 a, PliI128 b);
+  friend bool operator<(PliI128 a, PliI128 b);
+  friend bool operator>(PliI128 a, PliI128 b);
+  friend bool operator<=(PliI128 a, PliI128 b);
+  friend bool operator>=(PliI128 a, PliI128 b);
 #endif
 } PliI128;
 #define PLI_WIDE128_PORTABLE 1

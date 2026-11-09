@@ -1,0 +1,19 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* STATIC declared in a nested BEGIN block (rule 23): diagnosed as not
+    implemented in this stage. */
+
+ bad_static_nested_begin: procedure options(main);
+
+     call activate_begin();
+
+     put skip list('FAIL: should not reach here');
+ end bad_static_nested_begin;
+
+ activate_begin: proc() options(bypass);
+     begin;
+         dcl counter fixed bin(31) static initial(0);
+         counter = counter + 1;
+         put skip list('activation', counter);
+     end;
+     return;
+ end activate_begin;

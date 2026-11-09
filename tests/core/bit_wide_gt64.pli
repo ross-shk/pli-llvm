@@ -1,0 +1,27 @@
+ /* rules (18),(116),(117): BIT(n>64) comparison is value-width-
+    independent and padding-safe. */
+ bit_wide_gt64: procedure options(main);
+    declare a bit(128);
+    declare b bit(128);
+    declare hits fixed bin(31);
+
+    hits = 0;
+
+    /* High bits (beyond position 64) differ: not equal. */
+    a = '10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'b;
+    b = '01111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'b;
+    if a = b then do; put skip list('FAIL eq'); stop; end;
+    if a ^= b then hits = hits + 1;
+    if a > b then hits = hits + 1;
+
+    /* Equal values: all hits. */
+    b = a;
+    if a = b then hits = hits + 1;
+    if ^(a ^= b) then hits = hits + 1;
+
+    if hits ^= 4 then do;
+       put skip list('FAIL bit_wide_gt64', hits);
+       stop;
+    end;
+    put skip list('PASS bit_wide_gt64');
+ end bit_wide_gt64;

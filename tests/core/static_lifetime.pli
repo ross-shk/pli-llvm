@@ -1,95 +1,109 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* STATIC lifetime (rules 23, 26, 42): STATIC variables retain values
-   across procedure activations, recursion, and nested blocks.
-   INITIAL runs once at program start, not per activation. */
-static_lifetime: procedure options(main);
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* STATIC lifetime (rules 23, 26, 42): STATIC variables retain values
+    across procedure activations and recursion.
+    INITIAL runs once at program start, not per activation.
+    STATIC in nested BEGIN blocks is not implemented (diagnosed). */
+ static_lifetime: procedure options(main);
 
-    /* Test 1: STATIC scalar retains value across recursive calls */
-    call recursive_static(1);
-    call recursive_static(1);
-    call recursive_static(1);
+     /* Test 1: STATIC scalar retains value across recursive calls */
+     call recursive_static(1);
+     call recursive_static(1);
+     call recursive_static(1);
 
-    /* Test 2: STATIC in nested BEGIN block (same block activated twice) */
-    call nested_begin_static();
+     /* Test 2: STATIC in nested BEGIN block (same block
+        activated twice) */
+     call nested_begin_static();
 
-    /* Test 3: STATIC array with INITIAL */
-    call static_array_init();
+     /* Test 3: STATIC array with INITIAL */
+     call static_array_init();
 
-    /* Test 4: STATIC structure with INITIAL */
-    call static_struct_init();
+     /* Test 4: STATIC structure with INITIAL */
+     call static_struct_init();
 
-    /* Test 5: STATIC in BEGIN block across recursive calls */
-    call recursive_begin_static(1);
-    call recursive_begin_static(1);
+     /* Test 5: STATIC in BEGIN block across recursive calls */
+     call recursive_begin_static(1);
+     call recursive_begin_static(1);
 
-    put skip list('PASS static_lifetime');
-end static_lifetime;
+     put skip list('PASS static_lifetime');
+ end static_lifetime;
 
-/* Recursive procedure with STATIC counter */
-recursive_static: proc(n) options(bypass) recursive;
-    dcl n fixed bin(31);
-    dcl call_count fixed bin(31) static initial(0);
-    call_count = call_count + 1;
-    put skip list('recursive_static call', n, 'count =', call_count);
-    if n < 3 then call recursive_static(n + 1);
-    return;
-end recursive_static;
+ /* Recursive procedure with STATIC counter */
+ recursive_static: proc(n) options(bypass) recursive;
+     dcl n fixed bin(31);
+     dcl call_count fixed bin(31) static initial(0);
+     call_count = call_count + 1;
+     put skip list('recursive_static call', n,
+         'count =', call_count);
+     if n < 3 then call recursive_static(n + 1);
+     return;
+ end recursive_static;
 
-/* STATIC in nested BEGIN block - same BEGIN activated twice */
-nested_begin_static: proc() options(bypass);
-    dcl outer fixed bin(31) static initial(10);
-    dcl inner fixed bin(31) static initial(20);
-    begin;
-        put skip list('nested BEGIN: outer=', outer, 'inner=', inner);
-        outer = outer + 1;
-        inner = inner + 1;
-    end;
-    begin;
-        /* Second activation of same BEGIN — STATIC values persist */
-        put skip list('nested BEGIN 2nd: outer=', outer, 'inner=', inner);
-    end;
-    return;
-end nested_begin_static;
+ /* STATIC in nested BEGIN block - same BEGIN activated twice */
+ nested_begin_static: proc() options(bypass);
+     dcl outer fixed bin(31) static initial(10);
+     dcl inner fixed bin(31) static initial(20);
+     begin;
+         put skip list('nested BEGIN: outer=',
+             outer, 'inner=', inner);
+         outer = outer + 1;
+         inner = inner + 1;
+     end;
+     begin;
+         /* Second activation of same BEGIN --
+            STATIC values persist */
+         put skip list('nested BEGIN 2nd: outer=',
+             outer, 'inner=', inner);
+     end;
+     return;
+ end nested_begin_static;
 
-/* STATIC array with INITIAL — runs once */
-static_array_init: proc() options(bypass);
-    dcl arr(5) fixed bin(31) static initial((1,2,3,4,5));
-    dcl i fixed bin(31);
-    do i = 1 to 5;
-        put skip list('static_array_init arr(', i, ') =', arr(i));
-        arr(i) = arr(i) * 10;
-    end;
-    /* Second call — values should be modified, not re-initialized */
-    put skip list('--- second call ---');
-    do i = 1 to 5;
-        put skip list('static_array_init arr(', i, ') =', arr(i));
-    end;
-    return;
-end static_array_init;
+ /* STATIC array with INITIAL -- runs once */
+ static_array_init: proc() options(bypass);
+     dcl arr(5) fixed bin(31) static initial((1,2,3,4,5));
+     dcl i fixed bin(31);
+     do i = 1 to 5;
+         put skip list('static_array_init arr(', i,
+             ') =', arr(i));
+         arr(i) = arr(i) * 10;
+     end;
+     /* Second call -- values should be modified,
+        not re-initialized */
+     put skip list('--- second call ---');
+     do i = 1 to 5;
+         put skip list('static_array_init arr(', i,
+             ') =', arr(i));
+     end;
+     return;
+ end static_array_init;
 
-/* STATIC structure with INITIAL — runs once */
-static_struct_init: proc() options(bypass);
-    dcl 1 s static,
-        2 a fixed bin(31) init(100),
-        2 b fixed bin(31) init(200);
-    put skip list('static_struct_init s.a =', s.a, 's.b =', s.b);
-    s.a = s.a + 1;
-    s.b = s.b + 2;
-    /* Second call — values should be modified, not re-initialized */
-    put skip list('--- second call ---');
-    put skip list('static_struct_init s.a =', s.a, 's.b =', s.b);
-    return;
-end static_struct_init;
+ /* STATIC structure with INITIAL -- runs once */
+ static_struct_init: proc() options(bypass);
+     dcl 1 s static,
+         2 a fixed bin(31) init(100),
+         2 b fixed bin(31) init(200);
+     put skip list('static_struct_init s.a =',
+         s.a, 's.b =', s.b);
+     s.a = s.a + 1;
+     s.b = s.b + 2;
+     /* Second call -- values should be modified,
+        not re-initialized */
+     put skip list('--- second call ---');
+     put skip list('static_struct_init s.a =',
+         s.a, 's.b =', s.b);
+     return;
+ end static_struct_init;
 
-/* STATIC in BEGIN block across recursive calls */
-recursive_begin_static: proc(n) options(bypass) recursive;
-    dcl n fixed bin(31);
-    begin;
-        dcl depth fixed bin(31) static initial(0);
-        depth = depth + 1;
-        put skip list('recursive_begin_static depth=', depth);
-        if n < 2 then call recursive_begin_static(n + 1);
-    end;
-    return;
-end recursive_begin_static;
+ /* STATIC in BEGIN block across recursive calls */
+ recursive_begin_static: proc(n) options(bypass) recursive;
+     dcl n fixed bin(31);
+     dcl depth fixed bin(31) static initial(0);
+     begin;
+         depth = depth + 1;
+         put skip list('recursive_begin_static depth=',
+             depth);
+         if n < 2 then
+             call recursive_begin_static(n + 1);
+     end;
+     return;
+ end recursive_begin_static;

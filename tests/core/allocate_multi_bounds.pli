@@ -1,0 +1,14 @@
+/* rules (25),(89): ALLOCATE sizing from live DECLARE bounds (multi-axis). */
+allocate_multi_bounds: procedure options(main);
+    declare n fixed bin(31) init(2);
+    declare m fixed bin(31) init(3);
+    declare a(n, m) fixed bin(31) based(p);
+    declare p pointer;
+    allocate a set(p);
+    if dim(p->a) ^= n * m then do; put skip list('FAIL dim'); stop; end;
+    if hbound(p->a, 2) ^= m then do; put skip list('FAIL hb2'); stop; end;
+    p->a(2, 3) = 7;
+    if p->a(2, 3) ^= 7 then do; put skip list('FAIL elem'); stop; end;
+    free p->a;
+    put skip list('PASS allocate_multi_bounds');
+end allocate_multi_bounds;

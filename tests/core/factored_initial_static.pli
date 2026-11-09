@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* STATIC factored arrays — initialized once at program start, persist
+    across recursive activations (rules 11, 23, 26). */
+ FACTORED_STATIC: PROCEDURE OPTIONS(MAIN);
+
+   /* STATIC factored arrays — initialized once at program start */
+   DECLARE (SA, SB)(3) FIXED BIN(31) STATIC INITIAL((3)99);
+
+   /* Verify STATIC persists across recursive activations */
+   CALL RECURSE(2);
+   PUT SKIP LIST('After recursion:', SA(1), SA(2), SA(3));
+
+ RECURSE: PROCEDURE(N) RECURSIVE;
+   DECLARE N FIXED BIN(31);
+   IF N > 0 THEN DO;
+     SA(1) = SA(1) + 1;
+     CALL RECURSE(N - 1);
+   END;
+ END RECURSE;
+
+ END FACTORED_STATIC;
