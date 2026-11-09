@@ -2093,10 +2093,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
-        // STATIC is the only storage attribute with an effect: a static AREA
-        // keeps its region for the whole program (rule (20)). It still has no
-        // effect on other variables, but the warning waits until the whole
-        // declaration is read so an AREA attribute can suppress it.
+        // STATIC (rule 23): true static storage for all types (not just AREA).
+        // Non-AREA STATIC variables get true static storage (LLVM global).
+        // STATIC AREA (rule (20)) keeps its region for the whole program.
         if (w == "STATIC") {
           bag.staticAttr = true;
           staticLoc = cur().loc;
