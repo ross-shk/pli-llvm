@@ -945,7 +945,31 @@ the alias follows the index — like a pointer you can retarget by changing a va
 **Not yet**
 
 - every item subscript must be mapped by a dummy; a runtime base subscript keeps the item a scalar of the base's element type; `position` needs a scalar character item over a character base (a bit-string position is an error); the base must be in the same or an enclosing scope.
-- a defined *structure* (a record layout over another variable's storage) is diagnosed; overlay same-size scalar views instead.
+- a defined *structure* (a record layout over another variable's storage) is now supported when the item and base agree in ALIGNED/UNALIGNED and the item's storage size fits within the base's. Example:
+
+```pli
+  declare 1 base,
+           2 x fixed bin(31),
+           2 y fixed bin(31);
+  declare 1 view defined base;     /* same-type overlay */
+  view.x = 42;                     /* writes to base.x */
+```
+
+For different shapes with the same total size and compatible alignedness:
+
+```pli
+  declare 1 rec unaligned,
+           2 a fixed bin(31),
+           2 b fixed bin(31),
+           2 c fixed bin(31);
+  declare 1 view defined rec unaligned,
+           2 lo fixed bin(15),
+           2 hi fixed bin(15),
+           2 rest fixed bin(31);   /* 12-byte packed overlay */
+  view.lo = 7; view.hi = 42;       /* rec.a and rec.b change */
+```
+
+An alignedness mismatch (e.g., `ALIGNED` item over `UNALIGNED` base) or a size mismatch is diagnosed.
 
 > **Run the full example:** [`examples/defined_isub.pli`](../examples/defined_isub.pli) — `pli defined_isub.pli -o overlays && ./overlays`.
 

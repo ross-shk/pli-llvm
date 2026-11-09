@@ -1,0 +1,20 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* DEFINED (rule 24): a structure overlay with the same */
+   /* structure type shares the base's storage; member access */
+   /* aliases correctly. */
+     defined_struct_view: procedure options(main);
+       declare 1 base,
+                2 x fixed bin(31),
+                2 y fixed bin(31);
+       declare 1 view defined base;
+       base.x = 5; base.y = 7;
+       if view.x ^= 5 then do; put skip list('FAIL x', view.x);
+          stop; end;
+       if view.y ^= 7 then do; put skip list('FAIL y', view.y);
+          stop; end;
+       view.x = 9;
+       if base.x ^= 9 then do; put skip list('FAIL base', base.x);
+          stop; end;
+       put skip list('PASS defined_struct_view');
+     end defined_struct_view;

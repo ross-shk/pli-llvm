@@ -64,6 +64,13 @@ static std::vector<std::string> splitDesignator(const std::string& raw);
 // ADR-277). Defined below; forward-declared for the DEFINED subscript check.
 static bool isIntegerSubscriptType(const Type& t);
 
+// Element count of a fixed-extent array (rule (12)); -1 for an empty or
+// runtime (dynamic/adjustable) axis.
+static long long fixedElemCount(const Type& t);
+
+// Natural alignment in bytes of a type (for struct layout padding).
+static unsigned typeAlignBytes(const Type& t);
+
 // Storage size in bytes of one scalar for a DEFINED whole-base overlay
 // (rule 24): two scalars with equal size share the base's address, each
 // reference loading/storing through its own declared type. Returns -1 when
@@ -90,6 +97,114 @@ static long long definedScalarBytes(const Type& t) {
   default:
     return -1; // POINTER/OFFSET/AREA/ENTRY/VOID stay same-type-only
   }
+}
+
+// Natural alignment in bytes of a type (for struct layout padding).
+// Mirrors LLVM's ABI alignment for the given type.
+static unsigned typeAlignBytes(const Type& t) {
+  if (t.isArray())
+    return typeAlignBytes(t.elementType());
+  if (t.isStruct()) {
+    if (t.isUnion)
+      return 1; // union is byte array (ADR-202)
+    if (t.unaligned)
+      return 1; // packed struct
+    unsigned maxAlign = 1;
+    for (const auto& m : t.members) {
+      maxAlign = std::max(maxAlign, typeAlignBytes(m->ty));
+    }
+    return maxAlign;
+  }
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec: {
+    int bits = t.intBits();
+    if (bits == 128)
+      return 16;
+    if (bits >= 64)
+      return 8;
+    if (bits >= 32)
+      return 4;
+    if (bits >= 16)
+      return 2;
+    return 1;
+  }
+  case TK::Float:
+    return 8;
+  case TK::Complex:
+    return 8; // pair of doubles
+  case TK::Char:
+    return t.varying ? 4 : 1; // varying: i32 + data; non-varying: byte array
+  case TK::Bit:
+    return 1; // byte array
+  case TK::Task:
+  case TK::Event:
+    return 4;
+  case TK::Pointer:
+  case TK::Offset:
+  case TK::Area:
+  case TK::Entry:
+  case TK::Label:
+    return 8; // 64-bit pointers
+  default:
+    return 1;
+  }
+}
+
+// Total storage size in bytes of a (possibly aggregate) type for a DEFINED
+// overlay (rule 24). Returns -1 when the size cannot be determined at compile
+// time (runtime extent, VARYING, POINTER/OFFSET/AREA/ENTRY/VOID leaf, or
+// dynamic array member). For an aligned structure each member is padded up to
+// its natural alignment; an UNALIGNED structure is packed with no inter-member
+// padding. A UNION is a byte array sized to the largest member (ADR-202).
+static long long typeStorageBytes(const Type& t) {
+  if (t.isArray()) {
+    long long n = fixedElemCount(t);
+    if (n < 0)
+      return -1;
+    long long e = typeStorageBytes(t.elementType());
+    if (e < 0)
+      return -1;
+    return n * e;
+  }
+  if (t.isStruct()) {
+    if (t.isUnion) {
+      // UNION: size of largest member
+      long long maxSize = 0;
+      for (const auto& m : t.members) {
+        long long ms = typeStorageBytes(m->ty);
+        if (ms < 0)
+          return -1;
+        if (ms > maxSize)
+          maxSize = ms;
+      }
+      return maxSize > 0 ? maxSize : -1;
+    }
+    long long total = 0;
+    for (const auto& m : t.members) {
+      long long ms = typeStorageBytes(m->ty);
+      if (ms < 0)
+        return -1;
+      if (!t.unaligned) {
+        unsigned align = typeAlignBytes(m->ty);
+        if (align > 1) {
+          long long pad = (align - (total % align)) % align;
+          total += pad;
+        }
+      }
+      total += ms;
+    }
+    // Tail padding to the structure's own alignment (aligned structs only).
+    if (!t.unaligned && total > 0) {
+      unsigned align = typeAlignBytes(t);
+      if (align > 1) {
+        long long pad = (align - (total % align)) % align;
+        total += pad;
+      }
+    }
+    return total > 0 ? total : -1;
+  }
+  return definedScalarBytes(t);
 }
 
 // Characters in one CHARACTER string or CHARACTER array for a POSITION overlay
@@ -1898,14 +2013,33 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           } else if (item.definedSubs.empty()) {
             // Whole-base overlay (rule 24): the item shares the base's storage.
-            // A different-type overlay is a memory view when both scalars have
-            // the same storage size; a size mismatch stays diagnosed.
-            long long itemBytes = definedScalarBytes(item.ty);
-            long long baseBytes = definedScalarBytes(base->ty);
+            // For a structure base with no explicit structure on the item, inherit
+            // the base's structure type (same-type view).
+            if (base->ty.isStruct() && !item.ty.isStruct()) {
+              item.ty = base->ty; // deep copy via Type's copy constructor
+              // Apply item's explicit ALIGNED/UNALIGNED if present.
+              item.ty.unaligned = item.unaligned || (!item.aligned && item.ty.unaligned);
+              // Keep the symbol's type in sync for codegen.
+              item.sym->ty = item.ty;
+            }
+            // Use typeStorageBytes (not definedScalarBytes) so aggregates participate
+            // in the memory-view size check.
+            long long itemBytes = typeStorageBytes(item.ty);
+            long long baseBytes = typeStorageBytes(base->ty);
             bool sameView = item.ty == base->ty || (itemBytes > 0 && itemBytes == baseBytes);
+            bool alignedAgree = (item.ty.unaligned == base->ty.unaligned);
             if (item.ty.isStruct() || base->ty.isStruct()) {
-              if (!(item.ty.isStruct() && base->ty.isStruct() && item.ty == base->ty)) {
-                d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+              if (!alignedAgree) {
+                d_.error(item.loc,
+                         "DEFINED requires the item and its base to agree in ALIGNED/UNALIGNED "
+                         "(rule 24)",
+                         "(24)");
+              } else if (itemBytes <= 0 || baseBytes <= 0 || itemBytes > baseBytes) {
+                d_.error(item.loc,
+                         "DEFINED overlay does not fit into its base (" +
+                             std::to_string(itemBytes) + " byte(s) vs " +
+                             std::to_string(baseBytes) + ")",
+                         "(24)");
               } else {
                 item.sym->definedBase = base;
                 isDefined = true;
@@ -1942,11 +2076,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                          "a DEFINED array must fit into its base (" + std::to_string(itemN) +
                              " element(s), base has " + std::to_string(baseN) + ")",
                          "(24)");
+              } else if (!alignedAgree) {
+                d_.error(item.loc,
+                         "DEFINED requires the item and its base to agree in ALIGNED/UNALIGNED "
+                         "(rule 24)",
+                         "(24)");
               } else {
                 item.sym->definedBase = base;
                 isDefined = true;
               }
-            } else if (!sameView) {
+            } else if (!alignedAgree || !sameView) {
               d_.error(item.loc,
                        "DEFINED requires the item and base to have the same storage size (" +
                            item.ty.desc() + " vs " + base->ty.desc() + ")",

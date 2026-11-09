@@ -14239,3 +14239,55 @@ the group, and constant non-negative counts keep the parse-time unroll.
 call-count repeats. GRAMMAR-COVERAGE rows (44)-(55) and (106)-(111) state the
 negative rule. This is a deviation from remote ADR-371's nonpositive skip and
 is recorded as such.
+
+## ADR-377 — DEFINED structure overlays (rule 24): storage-size and alignedness model
+
+**Context.** TR 25.084 rule (24) defines the `DEFINED` attribute for whole-base
+overlays (`Y DEFINED X`), subscripted bases (`Y DEFINED X(...)`), and `POSITION`
+string overlays. The prior implementation accepted scalar and array overlays
+when the item and base had the same storage size, but diagnosed any structure
+overlay as "not implemented in this stage" even when the types were identical.
+IBM Enterprise PL/I (Y33-6003-0:7936-8075) requires that a structure overlay
+(redefining a record layout over another variable's storage) is valid when:
+1. The item and base agree in ALIGNED/UNALIGNED.
+2. The item's storage size fits within the base's storage size (containment).
+3. The base is in the same or an enclosing scope (cross-procedure DEFINED
+   stays diagnosed per ADR-048).
+
+**Decision.** Extend the whole-base overlay branch in sema to accept structure
+overlays under the above constraints:
+
+1. If the item has no explicit structure members (e.g., `DECLARE 1 VIEW DEFINED BASE;`)
+   it inherits the base's structure type (same-type view).
+2. If the item declares its own structure, the two structures may differ in
+   shape provided:
+   - `item.ty.unaligned == base->ty.unaligned` (alignedness agreement).
+   - `typeStorageBytes(item.ty) <= typeStorageBytes(base->ty)` (size containment).
+3. A scalar or array item over a structure base (or vice versa) is still
+   diagnosed — POSITION string overlay remains CHARACTER-only.
+4. The cross-procedure restriction (`DEFINED across an enclosing procedure`)
+   remains.
+
+A new helper `typeStorageBytes(Type)` computes the storage size in bytes for
+scalars, arrays, structures (aligned and packed), and unions, mirroring the
+LLVM layout emitted by `IRGen::llvmTy` (ADR-037, ADR-169). An `aligned`
+structure pads each member to its natural alignment and adds tail padding to
+the struct alignment; an `UNALIGNED` structure is packed with no padding; a
+`UNION` is a byte array sized to the largest member (ADR-202). The helper
+returns -1 when the size cannot be determined at compile time (runtime extent,
+VARYING, POINTER/OFFSET/AREA/ENTRY/VOID leaf), causing the overlay to be
+diagnosed.
+
+The existing IRGen paths (`addressOf` for `definedBase` symbols, member
+access via `structMemberGEP` through the item's type) already work for
+structure overlays without allocation changes — verification confirmed that
+`view.x` lowers to a GEP off the base's address with no `alloca` for `view`.
+
+**Consequences.** New tests: `tests/core/defined_struct_view.pli` (same-type
+overlay), `tests/core/defined_struct_view_diff.pli` (different shapes, same
+size, packed), `tests/core/bad_defined_struct.pli` (negatives: size mismatch,
+alignedness mismatch, scalar base too small), `tests/ir/defined_struct_view.pli`
++ `.check` (IR pin). GRAMMAR-COVERAGE.md row (24) updated to "M2" (served)
+with the new tests and ADR-377 cited. `guides/programming.md` example added.
+Cross-procedure DEFINED stays diagnosed; lifting it requires frame-lifetime
+work ("parent frame", Wave 3 group 3).
