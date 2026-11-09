@@ -255,15 +255,16 @@ struct HStmt {
   // the reply input.
   HExprP replyTarget;
   // DISPLAY ... EVENT ( reference ) (rule 114): the event completed when the
-  // display (and any REPLY read) finishes.
-  HExprP eventTarget;
+  // display (and any REPLY read) finishes. Reuses the CALL TASK eventRef field
+  // since a statement cannot be both DISPLAY and CALL.
+  // HExprP eventTarget;  // removed: unified with eventRef
 
   std::vector<HExprP> args; // CALL arguments
 
   // CALL task options (rule (79), QR2.8): mirrors the AST fields.
   bool hasTaskOpt = false;
   HExprP taskRef;
-  HExprP eventRef;
+  HExprP eventRef;          // EVENT(name) for DISPLAY EVENT or CALL TASK EVENT
   HExprP priorityExpr;
   // WAIT (rule (82)): event list + optional count.
   std::vector<HExprP> waitEvents;

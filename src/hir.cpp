@@ -460,7 +460,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->unlockOpt = s->unlockOpt;
   h->recordEventTarget = lowerExpr(s->recordEventTarget.get());
   h->replyTarget = lowerExpr(s->replyTarget.get());
-  h->eventTarget = lowerExpr(s->eventTarget.get());
+  // DISPLAY EVENT uses eventRef (unified with CALL TASK EVENT)
+  // h->eventTarget = lowerExpr(s->eventTarget.get());  // removed
 
   // CALL statement arguments: coerce to the callee's parameter types.
   for (const auto& a : s->args) {
@@ -959,10 +960,10 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Display:
     os << " ";
     printExpr(os, s->value.get(), ind);
-    if (s->eventTarget)
+    if (s->eventRef)
       os << " event=";
-    if (s->eventTarget)
-      printExpr(os, s->eventTarget.get(), ind);
+    if (s->eventRef)
+      printExpr(os, s->eventRef.get(), ind);
     break;
   case HStmt::Read:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " into=";
