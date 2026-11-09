@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* CLOSE IDENT syntax validation (rule 103) */
+bad_close_ident: procedure options(main);
+    dcl f file;
+    open file(f) title('test.dat') output;
+    close file(f) ident;  /* ERROR (103): missing parenthesized argument */
+    put skip list('FAIL - should not reach here');
+end bad_close_ident;

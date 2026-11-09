@@ -1935,6 +1935,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.fileAttr) {
             d_.error(item.loc, "STATIC attribute not allowed on FILE variable", "(23)");
           }
+          // STATIC in a nested block (BEGIN or an ON unit) is program-lifetime
+          // storage that must outlive block activations, which this stage does
+          // not model, so it is diagnosed rather than mis-scoped (rule 23).
+          // A STATIC AREA (rule (20)) is exempt: its region is always whole-
+          // program static storage, which emitGlobals already serves.
+          if (sc != scopeFor(p) && !(p->isPackage && sc == rootScope_) && !item.ty.isArea()) {
+            d_.error(item.loc, "STATIC in a nested block is not implemented in this stage", "(23)");
+          }
         }
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
@@ -2541,6 +2549,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               std::vector<Expr*> elems;
               expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
               item.sym->initElems = std::move(elems);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
             }
           } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
@@ -2551,8 +2562,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "INITIAL supplies " + std::to_string(elems.size()) +
                            " value(s) for an array of " + std::to_string(n) + " element(s)",
                        "(26)");
-            else
+            else {
               item.sym->initElems = std::move(elems);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
+            }
           }
         }
         // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)`
@@ -2655,6 +2670,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   if (Expr* f = foldInitialConstant(raw[idx++], el, item.loc))
                     folded.push_back(f);
                 item.sym->initElems = std::move(folded);
+                // STATIC INITIAL requires constant expressions (rules (23),(26)).
+                if (item.sym->isStatic)
+                  checkStaticConstants(item.sym->initElems);
               }
             }
           } else {
@@ -2750,6 +2768,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               size_t foldIdx = 0;
               foldStructInit(item.ty, raw, foldIdx, item.loc, folded);
               item.sym->initElems = std::move(folded);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
             }
           }
         }
@@ -2766,8 +2787,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
-          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc))
+          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc)) {
             item.sym->initExpr = folded; // consumed by code generation
+            // STATIC INITIAL requires constant expressions (rules (23),(26)).
+            if (item.sym->isStatic)
+              checkStaticConstants(folded);
+          }
         }
         if (item.initCall) {
           // INITIAL(CALL f(...)) (rule 27): not allowed on STATIC variables.
@@ -2801,6 +2826,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "VALUE on arrays, structures, pointers, and complex data is not implemented "
                      "in this stage (ADR-108)",
                      "");
+          // VALUE on an explicitly STATIC variable (rule 23): a VALUE name
+          // rides the same constant-initializer rule; an EXTERNAL variable
+          // without STATIC keeps its own (pre-existing) homogeneous path.
+          else if (item.sawStatic)
+            d_.error(item.loc, "VALUE not allowed on STATIC variable", "(23)");
           else {
             if (Expr* folded = foldInitialConstant(item.valueInit.get(), item.ty, item.loc))
               item.sym->initExpr = folded; // consumed by code generation
@@ -3135,6 +3165,41 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
     return nullptr;
   }
   return lit;
+}
+
+// Check if an expression is a constant literal (for STATIC INITIAL validation).
+// Returns true for IntLit, FltLit, DecLit, CharLit, BitLit, and unary minus/not on constants.
+bool Sema::isConstantExpr(Expr* e) const {
+  if (!e)
+    return false;
+  switch (e->kind) {
+    case Expr::IntLit:
+    case Expr::FltLit:
+    case Expr::DecLit:
+    case Expr::CharLit:
+    case Expr::BitLit:
+      return true;
+    case Expr::Unary:
+      // Allow unary minus/not on a constant literal
+      if (e->op == Tok::Minus || e->op == Tok::Not)
+        return isConstantExpr(e->a.get());
+      return false;
+    default:
+      return false;
+  }
+}
+
+// STATIC INITIAL (rules (23),(26)): program-lifetime storage is initialized at
+// program start, so every expanded element must be a compile-time constant.
+void Sema::checkStaticConstants(const std::vector<Expr*>& elems) const {
+  for (Expr* e : elems)
+    if (!isConstantExpr(e))
+      d_.error(e->loc, "STATIC INITIAL requires constant expressions", "(23),(26)");
+}
+
+void Sema::checkStaticConstants(Expr* e) const {
+  if (!isConstantExpr(e))
+    d_.error(e->loc, "STATIC INITIAL requires constant expressions", "(23),(26)");
 }
 
 void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,

@@ -717,6 +717,33 @@ Callbacks are just parameters with the same shape:
 
 > Beginner tip: you can skip this on first read. Automatic storage (plain `dcl`) covers most programs. Come back when you want linked lists, pools, or manual lifetimes.
 
+### Static: values that outlive calls
+
+`static` gives a variable program-lifetime storage: it is born once and keeps
+its value across calls, recursions, and block re-entries — like a static local
+in C, but initialised once at program start, not on every first use.
+
+```pli
+ counter: procedure options(main);
+    call bump;
+    call bump;      /* prints 1, then 2 */
+    bump: procedure;
+       dcl n fixed bin(31) static initial(0);
+       n = n + 1;
+       put skip list(n);
+    end bump;
+ end counter;
+```
+
+`static initial(...)` values are set when the program starts, so they must be
+compile-time constants — a folded constant expression like `initial(5+3)` is
+fine; anything that needs runtime work is diagnosed. `static` cannot combine
+with `based`, `defined`, `controlled` (outside a package), `file`, or
+`parameter`, and a `static` inside a `begin` block is diagnosed in this
+stage, since program-lifetime storage must not come and go with block
+activations. `external static` shares
+one storage cell across separately compiled units.
+
 ### BASED: data behind a pointer
 
 A `based(p)` structure has no storage of its own — it borrows it through pointer `p`. That's how you build lists, trees, graphs. `p -> rec.field` is the explicit "through this pointer" form.
@@ -1401,7 +1428,9 @@ to that file wraps to a new line when the next item would exceed it. The
 default (no `linesize`) never wraps, preserving existing output.
 `pagesize(n)` records a page size for the file (page tracking only).
 `ident(expr)` is accepted and type-checked but has no runtime effect on
-regular files. `environment(...)` is not a valid `open` option and is
+regular files. The same applies to `close file(f) ident(expr)` — the option
+is parsed and discarded (rule (103)), keeping hand-written source portable.
+`environment(...)` is not a valid `open` option and is
 diagnosed; it may appear on `declare f environment(...)` as an
 implementation-defined file attribute.
 

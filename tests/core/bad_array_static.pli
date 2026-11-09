@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC array INITIAL with non-constant expression (rules 23,26) */
+bad_array_static: procedure options(main);
+    dcl x fixed bin(31) init(5);
+    dcl arr(3) fixed bin(31) static init((x, 2, 3));  /* ERROR (23),(26): x not constant */
+    put skip list('FAIL - should not reach here');
+end bad_array_static;

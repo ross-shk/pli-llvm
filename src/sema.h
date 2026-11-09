@@ -393,6 +393,12 @@ private:
   // allocates one vector slot per element).
   void expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
                        std::vector<Expr*>& out, long long maxElems = -1);
+  // Check if an expression is a constant literal (for STATIC INITIAL validation).
+  bool isConstantExpr(Expr* e) const;
+  // STATIC INITIAL (rules (23),(26)): diagnose any non-constant initializer
+  // element of program-lifetime storage.
+  void checkStaticConstants(const std::vector<Expr*>& elems) const;
+  void checkStaticConstants(Expr* e) const;
   // Total element count of an array type: the product of (ub - lb + 1) (rule 12).
   long long elementCount(const Type& ty);
   // Number of scalar leaf values a structure's INITIAL list must supply (rule

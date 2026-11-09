@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* ON SNAP warning only (rule 91) */
+on_snap: procedure options(main);
+    on size snap put list('SNAP taken');  /* Warning at compile, no dump at runtime */
+    dcl x fixed bin(15);
+    x = 100000;  /* Overflow */
+    put skip list('PASS on_snap');
+end on_snap;

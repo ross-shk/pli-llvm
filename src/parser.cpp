@@ -4914,9 +4914,18 @@ StmtP Parser::parseClose() {
       continue;
     }
     if (atWord("IDENT")) {
-      d_.error(cur().loc, "CLOSE option IDENT is not implemented in this stage", "(103)");
-      resync();
-      return nullptr;
+      // CLOSE IDENT(expr) (rule 103): implementation-dependent user label;
+      // accepted as no-op per TR 25.084.
+      advance();
+      if (eat(Tok::LParen)) {
+        (void)parseExpr(); // parse for syntax validation, then discard
+        expect(Tok::RParen, "(103)");
+      } else {
+        d_.error(cur().loc, "CLOSE IDENT requires a parenthesized argument", "(103)");
+        resync();
+        return nullptr;
+      }
+      continue;
     }
     d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");
     resync();
