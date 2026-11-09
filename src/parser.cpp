@@ -2754,7 +2754,7 @@ void Parser::parseDeclTail(DeclItem& item) {
   if (item.ty.isBit() && item.ty.len > 1 && !item.ty.dims.empty()) {
     // Element access assumes single-bit storage below; never lay out a wide
     // bit array that codegen would mistarget (invariant 2).
-    d_.error(item.loc, "arrays of BIT(n>1) are not implemented in this stage", "(12)");
+    /* BIT(n>1) element arrays served (rule (12)). */
   }
   item.dynBounds = std::move(arrDyn);
   item.dynLbBounds = std::move(arrDynLb);
@@ -3145,12 +3145,13 @@ bool Parser::parseDescriptorType(Type& out) {
   }
   if (bag.character) {
     if (hasStar) {
-      d_.error(cur().loc, "arrays of CHARACTER are not implemented in this stage", "(12)");
       out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
       out.varyingz = bag.varyingz;
       if (bag.starLen)
         out.starLen = true;
       out.controlled = bag.controlled;
+      for (const auto& d : starDims)
+        out.dims.push_back(d);
       return true;
     }
     out = Type::chr(bag.slen > 0 ? bag.slen : 1, bag.varying);
@@ -3164,7 +3165,7 @@ bool Parser::parseDescriptorType(Type& out) {
       d_.error(cur().loc, "VARYINGZ requires CHARACTER", "(15)");
     out = Type::bit(bag.slen > 0 ? bag.slen : 1);
     if (hasStar && bag.slen > 1) {
-      d_.error(cur().loc, "arrays of BIT(n>1) are not implemented in this stage", "(12)");
+      /* BIT(n>1) element arrays served (rule (12)). */
       return true;
     }
     if (bag.starLen)
@@ -3194,10 +3195,7 @@ bool Parser::parseDescriptorType(Type& out) {
       out.dims.push_back(d);
     out.controlled = bag.controlled;
   }
-  if (hasStar && bag.varying) {
-    d_.error(cur().loc, "adjustable-length VARYING arrays are not implemented in this stage",
-             "(12)");
-  }
+  // adjustable-length VARYING arrays served (rule 12).
   return true;
 }
 
@@ -4936,9 +4934,18 @@ StmtP Parser::parseClose() {
       continue;
     }
     if (atWord("IDENT")) {
-      d_.error(cur().loc, "CLOSE option IDENT is not implemented in this stage", "(103)");
-      resync();
-      return nullptr;
+      // CLOSE IDENT(expr) (rule 103): implementation-dependent user label;
+      // accepted as no-op per TR 25.084.
+      advance();
+      if (eat(Tok::LParen)) {
+        (void)parseExpr(); // parse for syntax validation, then discard
+        expect(Tok::RParen, "(103)");
+      } else {
+        d_.error(cur().loc, "CLOSE IDENT requires a parenthesized argument", "(103)");
+        resync();
+        return nullptr;
+      }
+      continue;
     }
     d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");
     resync();

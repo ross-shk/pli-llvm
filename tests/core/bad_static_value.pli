@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* VALUE on a STATIC variable (rule 23): a VALUE name rides the constant
+   initializer of program-lifetime storage, which this stage does not serve. */
+static_value: procedure options(main);
+    dcl c fixed bin(31) static value(5);  /* (23) - diagnose */
+    put skip list(c);
+ end static_value;

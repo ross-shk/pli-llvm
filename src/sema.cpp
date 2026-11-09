@@ -64,6 +64,13 @@ static std::vector<std::string> splitDesignator(const std::string& raw);
 // ADR-277). Defined below; forward-declared for the DEFINED subscript check.
 static bool isIntegerSubscriptType(const Type& t);
 
+// Element count of a fixed-extent array (rule (12)); -1 for an empty or
+// runtime (dynamic/adjustable) axis.
+static long long fixedElemCount(const Type& t);
+
+// Natural alignment in bytes of a type (for struct layout padding).
+static unsigned typeAlignBytes(const Type& t);
+
 // Storage size in bytes of one scalar for a DEFINED whole-base overlay
 // (rule 24): two scalars with equal size share the base's address, each
 // reference loading/storing through its own declared type. Returns -1 when
@@ -90,6 +97,114 @@ static long long definedScalarBytes(const Type& t) {
   default:
     return -1; // POINTER/OFFSET/AREA/ENTRY/VOID stay same-type-only
   }
+}
+
+// Natural alignment in bytes of a type (for struct layout padding).
+// Mirrors LLVM's ABI alignment for the given type.
+static unsigned typeAlignBytes(const Type& t) {
+  if (t.isArray())
+    return typeAlignBytes(t.elementType());
+  if (t.isStruct()) {
+    if (t.isUnion)
+      return 1; // union is byte array (ADR-202)
+    if (t.unaligned)
+      return 1; // packed struct
+    unsigned maxAlign = 1;
+    for (const auto& m : t.members) {
+      maxAlign = std::max(maxAlign, typeAlignBytes(m->ty));
+    }
+    return maxAlign;
+  }
+  switch (t.k) {
+  case TK::FixedBin:
+  case TK::FixedDec: {
+    int bits = t.intBits();
+    if (bits == 128)
+      return 16;
+    if (bits >= 64)
+      return 8;
+    if (bits >= 32)
+      return 4;
+    if (bits >= 16)
+      return 2;
+    return 1;
+  }
+  case TK::Float:
+    return 8;
+  case TK::Complex:
+    return 8; // pair of doubles
+  case TK::Char:
+    return t.varying ? 4 : 1; // varying: i32 + data; non-varying: byte array
+  case TK::Bit:
+    return 1; // byte array
+  case TK::Task:
+  case TK::Event:
+    return 4;
+  case TK::Pointer:
+  case TK::Offset:
+  case TK::Area:
+  case TK::Entry:
+  case TK::Label:
+    return 8; // 64-bit pointers
+  default:
+    return 1;
+  }
+}
+
+// Total storage size in bytes of a (possibly aggregate) type for a DEFINED
+// overlay (rule 24). Returns -1 when the size cannot be determined at compile
+// time (runtime extent, VARYING, POINTER/OFFSET/AREA/ENTRY/VOID leaf, or
+// dynamic array member). For an aligned structure each member is padded up to
+// its natural alignment; an UNALIGNED structure is packed with no inter-member
+// padding. A UNION is a byte array sized to the largest member (ADR-202).
+static long long typeStorageBytes(const Type& t) {
+  if (t.isArray()) {
+    long long n = fixedElemCount(t);
+    if (n < 0)
+      return -1;
+    long long e = typeStorageBytes(t.elementType());
+    if (e < 0)
+      return -1;
+    return n * e;
+  }
+  if (t.isStruct()) {
+    if (t.isUnion) {
+      // UNION: size of largest member
+      long long maxSize = 0;
+      for (const auto& m : t.members) {
+        long long ms = typeStorageBytes(m->ty);
+        if (ms < 0)
+          return -1;
+        if (ms > maxSize)
+          maxSize = ms;
+      }
+      return maxSize > 0 ? maxSize : -1;
+    }
+    long long total = 0;
+    for (const auto& m : t.members) {
+      long long ms = typeStorageBytes(m->ty);
+      if (ms < 0)
+        return -1;
+      if (!t.unaligned) {
+        unsigned align = typeAlignBytes(m->ty);
+        if (align > 1) {
+          long long pad = (align - (total % align)) % align;
+          total += pad;
+        }
+      }
+      total += ms;
+    }
+    // Tail padding to the structure's own alignment (aligned structs only).
+    if (!t.unaligned && total > 0) {
+      unsigned align = typeAlignBytes(t);
+      if (align > 1) {
+        long long pad = (align - (total % align)) % align;
+        total += pad;
+      }
+    }
+    return total > 0 ? total : -1;
+  }
+  return definedScalarBytes(t);
 }
 
 // Characters in one CHARACTER string or CHARACTER array for a POSITION overlay
@@ -1820,6 +1935,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.fileAttr) {
             d_.error(item.loc, "STATIC attribute not allowed on FILE variable", "(23)");
           }
+          // STATIC in a nested block (BEGIN or an ON unit) has program lifetime
+          // (rule 23): the variable is emitted as a module global by emitGlobals
+          // and INITIAL runs once at program start. A STATIC AREA (rule (20))
+          // is handled identically — its region is whole-program static.
         }
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
@@ -1875,7 +1994,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             d_.error(item.loc,
                      "DEFINED base '" + item.definedBase + "' is not a variable in this scope",
                      "(24)");
-          } else if (base->owner != p) {
+          } else if (base->owner != p && !(base->external || base->isStatic)) {
             d_.error(item.loc,
                      "DEFINED across an enclosing procedure is not implemented in this stage",
                      "(24)");
@@ -1898,13 +2017,37 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             }
           } else if (item.definedSubs.empty()) {
             // Whole-base overlay (rule 24): the item shares the base's storage.
-            // A different-type overlay is a memory view when both scalars have
-            // the same storage size; a size mismatch stays diagnosed.
-            long long itemBytes = definedScalarBytes(item.ty);
-            long long baseBytes = definedScalarBytes(base->ty);
+            // For a structure base with no explicit structure on the item, inherit
+            // the base's structure type (same-type view).
+            if (base->ty.isStruct() && !item.ty.isStruct()) {
+              item.ty = base->ty; // deep copy via Type's copy constructor
+              // Apply item's explicit ALIGNED/UNALIGNED if present.
+              item.ty.unaligned = item.unaligned || (!item.aligned && item.ty.unaligned);
+              // Keep the symbol's type in sync for codegen.
+              item.sym->ty = item.ty;
+            }
+            // Use typeStorageBytes (not definedScalarBytes) so aggregates participate
+            // in the memory-view size check.
+            long long itemBytes = typeStorageBytes(item.ty);
+            long long baseBytes = typeStorageBytes(base->ty);
             bool sameView = item.ty == base->ty || (itemBytes > 0 && itemBytes == baseBytes);
+            bool alignedAgree = (item.ty.unaligned == base->ty.unaligned);
             if (item.ty.isStruct() || base->ty.isStruct()) {
-              d_.error(item.loc, "DEFINED on a structure is not implemented in this stage", "(24)");
+              if (!alignedAgree) {
+                d_.error(item.loc,
+                         "DEFINED requires the item and its base to agree in ALIGNED/UNALIGNED "
+                         "(rule 24)",
+                         "(24)");
+              } else if (itemBytes <= 0 || baseBytes <= 0 || itemBytes > baseBytes) {
+                d_.error(item.loc,
+                         "DEFINED overlay does not fit into its base (" +
+                             std::to_string(itemBytes) + " byte(s) vs " +
+                             std::to_string(baseBytes) + ")",
+                         "(24)");
+              } else {
+                item.sym->definedBase = base;
+                isDefined = true;
+              }
             } else if (item.ty.isArray() || base->ty.isArray()) {
               // Array overlay (rule 24; IBM simple defining): the item starts at
               // the base's first element. The bounds need not match — the item
@@ -1937,11 +2080,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                          "a DEFINED array must fit into its base (" + std::to_string(itemN) +
                              " element(s), base has " + std::to_string(baseN) + ")",
                          "(24)");
+              } else if (!alignedAgree) {
+                d_.error(item.loc,
+                         "DEFINED requires the item and its base to agree in ALIGNED/UNALIGNED "
+                         "(rule 24)",
+                         "(24)");
               } else {
                 item.sym->definedBase = base;
                 isDefined = true;
               }
-            } else if (!sameView) {
+            } else if (!alignedAgree || !sameView) {
               d_.error(item.loc,
                        "DEFINED requires the item and base to have the same storage size (" +
                            item.ty.desc() + " vs " + base->ty.desc() + ")",
@@ -2321,12 +2469,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // (invariant 2). INITIAL on an array (rule 26) expands its
         // itemlist (with iteration factors and '*') into one value per element.
         if (item.ty.isArray() && !isDefined) {
-          if (item.ty.elementType().isChar() &&
-              (item.ty.elementType().starLen || item.controlled || item.ty.isDynamic()))
-            d_.error(item.loc,
-                     "arrays of adjustable, CONTROLLED, or dynamic-extent CHARACTER "
-                     "are not implemented in this stage",
-                     "(12)");
+          // adjustable/CONTROLLED/dynamic-extent CHARACTER element arrays served (rule 12).
           // VARYING element arrays are now supported (rule 12)
           if (item.ty.isDynamic()) {
             // Dynamic (runtime-extent) arrays (rules (12),(13)): this stage
@@ -2402,6 +2545,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               std::vector<Expr*> elems;
               expandInitItems(item.initItems, item.ty.elementType(), item.loc, elems);
               item.sym->initElems = std::move(elems);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
             }
           } else if (!item.initItems.empty()) {
             std::vector<Expr*> elems;
@@ -2412,8 +2558,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "INITIAL supplies " + std::to_string(elems.size()) +
                            " value(s) for an array of " + std::to_string(n) + " element(s)",
                        "(26)");
-            else
+            else {
               item.sym->initElems = std::move(elems);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
+            }
           }
         }
         // Adjustable CHARACTER length (rule (18)): `CHAR(*)` or `CHAR(expr)`
@@ -2439,10 +2589,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "an adjustable CHARACTER length is only valid on a parameter or CONTROLLED "
                      "variable",
                      "(18)");
-          else if (item.ty.isArray())
-            d_.error(item.loc,
-                     "an adjustable CHARACTER length on an array is not implemented in this stage",
-                     "(12)");
+          // adjustable CHARACTER length on an array served (rule 12).
           else if (isControlled && !isParam && !item.slenExpr && !item.ty.starLen)
             d_.error(item.loc,
                      "a CONTROLLED adjustable CHARACTER length needs CHAR(expr) for the ALLOCATE "
@@ -2468,14 +2615,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // as a static global initializer.
           // STATIC structures with INITIAL are now supported (rule 26): they
           // get constant-folded global initializers in emitGlobals().
-          if (item.sym->controlled) {
-            // CONTROLLED: per-allocation initialization handled at runtime
-            if (hasDynamicMember(item.ty)) {
-              d_.error(item.loc,
-                       "INITIAL on a CONTROLLED structure with a dynamic member is "
-                       "not implemented in this stage",
-                       "(26)");
-            }
+          if (item.sym->controlled && hasDynamicMember(item.ty)) {
+            d_.error(item.loc,
+                     "INITIAL on a CONTROLLED structure with a dynamic member is "
+                     "not implemented in this stage",
+                     "(26)");
           } else if (hasDynamicMember(item.ty)) {
             // INITIAL covering a dynamic member (rules (13),(26), ADR-092):
             // only a trailing top-level dynamic array member is served — the
@@ -2522,6 +2666,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                   if (Expr* f = foldInitialConstant(raw[idx++], el, item.loc))
                     folded.push_back(f);
                 item.sym->initElems = std::move(folded);
+                // STATIC INITIAL requires constant expressions (rules (23),(26)).
+                if (item.sym->isStatic)
+                  checkStaticConstants(item.sym->initElems);
               }
             }
           } else {
@@ -2617,6 +2764,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               size_t foldIdx = 0;
               foldStructInit(item.ty, raw, foldIdx, item.loc, folded);
               item.sym->initElems = std::move(folded);
+              // STATIC INITIAL requires constant expressions (rules (23),(26)).
+              if (item.sym->isStatic)
+                checkStaticConstants(item.sym->initElems);
             }
           }
         }
@@ -2633,8 +2783,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           p->localSyms.push_back(item.sym);
         if (item.init) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
-          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc))
+          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc)) {
             item.sym->initExpr = folded; // consumed by code generation
+            // STATIC INITIAL requires constant expressions (rules (23),(26)).
+            if (item.sym->isStatic)
+              checkStaticConstants(folded);
+          }
         }
         if (item.initCall) {
           // INITIAL(CALL f(...)) (rule 27): not allowed on STATIC variables.
@@ -2668,6 +2822,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "VALUE on arrays, structures, pointers, and complex data is not implemented "
                      "in this stage (ADR-108)",
                      "");
+          // VALUE on an explicitly STATIC variable (rule 23): a VALUE name
+          // rides the same constant-initializer rule; an EXTERNAL variable
+          // without STATIC keeps its own (pre-existing) homogeneous path.
+          else if (item.sawStatic)
+            d_.error(item.loc, "VALUE not allowed on STATIC variable", "(23)");
           else {
             if (Expr* folded = foldInitialConstant(item.valueInit.get(), item.ty, item.loc))
               item.sym->initExpr = folded; // consumed by code generation
@@ -3002,6 +3161,41 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
     return nullptr;
   }
   return lit;
+}
+
+// Check if an expression is a constant literal (for STATIC INITIAL validation).
+// Returns true for IntLit, FltLit, DecLit, CharLit, BitLit, and unary minus/not on constants.
+bool Sema::isConstantExpr(Expr* e) const {
+  if (!e)
+    return false;
+  switch (e->kind) {
+    case Expr::IntLit:
+    case Expr::FltLit:
+    case Expr::DecLit:
+    case Expr::CharLit:
+    case Expr::BitLit:
+      return true;
+    case Expr::Unary:
+      // Allow unary minus/not on a constant literal
+      if (e->op == Tok::Minus || e->op == Tok::Not)
+        return isConstantExpr(e->a.get());
+      return false;
+    default:
+      return false;
+  }
+}
+
+// STATIC INITIAL (rules (23),(26)): program-lifetime storage is initialized at
+// program start, so every expanded element must be a compile-time constant.
+void Sema::checkStaticConstants(const std::vector<Expr*>& elems) const {
+  for (Expr* e : elems)
+    if (!isConstantExpr(e))
+      d_.error(e->loc, "STATIC INITIAL requires constant expressions", "(23),(26)");
+}
+
+void Sema::checkStaticConstants(Expr* e) const {
+  if (!isConstantExpr(e))
+    d_.error(e->loc, "STATIC INITIAL requires constant expressions", "(23),(26)");
 }
 
 void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemTy, SourceLoc loc,
@@ -3371,8 +3565,10 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
 // also stays out: its live bound is per-generation in the runtime stack.
 bool Sema::wholeArrayStorageOk(Expr* e) {
   Symbol* s = e->sym;
-  if (!s || s->kind != Symbol::Var || s->definedBase || s->isBased())
-    return false;
+  if (!s) return false;
+  if (s->kind != Symbol::Var) return false;
+  if (s->definedBase) return false;
+  if (s->isBased()) return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
     return false;
   // A CONTROLLED array has per-generation live bounds (an ALLOCATE (n)
@@ -3540,16 +3736,7 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
       wholeArrayStorageOk(v))
     return false;
   const size_t n = t->ty.dims.size();
-  // Axes past the first are always static in this stage; guard anyway since a
-  // live-bound loop over one would read the wrong axis.
-  for (size_t k = 1; k < n; ++k)
-    if (t->ty.dims[k].dyn || t->ty.dims[k].lbDyn) {
-      d_.error(s->loc,
-               "whole-array assignment over a dynamic non-first axis is not implemented in this "
-               "stage",
-               "(13)");
-      return false;
-    }
+  // Dynamic non-first axes are now supported (rule 13) via live LBOUND/HBOUND.
   if (!wholeArrayStorageOk(t)) {
     d_.error(s->loc,
              "whole-array assignment of parameters, DEFINED overlays, BASED storage, or dynamic "
@@ -3593,6 +3780,11 @@ bool Sema::expandWholeArrayAssign(Stmt* s, Scope* sc, Proc* p) {
     a->path = t->path;
     a->loc = s->loc;
     e->args.push_back(std::move(a));
+    auto ax = std::make_unique<Expr>();
+    ax->kind = Expr::IntLit;
+    ax->ival = (long long)k + 1;
+    ax->loc = s->loc;
+    e->args.push_back(std::move(ax));
     return e;
   };
   // The inner assignment assigns one element from the rewritten value.
@@ -5963,13 +6155,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
           e->ty = Type::voidTy();
           break;
         }
-        if (leaf->isDynamic()) {
-          d_.error(e->loc,
-                   "a locator-qualified dynamic member array is not implemented in this stage",
-                   "(124)");
-          e->ty = Type::voidTy();
-          break;
-        }
+        // locator-qualified dynamic member array served (rule 124).
         if (e->args.size() != leaf->dims.size()) {
           d_.error(e->loc,
                    "member array has " + std::to_string(leaf->dims.size()) +
@@ -6957,9 +7143,16 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
             continue;
           long long lb = 1;
           if (sj < a->ty.dims.size()) {
-            if (a->ty.dims[sj].dyn || a->ty.dims[sj].lbDyn)
+            const Dim& dk = a->ty.dims[sj];
+            if (dk.lbDyn) {
               dyn = true;
-            lb = a->ty.dims[sj].lb;
+              lb = dk.lb;
+            } else {
+              lb = dk.lb;
+            }
+            if (dk.dyn && !dk.lbDyn) {
+              // ub dynamic but lb constant: served (lb constant).
+            }
           }
           auto lit = std::make_unique<Expr>();
           lit->kind = Expr::IntLit;
@@ -7647,18 +7840,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     int p = 0, q = 0;
-    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-      ConstNum c;
-      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-          c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-        d_.error(e->args[idx]->loc,
-                 std::string("FIXED ") + what + " must be an integer constant",
-                 "(123)");
-        return false;
-      }
-      out = (int)c.value;
-      return true;
-    };
+auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+        ConstNum c;
+        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+          d_.error(e->args[idx]->loc,
+                   std::string("FIXED ") + what + " must be an integer constant",
+                   "(123)");
+          return false;
+        }
+        out = (int)pli_to_i64(c.value);
+        return true;
+      };
     if (!readInteger(1, "precision", p)) {
       e->ty = Type::voidTy();
       return true;
@@ -7712,18 +7905,18 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
      int p = 0, q = 0;
      const bool haveP = e->args.size() >= 2;
      const bool haveQ = e->args.size() >= 3;
-     auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-       ConstNum c;
-       if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-           c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-         d_.error(e->args[idx]->loc,
-                  std::string(nm) + " " + what + " must be an integer constant",
-                  "(123)");
-         return false;
-       }
-       out = (int)c.value;
-       return true;
-     };
+auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+        ConstNum c;
+        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
+            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
+          d_.error(e->args[idx]->loc,
+                   std::string(nm) + " " + what + " must be an integer constant",
+                   "(123)");
+          return false;
+        }
+        out = (int)pli_to_i64(c.value);
+        return true;
+      };
      if (haveP && !readInteger(1, "precision", p)) {
        e->ty = Type::voidTy();
        return true;

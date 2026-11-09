@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* OPEN LINESIZE/PAGESIZE runtime behavior (rules 100,101) */
+open_linesize_pagesize: procedure options(main);
+    dcl f file;
+    open file(f) title('test_linesize.dat') output linesize(10) pagesize(3);
+    put file(f) list('This line should wrap at column 10');
+    put file(f) page list('New page at line 4');
+    close file(f);
+    put skip list('PASS open_linesize_pagesize');
+end open_linesize_pagesize;

@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC INITIAL with non-constant expression (rules 23,26) — must be diagnosed */
+static_initial_nonconst: procedure options(main);
+    dcl x fixed bin(31) init(5);
+    dcl y fixed bin(31) static init(x);  /* ERROR (23),(26): not a constant */
+    put skip list('FAIL - should not reach here');
+end static_initial_nonconst;

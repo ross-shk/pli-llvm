@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* CLOSE IDENT no-op test (rule 103) */
+close_ident: procedure options(main);
+    dcl f file;
+    open file(f) title('test.dat') output;
+    put file(f) list('test');
+    close file(f) ident('user label');  /* accepted as no-op */
+    put skip list('PASS close_ident');
+end close_ident;

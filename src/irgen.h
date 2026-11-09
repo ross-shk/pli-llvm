@@ -701,6 +701,8 @@ private:
   // FIXED BINARY checked +,-,* (QR1.2): overflow traps to the SIZE path
   // (hard ERROR when no SIZE handler is established, QR1.4).
   llvm::Value* checkedArith(Tok op, llvm::Value* a, llvm::Value* b, bool dec = false);
+  llvm::Value* checkedMul(llvm::Value* a, llvm::Value* b);
+  llvm::Value* checkedAdd(llvm::Value* a, llvm::Value* b);
   // FIXED DECIMAL precision trap (QR1.2): an i64 magnitude at or beyond
   // `limit` (10^prec digits, or a binary width) traps to the SIZE path.
   void magTrap(llvm::Value* v, long long limit);

@@ -1,10 +1,19 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* rule (60)-(63): SNAP prefix on ON condition — warned, no effect. */
-on_snap: procedure options(main);
-    on error snap begin;
-        put skip list('ON ERROR SNAP triggered');
-    end;
-    signal error;
-    put skip list('PASS on_snap');
-end on_snap;
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (91): SNAP prefix on ON condition -- warned, no effect. */
+
+ on_snap: procedure options(main);
+     /* Test 1: ON ERROR SNAP */
+     on error snap begin;
+         put skip list('ON ERROR SNAP triggered');
+     end;
+     signal error;
+
+     /* Test 2: ON SIZE SNAP */
+     on size snap put list('SNAP taken');
+         /* Warning at compile, no dump at runtime */
+     dcl x fixed bin(15);
+     x = 100000;  /* Overflow */
+
+     put skip list('PASS on_snap');
+ end on_snap;
