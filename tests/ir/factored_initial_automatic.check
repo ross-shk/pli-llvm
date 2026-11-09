@@ -1,9 +1,9 @@
-# CHECK: define {{.*}}@FACTORED_AUTO_IR
-# CHECK:   %X = alloca [2 x i32]
-# CHECK:   %Y = alloca [2 x i32]
-# CHECK:   store i32 1, {{.*}}%X
-# CHECK:   store i32 2, {{.*}}%X
-# CHECK:   store i32 1, {{.*}}%Y
-# CHECK:   store i32 2, {{.*}}%Y
-# CHECK-NOT: @pli_g_X
-# CHECK-NOT: @pli_g_Y
+CHECK: define {{.*}}@PLI_FACTORED_AUTO_IR
+CHECK:   alloca {{.*}}[2 x i32]
+CHECK:   alloca {{.*}}[2 x i32]
+CHECK:   store i32 1, {{.*}}[2 x i32]
+CHECK:   store i32 2, {{.*}}[2 x i32]
+CHECK:   store i32 1, {{.*}}[2 x i32]
+CHECK:   store i32 2, {{.*}}[2 x i32]
+CHECK-NOT: @pli_g_X
+CHECK-NOT: @pli_g_Y

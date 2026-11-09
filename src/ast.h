@@ -187,11 +187,17 @@ struct DeclItem {
    bool labelAttr = false;        // LABEL (rule (21)): label variable
    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
    bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
-   bool dataAttr = false;         // a computational/string data attribute was given
-                                  // on this item (used to validate GENERIC)
-   // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
-   std::vector<std::pair<std::string, Type>> genericEntries;
- };
+bool dataAttr = false;         // a computational/string data attribute was given
+                                   // on this item (used to validate GENERIC)
+    // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
+    std::vector<std::pair<std::string, Type>> genericEntries;
+  };
+
+  // Deep-clone helpers for factored declarations (rule 11): each name gets its
+  // own copy of INITIAL expressions, dynamic bounds, and initItems.
+  ExprP cloneExpr(const Expr& e);
+  inline InitItem cloneInitItem(const InitItem& it);
+  inline DeclItem cloneDeclItem(const DeclItem& base);
 
 // Rule (65) initial-label: an element of a label array named by a statement
 // prefix (AR(1): ...). The subscripts are optionally signed integer constants;
@@ -470,5 +476,108 @@ struct Program {
   // is NOT the index into this list: the key is a hash of the name (see
   // Sema::resolveCondKey), so it stays the same across separately compiled
   // objects. Key 0 means ERROR, negative keys are the fixed conditions above.
-  std::vector<std::string> condNames;
-};
+std::vector<std::string> condNames;
+  };
+
+// Deep-clone implementation for factored declarations (rule 11).
+// All Expr::Kind variants share the same struct layout; we copy all fields
+// and recursively clone child expressions (a, b, args).
+inline ExprP cloneExpr(const Expr& e) {
+  auto r = std::make_unique<Expr>();
+  r->kind = e.kind;
+  r->loc = e.loc;
+  r->ty = e.ty;
+  r->ival = e.ival;
+  r->wideIval = e.wideIval;
+  r->fval = e.fval;
+  r->decScale = e.decScale;
+  r->decPrec = e.decPrec;
+  r->sval = e.sval;
+  r->name = e.name;
+  r->path = e.path;
+  r->memberPath = e.memberPath;
+  // sym, locPtr, allocBaseRef, isLabel, folded — NOT cloned (sema/runtime fills)
+  r->op = e.op;
+  if (e.a) r->a = cloneExpr(*e.a);
+  if (e.b) r->b = cloneExpr(*e.b);
+  for (const auto& arg : e.args)
+    if (arg) r->args.push_back(cloneExpr(*arg));
+  return r;
+}
+
+inline InitItem cloneInitItem(const InitItem& it) {
+  InitItem r;
+  r.kind = it.kind;
+  r.factor = it.factor;
+  if (it.value) r.value = cloneExpr(*it.value);
+  for (const auto& child : it.items) r.items.push_back(cloneInitItem(child));
+  return r;
+}
+
+inline DeclItem cloneDeclItem(const DeclItem& base) {
+  DeclItem r;
+  // Trivial copies
+  r.ty = base.ty;
+  r.level = base.level;
+  r.isEntry = base.isEntry;
+  r.extName = base.extName;
+  r.entryParams = base.entryParams;
+  r.entryByValue = base.entryByValue;
+  r.controlled = base.controlled;
+  r.like = base.like;
+  r.picture = base.picture;
+  r.fileAttr = base.fileAttr;
+  r.nonprint = base.nonprint;
+  r.genericEntries = base.genericEntries;
+  r.typeRef = base.typeRef;
+  r.definedBase = base.definedBase;
+  // DefinedSub has ExprP expr — deep clone each
+  for (const auto& ds : base.definedSubs) {
+    DefinedSub nds;
+    nds.isub = ds.isub;
+    nds.axis = ds.axis;
+    nds.mult = ds.mult;
+    nds.add = ds.add;
+    if (ds.expr) nds.expr = cloneExpr(*ds.expr);
+    r.definedSubs.push_back(std::move(nds));
+  }
+  r.hasPos = base.hasPos;
+  r.pos = base.pos;
+  r.basedBase = base.basedBase;
+  r.basedNoPtr = base.basedNoPtr;
+  r.area = base.area;
+  r.areaStar = base.areaStar;
+  r.sawStatic = base.sawStatic;
+  r.offset = base.offset;
+  r.offsetRef = base.offsetRef;
+  r.aligned = base.aligned;
+  r.unaligned = base.unaligned;
+  r.optional = base.optional;
+  r.isCondition = base.isCondition;
+  r.entryVariable = base.entryVariable;
+  r.entryIsFunction = base.entryIsFunction;
+  r.entryRetTy = base.entryRetTy;
+  r.returnsStructName = base.returnsStructName;
+  r.uses = base.uses;
+  r.sets = base.sets;
+  r.reducible = base.reducible;
+  r.abnormalLabel = base.abnormalLabel;
+  r.normal = base.normal;
+  r.reserved = base.reserved;
+  r.unionAttr = base.unionAttr;
+  r.labelAttr = base.labelAttr;
+  r.imaginary = base.imaginary;
+  r.dataAttr = base.dataAttr;
+  // Deep clones
+  if (base.init) r.init = cloneExpr(*base.init);
+  if (base.slenExpr) r.slenExpr = cloneExpr(*base.slenExpr);
+  if (base.valueInit) r.valueInit = cloneExpr(*base.valueInit);
+  if (base.initCall) r.initCall = cloneExpr(*base.initCall);
+  for (const auto& e : base.dynBounds) if (e) r.dynBounds.push_back(cloneExpr(*e));
+  for (const auto& e : base.dynLbBounds) if (e) r.dynLbBounds.push_back(cloneExpr(*e));
+  for (const auto& it : base.initItems) r.initItems.push_back(cloneInitItem(it));
+  // Non-owning / runtime-filled — leave null/empty
+  r.sym = nullptr;
+  r.dynMembers.clear();
+  return r;
+}

@@ -342,6 +342,37 @@ For `bit(1)` masks there are `any` and `all` (like Python's `any()` / `all()`).
 
 > **Run the full example:** [`examples/arrays.pli`](../examples/arrays.pli) — `pli arrays.pli -o arrays && ./arrays`.
 
+### Factored declarations: share attributes, own initializers
+
+A factored `declare` lets you give several names the same attributes at once — like a tuple destructuring in reverse. Each name still gets its own initializer:
+
+```pli
+  dcl (a, b, c) fixed bin(31) initial((1), (2), (3));
+  /* a=1, b=2, c=3 */
+
+  dcl (x, y)(5) fixed bin(31) initial((1,2,3,4,5), (5,4,3,2,1));
+  /* x = [1,2,3,4,5], y = [5,4,3,2,1] */
+
+  /* iteration factor: (count)(values...) */
+  dcl (p, q)(6) fixed bin(31) initial((3)(0), (2)(1,2));
+  /* p = [0,0,0,0,0,0] ; q = [1,2,1,2,1,2] */
+```
+
+Each name in the parentheses gets its own copy of the dimension and the attribute tail. INITIAL itemlists are **per-name** — `a` initializes `a`, `b` initializes `b`.
+
+You can also share dynamic bounds:
+
+```pli
+  dcl n fixed bin(31) init(3);
+  dcl (a, b)(n) fixed bin(31);        /* both size n, independent */
+  dcl (x, y)(n) fixed bin(31) initial((1,2,3), (4,5,6));
+  /* x and y each have their own copy of (1,2,3) and (4,5,6) */
+```
+
+Each name evaluates its bounds at block entry and owns its own element buffer. `lbound(a)`, `hbound(b)`, `dim(x)` all work per-name.
+
+> **Run the full example:** [`examples/factored_declarations.pli`](../examples/factored_declarations.pli) — `pli factored_declarations.pli -o factored && ./factored`.
+
 ---
 
 ## Operators & expressions

@@ -1575,34 +1575,55 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
-      if (base.init)
-        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
-                 "(26)");
-      if (base.initCall)
-        d_.error(floc, "INITIAL CALL in a factored declaration is not implemented in this stage",
-                 "(27)");
-      if (!base.dynBounds.empty())
-        d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
-                 "(13)");
-      for (auto& [n, nl] : names) {
-        DeclItem item;
+      // Distribute INITIAL itemlists per name in factored declaration.
+      // Per PL/I (TR 25.084 rule 11): INITIAL((itemlist1), (itemlist2), ...)
+      // gives each name its own itemlist. A single INITIAL(itemlist) applies
+      // to all names. We detect the per-name form by checking that the number
+      // of top-level initItems equals the number of names AND each is a Group
+      // (parenthesized itemlist). A flat INITIAL(1, 2) for 2 names is a single
+      // shared itemlist, not per-name.
+      bool distributeInit = false;
+      if (!names.empty() && base.initItems.size() == names.size()) {
+        distributeInit = true;
+        for (const auto& it : base.initItems) {
+          if (it.kind != InitItem::Group) {
+            distributeInit = false;
+            break;
+          }
+        }
+      }
+      for (size_t idx = 0; idx < names.size(); ++idx) {
+        const auto& [n, nl] = names[idx];
+        DeclItem item = cloneDeclItem(base);  // deep clone per name
         item.name = n;
         item.loc = nl;
-        item.level = base.level;
-        item.ty = base.ty;
-        item.isEntry = base.isEntry;
-        item.extName = base.extName;
-        item.entryParams = base.entryParams;
-        item.entryByValue = base.entryByValue;
-        item.controlled = base.controlled;
-        item.like = base.like;
-        item.picture = base.picture;
+        // Distribute initItems if applicable
+        if (distributeInit && idx < base.initItems.size()) {
+          item.initItems.clear();
+          item.initItems.push_back(cloneInitItem(base.initItems[idx]));
+          // For scalar INITIAL: if the distributed item is a single Value,
+          // or a Group containing a single Value, also set the back-compat
+          // `init` field (used by sema for M0 path).
+          const auto& distributed = item.initItems[0];
+          if (distributed.kind == InitItem::Value && distributed.value) {
+            item.init = cloneExpr(distributed.value.get());
+          } else if (distributed.kind == InitItem::Group &&
+                     distributed.items.size() == 1 &&
+                     distributed.items[0].kind == InitItem::Value &&
+                     distributed.items[0].value) {
+            item.init = cloneExpr(distributed.items[0].value.get());
+          }
+        }
+        // Distribute initCall if applicable
+        if (item.initCall && distributeInit) {
+          // Each name gets its own copy of the INITIAL CALL
+          // (already deep-cloned by cloneDeclItem)
+        }
         // FILE (rules (39),(40)) and its NONPRINT modifier (ADR-204) are
         // per-name flags, not part of the type: copy them or every factored
         // name stays a non-file and OPEN/FILE( f ) rejects it (B15).
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
-        item.genericEntries = base.genericEntries;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -1994,7 +2015,7 @@ void Parser::parseDeclTail(DeclItem& item) {
             item.initCall = std::move(call);
             expect(Tok::RParen, "(26)"); // close INITIAL( ... )
           } else {
-            item.initItems = parseInitialList();
+            item.initItems = parseInitialList(/*topLevel=*/true);
             // Back-compat: a single plain value is also the M0 scalar item.init.
             // Copy (not move) the pointer: member-INIT gathering reads
             // initItems, and a moved-from unique_ptr would leave a null.
@@ -5361,15 +5382,16 @@ ExprP Parser::parsePrimary() {
 
 // INITIAL itemlist (rules (28)-(31)): a comma-separated list of INITIAL items
 // terminated by the enclosing ')'. Called with the opening '(' already consumed;
-// consumes the closing ')'.
-std::vector<InitItem> Parser::parseInitialList() {
+// consumes the closing ')'. If `topLevel` is true, a parenthesized constant
+// '(n)' is treated as a Group (single-element itemlist), not a Value.
+std::vector<InitItem> Parser::parseInitialList(bool topLevel) {
   std::vector<InitItem> out;
   for (;;) {
     if (at(Tok::RParen)) {
       advance();
       break;
     }
-    out.push_back(parseInitialItem());
+    out.push_back(parseInitialItem(topLevel));
     if (at(Tok::Comma)) {
       advance();
       continue;
@@ -5382,7 +5404,10 @@ std::vector<InitItem> Parser::parseInitialList() {
 
 // One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
 // '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
-InitItem Parser::parseInitialItem() {
+// If `topLevel` is true, a parenthesized constant '(n)' is treated as a Group
+// (single-element itemlist) rather than a Value, to support factored INITIAL
+// per-name itemlists: INITIAL((1), (2)).
+InitItem Parser::parseInitialItem(bool topLevel) {
   auto valueStart = [](Tok k) {
     return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
            k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star ||
@@ -5402,7 +5427,9 @@ InitItem Parser::parseInitialItem() {
         peek().kind == Tok::Number && peek(2).kind == Tok::RParen && peek(3).kind == Tok::HexLit;
     bool iter = iterHex || (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
-    bool parenConst = !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    // At top level of INITIAL itemlist, '(n)' is a Group (per-name itemlist),
+    // not a parenthesized constant.
+    bool parenConst = !topLevel && !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {
@@ -5414,9 +5441,9 @@ InitItem Parser::parseInitialItem() {
       it.factor = n;
       if (at(Tok::LParen)) {
         advance(); // (
-        it.items = parseInitialList();
+        it.items = parseInitialList(/*topLevel=*/false);
       } else {
-        it.items.push_back(parseInitialItem());
+        it.items.push_back(parseInitialItem(/*topLevel=*/false));
       }
       return it;
     }
@@ -5433,7 +5460,7 @@ InitItem Parser::parseInitialItem() {
     }
     InitItem g;
     g.kind = InitItem::Group;
-    g.items = parseInitialList(); // consumes the group's ')'
+    g.items = parseInitialList(/*topLevel=*/false); // consumes the group's ')'
     return g;
   }
   InitItem v;
