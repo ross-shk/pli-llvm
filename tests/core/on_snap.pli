@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (60)-(63): SNAP prefix on ON condition — warned, no effect. */
+on_snap: procedure options(main);
+    on error snap begin;
+        put skip list('ON ERROR SNAP triggered');
+    end;
+    signal error;
+    put skip list('PASS on_snap');
+end on_snap;

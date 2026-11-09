@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (39),(40): ENVIRONMENT in DECLARE accepted, no effect. */
+declare_environment: procedure options(main);
+    declare f file environment('RECSIZE(80) BLKSIZE(800)');
+    open file(f) title('declare_env.dat') output;
+    put file(f) list('test');
+    close file(f);
+    put skip list('PASS declare_environment');
+end declare_environment;
