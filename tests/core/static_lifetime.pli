@@ -19,6 +19,10 @@ static_lifetime: procedure options(main);
     /* Test 4: STATIC structure with INITIAL */
     call static_struct_init();
 
+    /* Test 5: STATIC in BEGIN block across recursive calls */
+    call recursive_begin_static(1);
+    call recursive_begin_static(1);
+
     put skip list('PASS static_lifetime');
 end static_lifetime;
 
@@ -77,3 +81,15 @@ static_struct_init: proc() options(bypass);
     put skip list('static_struct_init s.a =', s.a, 's.b =', s.b);
     return;
 end static_struct_init;
+
+/* STATIC in BEGIN block across recursive calls */
+recursive_begin_static: proc(n) options(bypass) recursive;
+    dcl n fixed bin(31);
+    begin;
+        dcl depth fixed bin(31) static initial(0);
+        depth = depth + 1;
+        put skip list('recursive_begin_static depth=', depth);
+        if n < 2 then call recursive_begin_static(n + 1);
+    end;
+    return;
+end recursive_begin_static;

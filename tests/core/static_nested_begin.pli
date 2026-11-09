@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC declared in a nested BEGIN block (rule 23): program-lifetime
+   storage shared across all activations of that BEGIN block. */
+static_nested_begin: procedure options(main);
+
+    call activate_begin();
+    call activate_begin();
+    call activate_begin();
+
+    put skip list('PASS static_nested_begin');
+end static_nested_begin;
+
+activate_begin: proc() options(bypass);
+    begin;
+        dcl counter fixed bin(31) static initial(0);
+        counter = counter + 1;
+        put skip list('activation', counter);
+    end;
+    return;
+end activate_begin;

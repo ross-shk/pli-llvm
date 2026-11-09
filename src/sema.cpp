@@ -1935,14 +1935,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           if (item.fileAttr) {
             d_.error(item.loc, "STATIC attribute not allowed on FILE variable", "(23)");
           }
-          // STATIC in a nested block (BEGIN or an ON unit) is program-lifetime
-          // storage that must outlive block activations, which this stage does
-          // not model, so it is diagnosed rather than mis-scoped (rule 23).
-          // A STATIC AREA (rule (20)) is exempt: its region is always whole-
-          // program static storage, which emitGlobals already serves.
-          if (sc != scopeFor(p) && !(p->isPackage && sc == rootScope_) && !item.ty.isArea()) {
-            d_.error(item.loc, "STATIC in a nested block is not implemented in this stage", "(23)");
-          }
+          // STATIC in a nested block (BEGIN or an ON unit) has program lifetime
+          // (rule 23): the variable is emitted as a module global by emitGlobals
+          // and INITIAL runs once at program start. A STATIC AREA (rule (20))
+          // is handled identically — its region is whole-program static.
         }
         if (item.external) {
           // EXTERNAL (rule (42)): shared across translation units via a
