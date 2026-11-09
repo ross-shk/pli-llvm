@@ -6,7 +6,6 @@
    static link passing, and recursive with internal helpers.
    NOTE: Compiler has bugs with:
    - Internal recursive procedures accessing enclosing variables (static link)
-   - STATIC attribute causes LLVM internal error
    These cases are commented out. */
 static_link_edge: procedure options(main);
 
@@ -48,8 +47,8 @@ static_link_edge: procedure options(main);
     /* deep_result = deep_recursive(4); */
     /* if deep_result ^= 24 then fails = fails + 1; */
 
-    /* STATIC variable in recursive procedure - COMPILER BUG: LLVM internal error */
-    /* call static_in_recursive(1); */
+    /* STATIC variable in recursive procedure - FIXED: now works per rule (23) */
+    call static_in_recursive(1);
 
    put skip list('PASS static_link_edge');
 
@@ -131,8 +130,6 @@ deep_recursive: proc(n) returns(fixed bin(31)) recursive options(bypass);
 end deep_recursive;
 */
 
-/* Static variable in recursive proc - COMPILER BUG: STATIC causes LLVM internal error */
-/*
 static_in_recursive: proc(call_num) options(bypass);
     dcl call_num fixed bin(31);
     dcl call_count fixed bin(31) static initial(0);
@@ -140,6 +137,5 @@ static_in_recursive: proc(call_num) options(bypass);
     put skip list('static_in_recursive call', call_num, 'count =', call_count);
     return;
 end static_in_recursive;
-*/
 
 end static_link_edge;
