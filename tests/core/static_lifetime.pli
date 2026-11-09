@@ -1,9 +1,11 @@
- /* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* STATIC lifetime (rules 23, 26, 42): STATIC variables retain values
-    across procedure activations and recursion.
-    INITIAL runs once at program start, not per activation.
-    STATIC in nested BEGIN blocks is not implemented (diagnosed). */
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* STATIC lifetime (rules 23, 26, 42): STATIC variables retain values
+   across procedure activations and recursion.
+   INITIAL runs once at program start, not per activation.
+   Procedure-level STATIC accessed in nested BEGIN blocks works.
+   STATIC declared inside nested BEGIN block is also supported
+   (tested in static_nested_begin.pli). */
  static_lifetime: procedure options(main);
 
      /* Test 1: STATIC scalar retains value across recursive calls */
