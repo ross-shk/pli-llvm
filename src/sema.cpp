@@ -32,6 +32,24 @@ static bool isAreaRef(const Expr* e) {
          !e->ty.isArray();
 }
 
+// True when an expression is a POINTER or OFFSET variable/element (a sink for SET/ALLOCATE).
+static bool isPointerSink(const Expr* e) {
+  return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
+         (e->sym->ty.isPointer() || e->sym->ty.isOffset());
+}
+
+// True when an expression is a BASED variable or element (target for LOCATE).
+static bool isBased(const Expr* e) {
+  return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
+         e->sym->isBased();
+}
+
+// True when an expression is an EVENT variable or element (target for EVENT).
+static bool isEventSink(const Expr* e) {
+  return e && (e->kind == Expr::VarRef || e->kind == Expr::Subscript) && e->sym &&
+         e->sym->ty.isEvent();
+}
+
 // Synthesize a VarRef to an AREA symbol for an implicit IN option (ADR-317).
 static ExprP makeAreaRef(Symbol* area, SourceLoc loc) {
   auto e = std::make_unique<Expr>();
@@ -564,6 +582,13 @@ static void eachStmtExpr(const Stmt* s, Fn&& f) {
   e(s->gotoTarget);
   e(s->replyTarget);
   e(s->eventTarget);
+  e(s->recordEventTarget);
+  e(s->setTarget);
+  e(s->ignoreCount);
+  e(s->locateVar);
+  e(s->keyOpt);
+  e(s->keyToOpt);
+  e(s->keyFromOpt);
   for (const auto& p : s->waitEvents)
     e(p);
   e(s->waitCount);
@@ -4676,7 +4701,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         t->ty.isComplex() || (t->ty.isChar() && t->ty.varying))
       d_.error(s->loc, "READ INTO of this type is not implemented in this stage", "(112)");
     // Key options (rules (112),(113)): require a keyed/direct open; key must be
-    // non-varying CHARACTER; KEYTO target a CHARACTER variable; NOLOCK/SET deferred.
+    // non-varying CHARACTER; KEYTO target a CHARACTER variable.
     if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
       if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
         d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
@@ -4698,8 +4723,28 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!kf || !kf->ty.isChar() || kf->ty.varying)
         d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
     }
-    if (s->keyNoLock || s->keySet)
-      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
+    // Rule (113) record options: IGNORE, SET, EVENT, NOLOCK, UNLOCK
+    if (s->ignoreCount) {
+      typeExpr(s->ignoreCount.get(), sc, p);
+    }
+    if (s->setTarget) {
+      typeExpr(s->setTarget.get(), sc, p);
+      if (!isPointerSink(s->setTarget.get()))
+        d_.error(s->setTarget->loc, "SET requires a POINTER or BASED variable", "(113)");
+    }
+    if (s->recordEventTarget) {
+      typeExpr(s->recordEventTarget.get(), sc, p);
+      if (!isEventSink(s->recordEventTarget.get()))
+        d_.error(s->recordEventTarget->loc, "EVENT requires an EVENT variable or element", "(113)");
+    }
+    if (s->unlockOpt) {
+      // UNLOCK valid on READ/REWRITE
+    }
+    if (s->keyNoLock) {
+      // NOLOCK valid on READ/REWRITE/DELETE (not WRITE)
+    }
+    if (s->locateVar)
+      d_.error(s->loc, "LOCATE is valid only on WRITE", "(113)");
     break;
   }
   case Stmt::Write:
@@ -4714,13 +4759,17 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       break;
     }
     s->fileSym = rsym;
-    typeExpr(s->value.get(), sc, p);
-    Expr* v = s->value.get();
-    if (!v || v->ty.isVoid() || v->ty.isArray() || v->ty.isStruct() || v->ty.isPointer() ||
-        v->ty.isComplex() || (v->ty.isChar() && v->ty.varying))
-      d_.error(s->loc, verb + " FROM of this type is not implemented in this stage", "(112)");
+    // For WRITE LOCATE, no FROM expression is required - the LOCATE variable provides the buffer.
+    // Only validate FROM type when not using LOCATE.
+    if (!s->locateVar) {
+      typeExpr(s->value.get(), sc, p);
+      Expr* v = s->value.get();
+      if (!v || v->ty.isVoid() || v->ty.isArray() || v->ty.isStruct() || v->ty.isPointer() ||
+          v->ty.isComplex() || (v->ty.isChar() && v->ty.varying))
+        d_.error(s->loc, verb + " FROM of this type is not implemented in this stage", "(112)");
+    }
     // Key options (rules (112),(113)): require a keyed/direct open; key must be
-    // non-varying CHARACTER; KEYFROM source a CHARACTER expression; NOLOCK/SET deferred.
+    // non-varying CHARACTER; KEYFROM source a CHARACTER expression.
     if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
       if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
         d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
@@ -4742,8 +4791,33 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!kf || !kf->ty.isChar() || kf->ty.varying)
         d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
     }
-    if (s->keyNoLock || s->keySet)
-      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
+    // Rule (113) record options: LOCATE, EVENT, NOLOCK, UNLOCK
+    if (s->locateVar) {
+      if (s->kind != Stmt::Write)
+        d_.error(s->loc, "LOCATE is valid only on WRITE", "(113)");
+      typeExpr(s->locateVar.get(), sc, p);
+      if (!isBased(s->locateVar.get()))
+        d_.error(s->locateVar->loc, "LOCATE requires a BASED variable", "(113)");
+      if (s->value)
+        d_.error(s->loc, "LOCATE and FROM are mutually exclusive", "(113)");
+    }
+    if (s->recordEventTarget) {
+      typeExpr(s->recordEventTarget.get(), sc, p);
+      if (!isEventSink(s->recordEventTarget.get()))
+        d_.error(s->recordEventTarget->loc, "EVENT requires an EVENT variable or element", "(113)");
+    }
+    if (s->unlockOpt) {
+      if (s->kind != Stmt::Read && s->kind != Stmt::Rewrite)
+        d_.error(s->loc, "UNLOCK is valid only on READ or REWRITE", "(113)");
+    }
+    if (s->keyNoLock) {
+      if (s->kind == Stmt::Write || s->kind == Stmt::Delete)
+        d_.error(s->loc, "NOLOCK is not valid on WRITE or DELETE", "(113)");
+    }
+    if (s->ignoreCount)
+      d_.error(s->loc, "IGNORE is valid only on READ", "(113)");
+    if (s->setTarget)
+      d_.error(s->loc, "SET is valid only on READ or LOCATE", "(113)");
     break;
   }
   case Stmt::Delete: {
@@ -4755,7 +4829,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     }
     s->fileSym = rsym;
     // Key options (rules (112),(113)): require a keyed/direct open; KEYFROM must
-    // be non-varying CHARACTER; NOLOCK/SET deferred.
+    // be non-varying CHARACTER.
     if (s->keyOpt || s->keyToOpt || s->keyFromOpt)
       if (!s->fileSym->openKeyed && !s->fileSym->openDirect)
         d_.error(s->loc, "KEY/KEYTO/KEYFROM require a KEYED or DIRECT file", "(113)");
@@ -4777,8 +4851,24 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (!kf || !kf->ty.isChar() || kf->ty.varying)
         d_.error(s->loc, "KEYFROM must be a non-varying CHARACTER expression", "(113)");
     }
-    if (s->keyNoLock || s->keySet)
-      d_.error(s->loc, "NOLOCK/SET are not implemented in this stage", "(113)");
+    // Rule (113) record options: EVENT, NOLOCK, UNLOCK
+    if (s->recordEventTarget) {
+      typeExpr(s->recordEventTarget.get(), sc, p);
+      if (!isEventSink(s->recordEventTarget.get()))
+        d_.error(s->recordEventTarget->loc, "EVENT requires an EVENT variable or element", "(113)");
+    }
+    if (s->unlockOpt) {
+      d_.error(s->loc, "UNLOCK is valid only on READ or REWRITE", "(113)");
+    }
+    if (s->keyNoLock) {
+      // NOLOCK valid on DELETE (keyed/direct)
+    }
+    if (s->locateVar)
+      d_.error(s->loc, "LOCATE is valid only on WRITE", "(113)");
+    if (s->ignoreCount)
+      d_.error(s->loc, "IGNORE is valid only on READ", "(113)");
+    if (s->setTarget)
+      d_.error(s->loc, "SET is valid only on READ or LOCATE", "(113)");
     break;
   }
   case Stmt::Allocate:

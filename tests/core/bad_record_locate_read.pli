@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): LOCATE on READ should be diagnosed. */
+bad_record_locate_read: proc options(main);
+  dcl f file;
+  dcl x based(p) fixed bin(31);
+  dcl p pointer;
+  open file(f) record sequential input title('bad_locate.dat');
+  read file(f) locate(x) into(x);  /* LOCATE only valid on WRITE */
+  close file(f);
+end bad_record_locate_read;

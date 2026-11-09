@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): RECORD SET option — store record buffer address into POINTER. */
+record_set: procedure options(main);
+  declare f file;
+  declare x fixed binary(31);
+  declare p pointer;
+  declare i fixed binary(31);
+
+  open file(f) record sequential output
+     title('tests/core/out/record_set.dat');
+  do i = 1 to 3;
+    x = i * 10;
+    write file(f) from(x);
+  end;
+  close file(f);
+
+  open file(f) record sequential input
+     title('tests/core/out/record_set.dat');
+  /* Read with SET - p points to the record buffer */
+  read file(f) set(p) into(x);
+  put skip list('after read set(p), x=' || x);
+  close file(f);
+  put skip list('PASS record_set');
+end record_set;

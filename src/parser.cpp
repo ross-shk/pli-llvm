@@ -4628,125 +4628,185 @@ StmtP Parser::parseFree() {
 }
 
 // read-statement ::= READ FILE ( f ) INTO ( reference ) ;    rules (112),(113)
-// write-statement ::= WRITE FILE ( f ) FROM ( expression ) ; sequential slice:
-// one fixed-size binary record per statement on a RECORD SEQUENTIAL file.
-// IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/EVENT stay diagnosed with rule (113).
-StmtP Parser::parseRecordIO() {
-  auto st = std::make_unique<Stmt>();
-  st->loc = cur().loc;
-  const bool isRead = atWord("READ");
-  const bool isRewrite = atWord("REWRITE");
-  const bool isDelete = atWord("DELETE");
-  advance(); // READ / WRITE / REWRITE / DELETE
-  st->kind = isRead ? Stmt::Read
-                    : isRewrite ? Stmt::Rewrite : isDelete ? Stmt::Delete : Stmt::Write;
-  if (atWord("FILE")) {
-    advance();
-    if (eat(Tok::LParen)) {
-      if (at(Tok::Word)) {
-        st->fileIdent = cur().text;
-        advance();
-      } else {
-        d_.error(cur().loc, "expected a FILE variable after FILE(", "(113)");
-      }
-      expect(Tok::RParen, "(113)");
-    } else {
-      d_.error(cur().loc, "expected '(' after FILE", "(113)");
-    }
-  } else {
-    d_.error(cur().loc,
-             "READ/WRITE/REWRITE/DELETE require a FILE ( f ) option in this stage", "(113)");
-  }
-  // DELETE removes the current record and takes no data clause; READ needs a
-  // receiver and WRITE/REWRITE a source.
-  if (!isDelete) {
-    const char* want = isRead ? "INTO" : "FROM";
-    if (atWord(want)) {
-      advance();
-      if (eat(Tok::LParen)) {
-        if (isRead)
-          st->target = parseExpr();
-        else
-          st->value = parseExpr();
-        expect(Tok::RParen, "(113)");
-      } else {
-        d_.error(cur().loc, std::string("expected '(' after ") + want, "(113)");
-      }
-    } else {
-      d_.error(cur().loc,
-               std::string(isRead
-                               ? "READ requires an INTO ( reference ) option; "
-                               : "WRITE/REWRITE require a FROM ( expression ) option; ") +
-                   "it is not implemented otherwise in this stage",
-               "(113)");
-    }
-  }
-  while (!at(Tok::Semi) && !at(Tok::Eof)) {
-    if (atWord("KEY")) {
-      // KEY( expression ): the record key (rules (112),(113)).
-      advance();
-      if (!eat(Tok::LParen)) {
-        d_.error(cur().loc, "expected '(' after KEY", "(113)");
-        resync();
-        return nullptr;
-      }
-      st->keyOpt = parseExpr();
-      expect(Tok::RParen, "(113)");
-      continue;
-    }
-    if (atWord("KEYTO")) {
-      // KEYTO( reference ): receives the key of the record read (READ).
-      advance();
-      if (!eat(Tok::LParen)) {
-        d_.error(cur().loc, "expected '(' after KEYTO", "(113)");
-        resync();
-        return nullptr;
-      }
-      st->keyToOpt = parseExpr();
-      expect(Tok::RParen, "(113)");
-      continue;
-    }
-    if (atWord("KEYFROM")) {
-      // KEYFROM( expression ): key of the record to rewrite/delete.
-      advance();
-      if (!eat(Tok::LParen)) {
-        d_.error(cur().loc, "expected '(' after KEYFROM", "(113)");
-        resync();
-        return nullptr;
-      }
-      st->keyFromOpt = parseExpr();
-      expect(Tok::RParen, "(113)");
-      continue;
-    }
-    if (atWord("NOLOCK")) {
-      // NOLOCK: accepted syntactically, deferred with (113).
-      st->keyNoLock = true;
-      advance();
-      continue;
-    }
-    if (atWord("SET")) {
-      // SET: accepted syntactically, deferred with (113).
-      st->keySet = true;
-      advance();
-      continue;
-    }
-    if (atWord("LOCATE") || atWord("UNLOCK") || atWord("EVENT")) {
-      d_.error(cur().loc, "record option " + cur().text + " is not implemented in this stage",
-               "(113)");
-      advance();
-      continue;
-    }
-    d_.error(cur().loc,
-             "record option '" +
-                 (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
-                 "' is not implemented in this stage",
-             "(113)");
-    resync();
-    return nullptr;
-  }
-  expect(Tok::Semi, "(112)");
-  return st;
-}
+ // write-statement ::= WRITE FILE ( f ) FROM ( expression ) ; sequential slice:
+ // one fixed-size binary record per statement on a RECORD SEQUENTIAL file.
+ // IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/EVENT stay diagnosed with rule (113).
+ StmtP Parser::parseRecordIO() {
+   auto st = std::make_unique<Stmt>();
+   st->loc = cur().loc;
+   const bool isRead = atWord("READ");
+   const bool isRewrite = atWord("REWRITE");
+   const bool isDelete = atWord("DELETE");
+   advance(); // READ / WRITE / REWRITE / DELETE
+   st->kind = isRead ? Stmt::Read
+                     : isRewrite ? Stmt::Rewrite : isDelete ? Stmt::Delete : Stmt::Write;
+   while (!at(Tok::Semi) && !at(Tok::Eof)) {
+     if (atWord("FILE")) {
+       // FILE ( f ): the file variable.
+       advance();
+       if (eat(Tok::LParen)) {
+         if (at(Tok::Word)) {
+           st->fileIdent = cur().text;
+           advance();
+         } else {
+           d_.error(cur().loc, "expected a FILE variable after FILE(", "(113)");
+         }
+         expect(Tok::RParen, "(113)");
+       } else {
+         d_.error(cur().loc, "expected '(' after FILE", "(113)");
+       }
+       continue;
+     }
+     if (atWord("INTO")) {
+       // INTO( reference ): the target for READ.
+       if (!isRead) {
+         d_.error(cur().loc, "INTO is valid only on READ", "(113)");
+         advance();
+         continue;
+       }
+       advance();
+       if (eat(Tok::LParen)) {
+         st->target = parseExpr();
+         expect(Tok::RParen, "(113)");
+       } else {
+         d_.error(cur().loc, "expected '(' after INTO", "(113)");
+       }
+       continue;
+     }
+     if (atWord("FROM")) {
+       // FROM( expression ): the source for WRITE/REWRITE.
+       if (isRead || isDelete) {
+         d_.error(cur().loc, "FROM is valid only on WRITE/REWRITE", "(113)");
+         advance();
+         continue;
+       }
+       advance();
+       if (eat(Tok::LParen)) {
+         st->value = parseExpr();
+         expect(Tok::RParen, "(113)");
+       } else {
+         d_.error(cur().loc, "expected '(' after FROM", "(113)");
+       }
+       continue;
+     }
+     if (atWord("KEY")) {
+       // KEY( expression ): the record key (rules (112),(113)).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after KEY", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->keyOpt = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("KEYTO")) {
+       // KEYTO( reference ): receives the key of the record read (READ).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after KEYTO", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->keyToOpt = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("KEYFROM")) {
+       // KEYFROM( expression ): key of the record to rewrite/delete.
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after KEYFROM", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->keyFromOpt = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("NOLOCK")) {
+       // NOLOCK: accepted syntactically (rules (112),(113)).
+       st->keyNoLock = true;
+       advance();
+       continue;
+     }
+     if (atWord("SET")) {
+       // SET( ref ): store record buffer address into a POINTER (READ, LOCATE).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after SET", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->setTarget = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("IGNORE")) {
+       // IGNORE( n ): skip n records without transferring data (READ).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after IGNORE", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->ignoreCount = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("LOCATE")) {
+       // LOCATE( var ): set BASED variable's pointer to a buffer (WRITE).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after LOCATE", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->locateVar = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     if (atWord("UNLOCK")) {
+       // UNLOCK: release the current record's lock on a keyed/direct file (READ/REWRITE).
+       st->unlockOpt = true;
+       advance();
+       continue;
+     }
+     if (atWord("EVENT")) {
+       // EVENT( ev ): event variable completed after the operation (READ/WRITE/REWRITE/DELETE/LOCATE).
+       advance();
+       if (!eat(Tok::LParen)) {
+         d_.error(cur().loc, "expected '(' after EVENT", "(113)");
+         resync();
+         return nullptr;
+       }
+       st->recordEventTarget = parseExpr();
+       expect(Tok::RParen, "(113)");
+       continue;
+     }
+     d_.error(cur().loc,
+              "record option '" +
+                  (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
+                  "' is not implemented in this stage",
+              "(113)");
+     resync();
+     return nullptr;
+   }
+   expect(Tok::Semi, "(113)");
+   // DELETE removes the current record and takes no data clause; READ needs a
+   // receiver and WRITE/REWRITE a source.
+   if (!isDelete && !st->target && !st->value && !st->locateVar) {
+     const char* want = isRead ? "INTO" : "FROM";
+     d_.error(st->loc,
+              std::string(isRead
+                              ? "READ requires an INTO ( reference ) option; "
+                              : "WRITE/REWRITE require a FROM ( expression ) option; ") +
+                  "it is not implemented otherwise in this stage",
+              "(113)");
+   }
+   return st;
+ }
 
 // open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the

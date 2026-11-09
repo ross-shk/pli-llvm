@@ -1006,6 +1006,95 @@ int pli_file_open_slot(long long slot) {
   return slot >= 0 && slot < PLI_MAX_FILES && rt_pli_files[slot] != NULL;
 }
 
+/* Record I/O options (rule 113) */
+
+/* IGNORE(n, rec_size): skip n records without transferring data. Advances the file
+ * position by n * record_size. If past EOF, raises ENDFILE. */
+void pli_record_skip(long long slot, long long n, long long rec_size) {
+  if (slot < 0 || slot >= PLI_MAX_FILES || n <= 0 || rec_size <= 0)
+    return;
+  FILE *f = rt_pli_files[slot];
+  if (!f) {
+    pli_signal_error("record file is not open");
+    return;
+  }
+  long long skip_bytes = n * rec_size;
+  if (pli_plat_fseek(f, skip_bytes, SEEK_CUR) != 0)
+    rt_rec_endfile(slot);
+}
+
+/* UNLOCK: release the current record's lock on a keyed/direct file. */
+void pli_record_unlock(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  struct kix_state *st = &rt_kix[slot];
+  if (st->is_keyed) {
+    /* For keyed files, we clear any lock state. The current implementation
+     * doesn't have explicit locking, but this is a no-op for the single-threaded
+     * sidecar model. In a multi-threaded implementation, this would release
+     * a per-record mutex. */
+    (void)st; /* silence unused warning */
+  }
+  /* For sequential files, UNLOCK is a documented no-op. */
+}
+
+/* LOCATE: get a buffer address for WRITE LOCATE. Returns a pointer to a
+ * runtime-owned buffer sized for the next record. The caller fills the buffer
+ * via the BASED variable, then calls pli_record_locate_commit. */
+char* pli_record_locate_begin(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return NULL;
+  FILE *f = rt_pli_files[slot];
+  if (!f) {
+    pli_signal_error("record file is not open");
+    return NULL;
+  }
+  /* For now, use the current record size if known, otherwise default to 8 bytes.
+   * In a full implementation, this would be based on the target type. */
+  long long rec_size = rt_rec[slot].valid ? rt_rec[slot].size : 8;
+  char *buf = (char*)pli_plat_malloc((size_t)rec_size);
+  if (!buf) {
+    pli_signal_error("LOCATE buffer allocation failed");
+    return NULL;
+  }
+  /* Store the buffer address for commit. We use rt_rec[slot].off to track it. */
+  rt_rec[slot].off = (long long)buf; /* repurpose off field to hold buffer ptr */
+  rt_rec[slot].size = rec_size;
+  return buf;
+}
+
+/* LOCATE: commit the located record. Appends the buffer to the file and
+ * updates the sidecar for keyed files. */
+void pli_record_locate_commit(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  FILE *f = rt_pli_files[slot];
+  if (!f) {
+    pli_signal_error("record file is not open");
+    return;
+  }
+  char *buf = (char*)rt_rec[slot].off;
+  long long rec_size = rt_rec[slot].size;
+  if (!buf || rec_size <= 0) {
+    pli_signal_error("LOCATE commit without prior begin");
+    return;
+  }
+  long long off = pli_plat_ftell(f);
+  if (pli_plat_fwrite(buf, 1, (size_t)rec_size, f) != (size_t)rec_size) {
+    pli_signal_error("LOCATE commit write failed");
+    pli_plat_free(buf);
+    return;
+  }
+  rt_rec_set(slot, off, rec_size);
+  struct kix_state *st = &rt_kix[slot];
+  if (st->is_keyed) {
+    /* For keyed LOCATE, we would need a key. This is a simplified implementation. */
+    st->dirty = 1;
+  }
+  pli_plat_free(buf);
+  rt_rec[slot].off = 0;
+}
+
 /* LINENO(f) (TR 123): returns the current line counter for the file in slot f.
    M0 has no per-file line tracking; return 0. */
 long long pli_lineno(long long slot) {

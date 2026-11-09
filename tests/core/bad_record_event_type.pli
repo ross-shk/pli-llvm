@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): EVENT on non-EVENT variable should be diagnosed. */
+bad_record_event_type: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  dcl ev fixed bin(31);  /* not EVENT */
+  open file(f) record sequential input title('bad_event.dat');
+  read file(f) event(ev) into(x);  /* ev is not EVENT */
+  close file(f);
+end bad_record_event_type;

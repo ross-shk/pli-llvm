@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (113): IGNORE on WRITE should be diagnosed. */
+bad_record_ignore_verb: proc options(main);
+  dcl f file;
+  dcl x fixed bin(31);
+  open file(f) record sequential output title('bad_ignore.dat');
+  write file(f) ignore(2) from(x);  /* IGNORE only valid on READ */
+  close file(f);
+end bad_record_ignore_verb;

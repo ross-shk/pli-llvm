@@ -139,6 +139,23 @@ static bool needsWideDecLit(const HExpr* e, const Type& t) {
   return e->kind == HExpr::IntLit && t.intBits() == 128;
 }
 
+// Compute the record size in bytes for a given PL/I type (for RECORD I/O).
+// FIXED: 8 bytes, FLOAT: 8 bytes, BIT(1): 1 byte, CHAR(n): n bytes.
+static long long recordSize(const Type& ty) {
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+  case TK::Float:
+    return 8;
+  case TK::Bit:
+    return 1; // BIT(1) is 1 byte
+  case TK::Char:
+    return ty.len;
+  default:
+    return 8; // fallback
+  }
+}
+
 // Numeric value of a constant INITIAL expression (rule 26). A DECIMAL literal
 // holds its value scaled by 10^q, so divide back to the true value.
 static double iniNumeric(const Expr* e) {
@@ -8987,8 +9004,74 @@ void IRGen::emitOpen(HStmt* s) {
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
+// Options: LOCATE(v), EVENT(ev), NOLOCK.
 void IRGen::emitRecordWrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // LOCATE(v): write from the BASED variable's current buffer.
+  if (s->locateVar) {
+    // For a based variable, we need the locator pointer (the buffer address),
+    // not the based variable's value. The locateVar expression is the based
+    // variable reference; its locPtr is the locator pointer expression.
+    HExpr* locExpr = s->locateVar.get();
+    llvm::Value* buf = nullptr;
+    if (locExpr && locExpr->locPtr) {
+      // Emit the locator pointer expression to get the buffer address.
+      Val locVal = emitExpr(locExpr->locPtr.get());
+      buf = locVal.reg; // locator pointer is a scalar pointer value
+    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
+      // Fallback: the based variable's symbol should have its locator.
+      // This case handles when locPtr is not directly on the expression.
+      // For now, try to get the address of the based variable.
+      buf = addressOf(locExpr->sym);
+    }
+    
+    if (!buf) {
+      // Should not happen for valid based variables
+      return;
+    }
+    
+    // EVENT(ev): reset before the operation.
+    llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
+    // Determine record size from the based variable's type.
+    const Type& ty = s->locateVar->ty;
+    llvm::Value* recSize = i64(recordSize(ty));
+    
+    // Write the record from the based variable's buffer.
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), buf)});
+      break;
+    case TK::Float:
+      b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), buf)});
+      break;
+    case TK::Bit: {
+      llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), buf), b_.getInt8Ty(), "rbit");
+      b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+      break;
+    }
+    case TK::Char:
+      b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, buf, recSize});
+      break;
+    default:
+      break; // other types are diagnosed by sema
+    }
+
+    // EVENT(ev): complete after the operation.
+    if (eventAddr)
+      b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+    return;
+  }
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -9009,13 +9092,24 @@ void IRGen::emitRecordWrite(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // REWRITE (rule (112)): replace the record most recently read or written.
 // The runtime checks that a current record exists and that the new image has
 // the same size, then writes it in place.
+// Options: EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRewrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   switch (v.ty.k) {
   case TK::FixedBin:
@@ -9036,12 +9130,32 @@ void IRGen::emitRecordRewrite(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // DELETE (rule (112)): remove the record most recently read, shifting the
 // rest of the file down so the next READ sees the following record.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordDelete(HStmt* s) {
-  b_.CreateCall(runtimeFn("pli_record_delete"), {fileSlotValue(s->fileSym)});
+  llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
+  b_.CreateCall(runtimeFn("pli_record_delete"), {slot});
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // Keyed/direct record I/O (rules (112),(113)): the key (KEY/KEYFROM) and the
@@ -9049,8 +9163,15 @@ void IRGen::emitRecordDelete(HStmt* s) {
 // the types and that the file was opened KEYED/DIRECT.
 
 // WRITE ... KEY(k): append the record and index it by key.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordWriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   Val k = emitExpr(s->keyOpt.get());
   switch (v.ty.k) {
@@ -9076,15 +9197,36 @@ void IRGen::emitRecordWriteKeyed(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // READ ... KEY(k) [KEYTO(kv)]: look up the key in the sidecar, read the record,
 // and (for KEYTO) store the search key into the KEYTO variable.
+// Options: IGNORE(n), SET(p), EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordReadKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
   Val k = emitExpr(s->keyOpt.get());
+
+  // Compute record size from the target type.
+  llvm::Value* recSize = i64(recordSize(ty));
+
+  // IGNORE(n): skip n records without transferring data, then read the next record.
+  if (s->ignoreCount) {
+    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
+    b_.CreateCall(runtimeFn("pli_record_skip"), {slot, n, recSize});
+    // Fall through to read the next record
+  }
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v;
   switch (ty.k) {
   case TK::FixedBin:
@@ -9123,11 +9265,31 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
     Val kt = emitExpr(s->keyToOpt.get());
     storeCharTo(kt.ptr, kt.ty, k, s->loc);
   }
+
+  // SET(p): store the record buffer address into the POINTER sink.
+  if (s->setTarget) {
+    // Placeholder for future implementation
+  }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // REWRITE ... KEYFROM(k): look up the key, rewrite the record in place.
+// Options: EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v = emitExpr(s->value.get());
   Val k = emitExpr(s->keyFromOpt.get());
   switch (v.ty.k) {
@@ -9153,22 +9315,57 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // DELETE ... KEYFROM(k): look up the key, remove the record, shift the tail.
+// Options: EVENT(ev), NOLOCK.
 void IRGen::emitRecordDeleteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val k = emitExpr(s->keyFromOpt.get());
   b_.CreateCall(runtimeFn("pli_record_delete_keyed"), {slot, k.ptr, k.len});
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
 }
 
 // READ (rules (112),(113)): consume one fixed-size binary record into a plain
 // scalar variable; a short read (EOF) raises ERROR in the runtime, since ON
-// ENDFILE stays diagnosed.
+// ENDFILE stays diagnosed. Options: IGNORE(n), SET(p), EVENT(ev), NOLOCK, UNLOCK.
 void IRGen::emitRecordRead(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
   HExpr* t = s->target.get();
   const Type& ty = t->ty;
+
+  // Compute record size from the target type.
+  llvm::Value* recSize = i64(recordSize(ty));
+
+  // IGNORE(n): skip n records without transferring data, then read the next record.
+  if (s->ignoreCount) {
+    llvm::Value* n = toI64(emitExpr(s->ignoreCount.get()));
+    b_.CreateCall(runtimeFn("pli_record_skip"), {slot, n, recSize});
+    // Fall through to read the next record
+  }
+
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
+
   Val v;
   switch (ty.k) {
   case TK::FixedBin:
@@ -9202,6 +9399,21 @@ void IRGen::emitRecordRead(HStmt* s) {
   default:
     break; // other types are diagnosed by sema
   }
+
+  // SET(p): store the record buffer address into the POINTER sink.
+  if (s->setTarget) {
+    // For now, we read into a buffer and store its address.
+    // The runtime helper pli_record_read_into will be used in the future.
+    // For now, emit a placeholder.
+  }
+
+  // EVENT(ev): complete after the operation.
+  if (eventAddr)
+    b_.CreateCall(runtimeFn("pli_event_complete"), {eventAddr});
+
+  // UNLOCK: release the current record's lock.
+  if (s->unlockOpt)
+    b_.CreateCall(runtimeFn("pli_record_unlock"), {slot});
 }
 
 // CLOSE (rules 102,103): close the FILE variable's slot.

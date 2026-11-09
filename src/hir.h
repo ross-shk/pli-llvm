@@ -243,8 +243,13 @@ struct HStmt {
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )
   HExprP keyFromOpt = nullptr;// KEYFROM( expression )
-  bool keyNoLock = false;     // NOLOCK option (diagnosed (113))
-  bool keySet = false;        // SET option (diagnosed (113))
+  // Rule (113) record options (keyed/direct + sequential):
+  bool keyNoLock = false;     // NOLOCK                READ/REWRITE/DELETE
+  HExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
+  HExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
+  HExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;     // UNLOCK                READ/REWRITE (release lock)
+  HExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
