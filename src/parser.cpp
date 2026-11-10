@@ -1615,6 +1615,41 @@ StmtP Parser::parseDeclare() {
           if (!eat(Tok::Comma))
             break;
         }
+        // If the last member has INITIAL but the structure base doesn't,
+        // and we're at the end of the structure (no more members), this INITIAL
+        // is likely a structure-level INITIAL that appears after members (valid PL/I).
+        // Move it from the last member to the base structure.
+        if (!members.empty() && base.initItems.empty() && !members.back().initItems.empty()) {
+          base.initItems = cloneInitItems(members.back().initItems);
+          base.init = cloneExpr(members.back().init.get());
+          base.valueInit = cloneExpr(members.back().valueInit.get());
+          base.initCall = cloneExpr(members.back().initCall.get());
+          members.back().initItems.clear();
+          members.back().init.reset();
+          members.back().valueInit.reset();
+          members.back().initCall.reset();
+        }
+        // Also parse any explicitly trailing structure-level attributes
+        if (at(Tok::Word)) {
+          const std::string word = cur().text;
+          if (word == "INITIAL" || word == "VALUE" || word == "INITCALL") {
+            DeclItem trailing;
+            trailing.level = level;
+            parseDeclTail(trailing);
+            if (!trailing.initItems.empty()) {
+              base.initItems = cloneInitItems(trailing.initItems);
+            }
+            if (trailing.init) {
+              base.init = cloneExpr(trailing.init.get());
+            }
+            if (trailing.valueInit) {
+              base.valueInit = cloneExpr(trailing.valueInit.get());
+            }
+            if (trailing.initCall) {
+              base.initCall = cloneExpr(trailing.initCall.get());
+            }
+          }
+        }
         // Clone the factored structure for each name
         for (auto& [n, nl] : names) {
           // Create the level item
