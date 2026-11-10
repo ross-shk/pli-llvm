@@ -4885,7 +4885,7 @@ StmtP Parser::parseFree() {
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
 // record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
 // (101),(112)). KEYED/DIRECT stay diagnosed; IDENT/LINESIZE/PAGESIZE
-// are accepted no-ops; ENVIRONMENT is diagnosed (rule 101).
+// are accepted no-ops; ENVIRONMENT is accepted as a no-op on OPEN.
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -5007,8 +5007,8 @@ StmtP Parser::parseOpen() {
       continue;
     }
     if (atWord("ENVIRONMENT")) {
-      // ENVIRONMENT is a DECLARE FILE attribute (rule 39), not an OPEN option.
-      d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
+      // ENVIRONMENT (rule 101): implementation-defined file attribute.
+      // Accepted on OPEN as a no-op, like on DECLARE (rule 39).
       advance();
       if (at(Tok::LParen)) skipParen("(101)");
       continue;

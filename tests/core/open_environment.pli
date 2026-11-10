@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): ENVIRONMENT in OPEN is accepted as implementation-defined no-op. */
+open_environment: procedure options(main);
+    declare f file;
+    open file(f) title('test_env.dat') output environment('test');
+    put file(f) list('hello');
+    close file(f);
+    put skip list('PASS open_environment');
+end open_environment;

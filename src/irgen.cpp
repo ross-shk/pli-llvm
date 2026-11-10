@@ -11068,8 +11068,11 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     // Format iteration (rule 47): evaluate count at runtime, skip if <= 0.
     llvm::Value* countVal = toI64(emitExpr(f.count.get()));
     llvm::Function* fn = b_.GetInsertBlock()->getParent();
-    llvm::BasicBlock* loopBody = llvm::BasicBlock::Create(ctx_, "repeat.body", fn);
-    llvm::BasicBlock* loopAfter = llvm::BasicBlock::Create(ctx_, "repeat.after", fn);
+    size_t savedDi = di;
+    size_t avail = (savedDi < s->items.size()) ? (s->items.size() - savedDi) : 0;
+    if (avail == 0) break;
+    llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
+    llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
     llvm::BasicBlock* negBlock = llvm::BasicBlock::Create(ctx_, "repeat.neg", fn);
     llvm::BasicBlock* posBlock = llvm::BasicBlock::Create(ctx_, "repeat.pos", fn);
     llvm::Value* neg = b_.CreateICmpSLT(countVal, i64(0), "repeat.isneg");
@@ -11077,12 +11080,11 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     b_.SetInsertPoint(negBlock);
     b_.CreateCall(runtimeFn("pli_signal_error"),
                   {globalString("negative format iteration count")});
-    b_.CreateBr(loopAfter);
+    b_.CreateBr(skipBlock);
     b_.SetInsertPoint(posBlock);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
-    b_.CreateCondBr(pos, loopBody, loopAfter);
-    b_.SetInsertPoint(loopBody);
-    size_t savedDi = di;
+    b_.CreateCondBr(pos, runBlock, skipBlock);
+    b_.SetInsertPoint(runBlock);
     llvm::AllocaInst* iterSlot = entryAlloca(b_.getInt64Ty(), "repeat.iter");
     b_.CreateStore(i64(0), iterSlot);
     llvm::BasicBlock* iterCond = llvm::BasicBlock::Create(ctx_, "repeat.iter.cond", fn);
@@ -11091,19 +11093,35 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     b_.CreateBr(iterCond);
     b_.SetInsertPoint(iterCond);
     llvm::Value* iter = b_.CreateLoad(b_.getInt64Ty(), iterSlot, "repeat.iter.val");
-    llvm::Value* continueCond = b_.CreateICmpSLT(iter, countVal, "repeat.iter.cont");
-    b_.CreateCondBr(continueCond, iterBody, iterAfter);
+    llvm::Value* inRange = b_.CreateICmpSLT(iter, i64((long long)avail), "repeat.inrange");
+    llvm::Value* cont = b_.CreateICmpSLT(iter, countVal, "repeat.cont");
+    llvm::Value* both = b_.CreateAnd(inRange, cont, "repeat.both");
+    b_.CreateCondBr(both, iterBody, iterAfter);
     b_.SetInsertPoint(iterBody);
-    di = savedDi;
-    for (auto& item : f.items) {
-      emitGetEditItem(item, s, di, defW);
+    // Switch on iter to select the target data item (like PUT EDIT)
+    llvm::BasicBlock* swDefault = llvm::BasicBlock::Create(ctx_, "repeat.swdef", fn);
+    llvm::SwitchInst* sw = b_.CreateSwitch(iter, swDefault);
+    for (size_t i = 0; i < avail; ++i) {
+      llvm::BasicBlock* caseBB = llvm::BasicBlock::Create(ctx_, "repeat.case", fn);
+      sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), i), caseBB);
+      b_.SetInsertPoint(caseBB);
+      size_t itemDi = savedDi + i;
+      size_t savedDi2 = di;
+      di = itemDi;
+      for (auto& item : f.items) {
+        emitGetEditItem(item, s, di, defW);
+      }
+      di = savedDi2;
+      b_.CreateBr(swDefault);
     }
+    b_.SetInsertPoint(swDefault);
+    // increment iter
     llvm::Value* nextIter = b_.CreateAdd(iter, i64(1), "repeat.iter.next");
     b_.CreateStore(nextIter, iterSlot);
     b_.CreateBr(iterCond);
     b_.SetInsertPoint(iterAfter);
-    b_.CreateBr(loopAfter);
-    b_.SetInsertPoint(loopAfter);
+    b_.CreateBr(skipBlock);
+    b_.SetInsertPoint(skipBlock);
     di = savedDi;
     break;
   }
