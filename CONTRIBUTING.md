@@ -17,14 +17,21 @@ ctest --test-dir build/cmake              # compile, run, diff every tests/*/*.p
 
 ```pwsh
 # Windows (clang-cl + lld-link), from a Developer PowerShell for VS 2022.
-# Fetch the pinned static LLVM once, then put its bin (clang-cl, lld) on PATH:
+# One command does everything (vcvars, mt.exe pin, fetch stash, zlib staging,
+# configure, link; add -Smoke to run the smoke suite):
+.\scripts\build.ps1
+```
+
+Manual equivalent, when debugging (run from a Developer PowerShell for VS 2022):
+
+```pwsh
 .\scripts\fetch_llvm_static.ps1 -Prefix $env:USERPROFILE\pli-deps
 $env:PATH = "$env:USERPROFILE\pli-deps\bin;$env:PATH"
-# zstd ships inside the static prefix; zlib needs a local static build (/MT):
-cmake -DCMAKE_C_COMPILER=clang-cl -DZLIB_BUILD_SHARED=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -S third_party\zlib -B zlib-build
-cmake --build zlib-build --target install --config Release -- -DCMAKE_INSTALL_PREFIX=zlib-root
+# zlib needs a local static build (zstd ships inside the static prefix):
+cmake -S <zlib-src> -B zlib-build -DCMAKE_C_COMPILER=clang-cl -DZLIB_BUILD_STATIC=ON
+cmake --build zlib-build
 # Configure (CMAKE_MT can't be auto-located from a Developer shell — pass it):
-cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps -DPLI_ZSTD_ROOT=$env:USERPROFILE\pli-deps -DPLI_ZLIB_ROOT=...\zlib-root\lib -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MT=C:/Program Files (x86)/Windows Kits/10/bin/10.0.22000.0/x64/mt.exe"
+cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX=$env:USERPROFILE\pli-deps -DPLI_ZSTD_ROOT=$env:USERPROFILE\pli-deps -DPLI_ZLIB_ROOT=<zlib-root> -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MT=C:/Program Files (x86)/Windows Kits/10/bin/10.0.22000.0/x64/mt.exe"
 cmake --build build/cmake -j
 ctest --test-dir build/cmake
 ```
