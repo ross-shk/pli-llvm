@@ -8995,6 +8995,10 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
 // binary record runtime.
 void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
+  // IDENT(expr) (rule 101): implementation-dependent user label; evaluate
+  // the expression for side effects but discard the result (ADR-373).
+  if (s->openIdent)
+    (void)emitExpr(s->openIdent.get());
   llvm::Value* name = globalString(s->openTitle);
   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
   if (s->openKeyed || s->openDirect) {
