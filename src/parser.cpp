@@ -1552,6 +1552,17 @@ StmtP Parser::parseDeclare() {
   st->kind = Stmt::Declare;
   st->loc = cur().loc;
   for (;;) {
+    // Check for factored declaration with optional level number: DECLARE [level] (A, B, C) ...
+    // Only consume the level number if followed by '(' (factored declaration).
+    int factoredLevel = 0;
+    if (at(Tok::Number) && !cur().isFloat && peek().kind == Tok::LParen) {
+      factoredLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+      if (factoredLevel > kMaxStructureLevel) {
+        d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+        factoredLevel = 0;
+      }
+      advance();
+    }
     if (at(Tok::LParen)) {
       // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... — every
       // name in the parenthesised list shares the dimension + attribute tail.
@@ -1575,6 +1586,10 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
+      // Apply the factored level number to all factored items
+      if (factoredLevel > 0) {
+        base.level = factoredLevel;
+      }
       // Distribute INITIAL itemlists per name in factored declaration.
       // Per PL/I (TR 25.084 rule 11): INITIAL((itemlist1), (itemlist2), ...)
       // gives each name its own itemlist. A single INITIAL(itemlist) applies
