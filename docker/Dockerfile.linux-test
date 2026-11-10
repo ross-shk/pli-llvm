@@ -1,12 +1,14 @@
 # Native Linux build+test env for pli (glibc, matches --triple *-unknown-linux-gnu).
 FROM debian:trixie-slim
-# Build deps per README (C++20, LLVM >= 18, lld, CMake, Python).
-# Versioned LLVM 23: stock trixie ships LLVM 19 as default, which is too
-# old for src/main.cpp (Module::setTargetTriple(Triple) needs LLVM >= 20).
-# The -dev packages provide LLVMConfig.cmake + lld headers for find_package().
+# Build deps per README (C++20, LLVM >= 23, lld, CMake, Python).
+# Debian trixie ships LLVM 19/22; we need >=23 so use the LLVM apt repo.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    lsb-release wget gnupg ca-certificates \
+    && wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-23 main" > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev \
-    libclang-rt-23-dev cmake ninja-build python3 git ca-certificates \
+    libclang-rt-23-dev cmake ninja-build python3 git \
     && rm -rf /var/lib/apt/lists/*
 # Point find_package(LLVM/Clang) at the versioned install.
 ENV CMAKE_PREFIX_PATH=/usr/lib/llvm-23

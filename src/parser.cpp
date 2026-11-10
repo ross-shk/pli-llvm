@@ -1575,9 +1575,6 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
-      if (base.init)
-        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
-                 "(26)");
       if (base.initCall)
         d_.error(floc, "INITIAL CALL in a factored declaration is not implemented in this stage",
                  "(27)");
@@ -1603,6 +1600,13 @@ StmtP Parser::parseDeclare() {
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
         item.genericEntries = base.genericEntries;
+        // INITIAL itemlist (rule 26) and VALUE (ADR-108) are per-name: copy
+        // them so each factored name gets its own initializer.
+        item.initItems = cloneInitItems(base.initItems);
+        item.init = cloneExpr(base.init.get());
+        item.valueInit = cloneExpr(base.valueInit.get());
+        item.slenExpr = cloneExpr(base.slenExpr.get());
+        item.reserved = base.reserved;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -3216,32 +3220,48 @@ bool Parser::parseEntryParams(std::vector<Type>& params) {
 }
 
 // Deep copy of a parsed expression for SELECT value lists (extension,
-// ADR-104): each WHEN value compares against its own copy of the SELECT
-// expression. Only parse-time state is copied; sema resolves the copies.
-ExprP Parser::cloneExpr(const Expr* e) {
-  if (!e)
-    return nullptr;
-  auto c = std::make_unique<Expr>();
-  c->kind = e->kind;
-  c->loc = e->loc;
-  c->ty = e->ty;
-  c->ival = e->ival;
-  c->wideIval = e->wideIval;
-  c->fval = e->fval;
-  c->decScale = e->decScale;
-  c->decPrec = e->decPrec;
-  c->sval = e->sval;
-  c->name = e->name;
-  c->path = e->path;
-  c->memberPath = e->memberPath;
-  c->op = e->op;
-  c->a = cloneExpr(e->a.get());
-  c->b = cloneExpr(e->b.get());
-  c->locPtr = cloneExpr(e->locPtr.get());
-  for (auto& a : e->args)
-    c->args.push_back(cloneExpr(a.get()));
-  return c;
-}
+ // ADR-104): each WHEN value compares against its own copy of the SELECT
+ // expression. Only parse-time state is copied; sema resolves the copies.
+ ExprP Parser::cloneExpr(const Expr* e) {
+   if (!e)
+     return nullptr;
+   auto c = std::make_unique<Expr>();
+   c->kind = e->kind;
+   c->loc = e->loc;
+   c->ty = e->ty;
+   c->ival = e->ival;
+   c->wideIval = e->wideIval;
+   c->fval = e->fval;
+   c->decScale = e->decScale;
+   c->decPrec = e->decPrec;
+   c->sval = e->sval;
+   c->name = e->name;
+   c->path = e->path;
+   c->memberPath = e->memberPath;
+   c->op = e->op;
+   c->a = cloneExpr(e->a.get());
+   c->b = cloneExpr(e->b.get());
+   c->locPtr = cloneExpr(e->locPtr.get());
+   for (auto& a : e->args)
+     c->args.push_back(cloneExpr(a.get()));
+   return c;
+ }
+
+ // Deep copy of an InitItem vector for factored INITIAL: each factored
+ // name gets its own copy of the initializer list with cloned expressions.
+ std::vector<InitItem> Parser::cloneInitItems(const std::vector<InitItem>& src) {
+   std::vector<InitItem> dst;
+   dst.reserve(src.size());
+   for (const auto& item : src) {
+     InitItem c;
+     c.kind = item.kind;
+     c.value = cloneExpr(item.value.get());
+     c.factor = item.factor;
+     c.items = cloneInitItems(item.items);
+     dst.push_back(std::move(c));
+   }
+   return dst;
+ }
 
 // select-statement (extension, ADR-104): SELECT [( expr )]; WHEN ...; END;
 // desugars in the parser to an IF-chain, so sema and codegen are untouched:

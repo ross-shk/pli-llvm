@@ -1194,7 +1194,7 @@ void pli_put_edit_pic_sterling(long long val, int sign, const char *pic, long lo
 
 /* Scale FIXED DECIMAL by 10^scale (scale can be negative)
  * val_lo, val_hi are the 128-bit value halves (little-endian) */
-void pli_scale_decimal(int64_t val_lo, int64_t val_hi, int64_t scale) {
+void pli_scale_decimal(long long val_lo, long long val_hi, long long scale) {
   PliI128 val = pli_to_s(pli_u128((uint64_t)val_lo, (uint64_t)val_hi));
   if (scale == 0) return;
   if (scale > 0) {
@@ -1217,7 +1217,7 @@ void pli_scale_decimal(int64_t val_lo, int64_t val_hi, int64_t scale) {
 }
 
 /* Scale FIXED BINARY by 2^scale (arithmetic shift) */
-void pli_scale_binary(int64_t val, int64_t scale) {
+void pli_scale_binary(long long val, long long scale) {
   if (scale == 0) return;
   if (scale > 0) {
     val <<= scale;

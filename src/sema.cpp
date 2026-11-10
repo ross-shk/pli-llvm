@@ -1946,6 +1946,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // STATIC storage class (rule 23): applies to any variable, not just AREA.
         // Non-AREA STATIC variables get true static storage (LLVM global).
         // AREA STATIC already handled; EXTERNAL handled separately below.
+        // Package-level variables (isStatic) have program lifetime (ADR-109),
+        // but BASED/DEFINED/CONTROLLED/FILE variables cannot be STATIC (rule 23).
+        if (isStatic && !item.sawStatic && item.basedBase.empty() &&
+            item.definedBase.empty() && !item.controlled && !item.fileAttr &&
+            !item.areaStar) {
+          item.sawStatic = true;
+        }
         bool staticItem = item.sawStatic && !item.areaStar;
         item.sym = declare(sc, item.name, item.ty, item.loc, Symbol::Var, staticItem);
         item.sym->owner = p; // which procedure's frame holds this variable

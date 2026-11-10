@@ -80,6 +80,7 @@ private:
   StmtP parseDefineAlias();              // DEFINE ALIAS name attrs (extension, ADR-114)
   StmtP parseDefineConstant();           // DEFINE CONSTANT name const (extension, ADR-205)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
+  std::vector<InitItem> cloneInitItems(const std::vector<InitItem>& src); // deep copy for factored INITIAL
   // Decode a hex X literal payload to bytes (rule (143)); false after a
   // diagnostic, in which case out is untouched.
   bool decodeHexLiteral(const std::string& hex, SourceLoc loc, std::string& out);
