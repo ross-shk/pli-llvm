@@ -44,6 +44,7 @@ PLI_FN(pli_get_list_decfixed_wide, VOID, (I64, PTR)) /* wide decimal input (B1):
 PLI_FN(pli_get_list_fixed_scaled, I64, (I64))     /* scaled binary input (ADR-284) */
 PLI_FN(pli_put_list_float, VOID, (DOUBLE))
 PLI_FN(pli_put_list_bit, VOID, (I8))
+PLI_FN(pli_put_list_bit_string, VOID, (CPTR, I64))
 PLI_FN(pli_put_list_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
 PLI_FN(pli_put_data_name, VOID, (CPTR, I64))         /* DATA-directed (106, QR1.5) */
 PLI_FN(pli_put_data_end, VOID, (VOID))

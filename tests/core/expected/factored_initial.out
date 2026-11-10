@@ -1,9 +1,9 @@
 FACTORED_INITIAL: all initializations executed
-         0         0         0
-         1         2         1         2         1
-         1         2         1         2         1
- ABCDE     XYZ
- 10100000  11000000
-         10           20           20           20  HELLO
-         10           20           20           20  HELLO
-        100         200
+0 0 0
+1 2 1 2 2
+1 2 1 2 2
+ABCDE      XYZ       
+10100000 11000000
+10 20 20 20 HELLO
+10 20 20 20 HELLO
+100 200

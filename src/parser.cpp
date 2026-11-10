@@ -1847,7 +1847,15 @@ mi.genericEntries = m.genericEntries;
       if (!base.dynBounds.empty())
         d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
                  "(13)");
-      for (auto& [n, nl] : names) {
+      // For factored scalars: if INITIAL has N values and there are N names,
+      // distribute one value per name (PL/I factored scalar INITIAL semantics).
+      bool distributeInit = false;
+      if (!base.initItems.empty() && base.initItems.size() == names.size() &&
+          !base.ty.isArray() && !base.ty.isStruct()) {
+        distributeInit = true;
+      }
+      for (size_t idx = 0; idx < names.size(); ++idx) {
+        auto& [n, nl] = names[idx];
         DeclItem item;
         item.name = n;
         item.loc = nl;
@@ -1868,8 +1876,21 @@ mi.genericEntries = m.genericEntries;
         item.genericEntries = base.genericEntries;
         // INITIAL itemlist (rule 26) and VALUE (ADR-108) are per-name: copy
         // them so each factored name gets its own initializer.
-        item.initItems = cloneInitItems(base.initItems);
-        item.init = cloneExpr(base.init.get());
+        if (distributeInit) {
+          // Distribute one INITIAL value per factored name.
+          item.initItems.clear();
+          InitItem distributed;
+          distributed.kind = base.initItems[idx].kind;
+          distributed.value = cloneExpr(base.initItems[idx].value.get());
+          distributed.factor = base.initItems[idx].factor;
+          distributed.items = cloneInitItems(base.initItems[idx].items);
+          item.initItems.push_back(std::move(distributed));
+          if (base.initItems[idx].kind == InitItem::Value && base.initItems[idx].value)
+            item.init = cloneExpr(base.initItems[idx].value.get());
+        } else {
+          item.initItems = cloneInitItems(base.initItems);
+          item.init = cloneExpr(base.init.get());
+        }
         item.valueInit = cloneExpr(base.valueInit.get());
         item.slenExpr = cloneExpr(base.slenExpr.get());
         item.initCall = cloneExpr(base.initCall.get());

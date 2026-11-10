@@ -2816,9 +2816,18 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             item.basedBase.empty() && !item.sym->isBased() && !item.sym->fileAttr &&
             !item.sym->controlled)
           p->localSyms.push_back(item.sym);
-        if (item.init) {
+        // Handle scalar INITIAL from initItems (e.g., parenthesized values like ('1010'B)).
+        // Only for scalars; arrays/structures use initItems differently.
+        Expr* initExpr = item.init.get();
+        if (!initExpr && !item.initItems.empty() && !item.ty.isArray() && !item.ty.isStruct()) {
+          std::vector<Expr*> elems;
+          expandInitItems(item.initItems, item.ty, item.loc, elems);
+          if (!elems.empty())
+            initExpr = elems[0];
+        }
+        if (initExpr) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
-          if (Expr* folded = foldInitialConstant(item.init.get(), item.ty, item.loc)) {
+          if (Expr* folded = foldInitialConstant(initExpr, item.ty, item.loc)) {
             item.sym->initExpr = folded; // consumed by code generation
             // STATIC INITIAL requires constant expressions (rules (23),(26)).
             if (item.sym->isStatic)
@@ -4558,8 +4567,6 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     for (auto& it : s->items) {
       if (it->ty.isVoid())
         d_.error(it->loc, "invalid data list item", "(110)");
-      else if (it->ty.isBit() && it->ty.len > 1)
-        d_.error(it->loc, "PUT LIST of a BIT(n>1) value is not implemented in this stage", "(110)");
     }
     break;
   }

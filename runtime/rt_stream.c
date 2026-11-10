@@ -835,6 +835,22 @@ void pli_put_list_bit(unsigned char b) {
   rt_out_unlock();
 }
 
+void pli_put_list_bit_string(const char *p, long long len) {
+  rt_out_lock();
+  separate();
+  if (len > 0) {
+    long long num_bytes = (len + 7) / 8;
+    for (long long i = 0; i < num_bytes; ++i) {
+      unsigned char byte = (unsigned char)p[i];
+      int bits_in_byte = (i == num_bytes - 1 && (len % 8) != 0) ? (len % 8) : 8;
+      for (int bit = bits_in_byte - 1; bit >= 0; --bit) {
+        rt_put_raw((byte & (1 << bit)) ? "1" : "0", 1);
+      }
+    }
+  }
+  rt_out_unlock();
+}
+
 /* Complex output (CM5, ADR-085): real part, sign, imaginary magnitude, I. */
 void pli_put_list_complex(double re, double im) {
   char buf[128];
