@@ -13,12 +13,38 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <variant>
 
 struct Symbol;
 struct Proc;
 
 struct Expr;
 using ExprP = std::unique_ptr<Expr>;
+
+// DO specification for iterative datalist (rules 72, 73)
+struct DoSpec {
+  ExprP control;           // control variable reference (lvalue)
+  ExprP from;              // initial value (evaluated once)
+  ExprP to;                // TO bound (mandatory, evaluated once)
+  ExprP by;                // BY step (optional, default 1, evaluated once)
+  ExprP whileCond;         // WHILE condition (optional, pre-test each iteration)
+  SourceLoc loc;
+};
+
+// Forward declaration for IterDatalist
+struct IterDatalist;
+
+// Data list element: either an expression or an iterative datalist (rule 111)
+using DataListElement = std::variant<ExprP, std::unique_ptr<IterDatalist>>;
+
+// New AST node for iterative datalist element (rule 111)
+struct IterDatalist {
+  std::vector<DataListElement> items;  // nested datalist (recursive)
+  std::vector<DoSpec> specs;           // control specifications
+  SourceLoc loc;
+  
+  IterDatalist(SourceLoc l) : loc(l) {}
+};
 
 struct Expr {
   enum Kind {
@@ -114,6 +140,13 @@ struct FormatItem {
   // Repeat (rule 47):
   ExprP count;                   // repetition count expression
   std::vector<FormatItem> items; // nested format group
+};
+
+// EDIT-directed I/O: preserve (datalist) formatlist group boundaries (rule 108)
+struct EditGroup {
+  std::vector<DataListElement> items;
+  std::vector<FormatItem> formats;
+  SourceLoc loc;
 };
 
 struct DeclItem {
@@ -253,58 +286,26 @@ struct Stmt {
 
   std::vector<DeclItem> decls;
 
-  ExprP target, value, cond, from, to, by;
-  bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
-  bool forever = false;            // DO FOREVER (extension, ADR-370): infinite loop, no condition
-  std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
-  bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
-  bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
-  bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
-  bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
-  bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
-  bool noUnder = false;            // (NOUNDERFLOW) prefix (rules (60)-(63), ADR-326)
-  bool noOver = false;             // (NOOVERFLOW) prefix (rules (60)-(63), ADR-333)
-  bool noFOver = false;            // (NOFIXEDOVERFLOW) prefix (rules (60)-(63), ADR-334)
-  // CHECK(...) prefix (rules (61),(95); ADR-320): re-enable the named check
-  // for this scope, overriding a NO... prefix inherited from an enclosing one.
-  bool chkSize = false;
-  bool chkSub = false;
-  bool chkZdiv = false;
-  bool chkConv = false;
-  bool chkUnder = false;
-  bool chkOver = false;
-  bool chkFOver = false;
-  // (STRINGRANGE)/(NOSTRINGRANGE) prefix (rules (60)-(63)): 0 = inherit
-  // (disabled unless an enclosing scope enables it), 1 = enable, -1 = disable.
-  int strRange = 0;
-  StmtP thenS, elseS;
-  std::vector<StmtP> body;
-
-  std::string name;      // DO control variable, CALL target, ENTRY name
-  Symbol* sym = nullptr; // resolved control variable / callee
-  Type aliasTy;          // DEFINE ALIAS type (extension, ADR-114)
-
-  // ENTRY statement (rule 56): an alternate entry point, with its own params
-  // and optional RETURNS type.
-  std::vector<std::string> params; // ENTRY parameter names
-  bool entryIsFunction = false;
-  Type entryRetTy{};
-  std::vector<Symbol*> entryParamSyms; // resolved by sema
-
-  // PUT/GET stream statement options (rules (104),(105))
-  bool skip = false, page = false;
-  bool copy = false;              // COPY stream option (rule 105)
-  bool line = false;              // LINE(n) stream option (rule 105)
-  ExprP skipCount;
-  ExprP lineCount;                // LINE(n) expression
   std::vector<ExprP> items;
+  // Edit-directed transmission (rule (108)): per (datalist) formatlist group,
+  // preserving format list boundaries for iterative datalist support.
+  std::vector<EditGroup> editGroups;
+  // Data-directed transmission (rule (106)): per (datalist) group for iterative
+  // datalist support in PUT DATA/GET DATA.
+  std::vector<EditGroup> dataGroups;
   // Edit-directed transmission (rule (108)): when true, the data items are
   // written/read through the paired format list instead of list-directed.
   bool edit = false;
   // Data-directed transmission (rule (106)): when true, PUT writes each item
   // as NAME=value (GET DATA stays diagnosed in this stage).
   bool data = false;
-  std::vector<FormatItem> formats; // one per data item or control action
+  std::vector<FormatItem> formats; // one per data item or control action (legacy, used when not editGroups)
+  // PUT/GET stream statement options (rules (104),(105))
+  bool skip = false, page = false;
+  bool copy = false;              // COPY stream option (rule 105)
+  bool line = false;              // LINE(n) stream option (rule 105)
+  ExprP skipCount;
+  ExprP lineCount;                // LINE(n) expression
   // STRING ( reference ) option (rule 105): the character variable that the
   // list-directed output is written into (PUT) or input is read from (GET);
   // null when the stream is SYSIN/SYSPRINT.
@@ -349,6 +350,45 @@ struct Stmt {
 
    std::vector<ExprP> args; // CALL arguments
    ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
+
+  // DO / DO WHILE / DO ITER fields
+  ExprP target, value, cond, from, to, by;
+  bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
+  bool forever = false;            // DO FOREVER (extension, ADR-370): infinite loop, no condition
+  std::vector<ExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
+  bool byName = false;             // rule (86) trailing ", BY NAME" on assignment
+  bool noSize = false;             // (NOSIZE) prefix (rules (60)-(63), ADR-110)
+  bool noSub = false;              // (NOSUBSCRIPTRANGE) prefix (rules (60)-(63), ADR-112)
+  bool noZdiv = false;             // (NOZERODIVIDE) prefix (rules (60)-(63), ADR-112)
+  bool noConv = false;             // (NOCONVERSION) prefix (rules (60)-(63), ADR-170)
+  bool noUnder = false;            // (NOUNDERFLOW) prefix (rules (60)-(63), ADR-326)
+  bool noOver = false;             // (NOOVERFLOW) prefix (rules (60)-(63), ADR-333)
+  bool noFOver = false;            // (NOFIXEDOVERFLOW) prefix (rules (60)-(63), ADR-334)
+  // CHECK(...) prefix (rules (61),(95); ADR-320): re-enable the named check
+  // for this scope, overriding a NO... prefix inherited from an enclosing one.
+  bool chkSize = false;
+  bool chkSub = false;
+  bool chkZdiv = false;
+  bool chkConv = false;
+  bool chkUnder = false;
+  bool chkOver = false;
+  bool chkFOver = false;
+  // (STRINGRANGE)/(NOSTRINGRANGE) prefix (rules (60)-(63)): 0 = inherit
+  // (disabled unless an enclosing scope enables it), 1 = enable, -1 = disable.
+  int strRange = 0;
+  StmtP thenS, elseS;
+  std::vector<StmtP> body;
+
+  std::string name;      // DO control variable, CALL target, ENTRY name
+  Symbol* sym = nullptr; // resolved control variable / callee
+  Type aliasTy;          // DEFINE ALIAS type (extension, ADR-114)
+
+  // ENTRY statement (rule 56): an alternate entry point, with its own params
+  // and optional RETURNS type.
+  std::vector<std::string> params; // ENTRY parameter names
+  bool entryIsFunction = false;
+  Type entryRetTy{};
+  std::vector<Symbol*> entryParamSyms; // resolved by sema
 
   // CALL task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT

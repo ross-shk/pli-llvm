@@ -4051,6 +4051,130 @@ bool Sema::expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   return true;
 }
 
+// Expand whole-array and cross-section items in an EditGroup (for edit-directed
+// I/O with per-group format boundaries). Similar to expandAggregateItems but
+// operates on a group's items vector (variant).
+bool Sema::expandAggregateItemsInGroup(EditGroup& group, Scope* sc, Proc* p, bool isGet) {
+  const char* rule = "(108)";
+  const char* what = isGet ? "GET" : "PUT";
+  if (!sc || !p) {
+    d_.error(group.loc, "internal error: null scope or proc in expandAggregateItemsInGroup", "(108)");
+    return false;
+  }
+  std::vector<DataListElement> out;
+  for (auto& item : group.items) {
+    // Pass through iterative datalists unchanged (they're control structures, not aggregates)
+    if (std::holds_alternative<std::unique_ptr<IterDatalist>>(item)) {
+      out.push_back(std::move(item));
+      continue;
+    }
+    auto* expr = std::get_if<ExprP>(&item);
+    if (!expr) {
+      out.push_back(std::move(item));
+      continue;
+    }
+    Expr* it = expr->get();
+    if (!it || it->ty.k == TK::Void) {
+      out.push_back(std::move(item));
+      continue;
+    }
+    bool whole = it->kind == Expr::VarRef && it->ty.isArray();
+    bool cross = it->kind == Expr::Subscript && it->ty.isArray();
+    if (!whole && !cross) {
+      out.push_back(std::move(item));
+      continue;
+    }
+    Symbol* sym = it->sym;
+    if (!sym || sym->kind != Symbol::Var || sym->definedBase || sym->isBased()) {
+      d_.error(it->loc,
+               std::string(what) + " of a parameter, DEFINED overlay, or BASED array is not "
+                                   "implemented in this stage",
+               rule);
+      return false;
+    }
+    // The full array type behind the item (through any member path).
+    Type full;
+    if (it->memberPath.empty()) {
+      full = sym->ty;
+    } else {
+      const Type* cur = &sym->ty;
+      for (unsigned f : it->memberPath) {
+        if (!cur->isStruct() || f >= cur->members.size()) {
+          d_.error(it->loc, std::string(what) + " of this item is not implemented in this stage",
+                   rule);
+          return false;
+        }
+        cur = &cur->members[f]->ty;
+      }
+      full = *cur;
+    }
+    // Axes to enumerate: every axis for a whole array, the star axes of a
+    // cross-section. Enumerated axes must be static; anything else (dynamic
+    // extents, dynamic members) stays diagnosed.
+    std::vector<size_t> axes;
+    if (whole) {
+      for (size_t k = 0; k < full.dims.size(); ++k)
+        axes.push_back(k);
+    } else {
+      for (size_t k = 0; k < it->args.size(); ++k)
+        if (it->args[k]->kind == Expr::Star)
+          axes.push_back(k);
+      if (axes.empty()) {
+        d_.error(it->loc, "a cross-section needs a '*' axis in this stage", "(126)");
+        return false;
+      }
+    }
+    for (size_t k : axes) {
+      if (full.dims[k].dyn || full.dims[k].lbDyn) {
+        d_.error(it->loc,
+                 std::string(what) + " of a dynamic-extent array is not implemented in this stage",
+                 rule);
+        return false;
+      }
+    }
+    if (isGet)
+      checkValueTarget(it); // VALUE arrays cannot receive values (ADR-108)
+    // Row-major odometer over the enumerated extents; the fixed axes of a
+    // cross-section reuse a clone of the original index per element.
+    std::vector<long long> ext;
+    for (size_t k : axes)
+      ext.push_back((long long)full.dims[k].ub - full.dims[k].lb + 1);
+    std::vector<long long> coord(axes.size(), 0);
+    bool done = axes.empty();
+    while (!done) {
+      auto el = std::make_unique<Expr>();
+      el->kind = Expr::Call;
+      el->name = it->name;
+      el->path = it->path;
+      el->loc = it->loc;
+      for (size_t k = 0; k < full.dims.size(); ++k) {
+        auto pos = std::find(axes.begin(), axes.end(), k);
+        if (pos != axes.end()) {
+          auto idx = std::make_unique<Expr>();
+          idx->kind = Expr::IntLit;
+          idx->ival = full.dims[k].lb + coord[pos - axes.begin()];
+          idx->loc = it->loc;
+          el->args.push_back(std::move(idx));
+        } else if (cross) {
+          el->args.push_back(cloneExpr(it->args[k].get()));
+        }
+      }
+      typeExpr(el.get(), sc, p);
+      out.push_back(DataListElement{std::move(el)});
+      done = true;
+      for (size_t j = axes.size(); j-- > 0;) {
+        if (++coord[j] < ext[j]) {
+          done = false;
+          break;
+        }
+        coord[j] = 0;
+      }
+    }
+  }
+  group.items = std::move(out);
+  return true;
+}
+
 void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
   if (!s)
     return;
@@ -5692,126 +5816,152 @@ bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
 // the data items, then pair each data item with its data (A/B/C/F/E) format,
 // skipping the control formats (X/SKIP/PAGE/LINE/COLUMN) that act without
 // consuming data. For GET the paired item must be an assignable reference of
-// a format-compatible type.
+// a format-compatible type. Iterates per (datalist) formatlist group in
+// s->editGroups to preserve format boundaries.
 void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
-  // Remote formats splice before typing so the copies are typed here.
-  if (!expandRemoteFormats(s->formats, s->loc))
-    return;
-  for (auto& it : s->items)
-    typeExpr(it.get(), sc, p);
-  // First pass: type all format items including nested Repeat groups.
+  // Helper to type format items recursively
   std::function<void(std::vector<FormatItem>&)> typeFormats = [&](std::vector<FormatItem>& fmts) {
     for (auto& f : fmts) {
-      typeExpr(f.w.get(), sc, p);
-      typeExpr(f.d.get(), sc, p);
-      typeExpr(f.s.get(), sc, p);
+      if (f.w) typeExpr(f.w.get(), sc, p);
+      if (f.d) typeExpr(f.d.get(), sc, p);
+      if (f.s) typeExpr(f.s.get(), sc, p);
       for (auto& sb : f.subs) {
-        typeExpr(sb.w.get(), sc, p);
-        typeExpr(sb.d.get(), sc, p);
-        typeExpr(sb.s.get(), sc, p);
+        if (sb.w) typeExpr(sb.w.get(), sc, p);
+        if (sb.d) typeExpr(sb.d.get(), sc, p);
+        if (sb.s) typeExpr(sb.s.get(), sc, p);
       }
       if (f.kind == FormatItem::Repeat) {
-        typeExpr(f.count.get(), sc, p);
+        if (f.count) typeExpr(f.count.get(), sc, p);
         // The repetition count must be an integer-compatible scalar (rule 47).
-        if (f.count && (f.count->ty.k == TK::Float || f.count->ty.k == TK::FixedDec && f.count->ty.scale != 0 || f.count->ty.isChar() || f.count->ty.isBit() || f.count->ty.isVoid()))
+        if (f.count && f.count->ty.k != TK::Void && (f.count->ty.k == TK::Float || f.count->ty.k == TK::FixedDec && f.count->ty.scale != 0 || f.count->ty.isChar() || f.count->ty.isBit() || f.count->ty.isVoid()))
           d_.error(f.count->loc, "a format iteration count must be an integer expression", "(47)");
-        // Nonpositive (≤0) counts skip at runtime per Y33-6003-0 §15675–15690.
         typeFormats(f.items);
       }
       // An F/E scale factor (rule (50)) is a numeric expression evaluated for
       // its effects; formatting itself uses (w,d).
-      if (f.s && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
+      if (f.s && f.s->ty.k != TK::Void && !f.s->ty.isNumeric() && !f.s->ty.isVoid())
         d_.error(f.s->loc, "a scale factor on an F/E format must be numeric", "(50)");
     }
   };
-  typeFormats(s->formats);
-  // Aggregate items transmit element-wise; expansion runs before format
-  // pairing so EDIT counts line up.
-  if (!expandAggregateItems(s, sc, p, isGet))
-    return;
-  size_t dataIdx = 0;
-  // Second pass: pair data formats with data items, skipping control formats
-  // and Repeat groups (which expand at runtime).
-  std::function<void(std::vector<FormatItem>&, size_t&)> pairFormats = [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
-    for (auto& f : fmts) {
-      if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-          f.kind == FormatItem::Line || f.kind == FormatItem::Column)
-        continue; // a control format consumes no data item
-      if (f.kind == FormatItem::Remote) {
-        d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-        continue;
-      }
-      if (f.kind == FormatItem::Repeat) {
-        size_t savedDi = dataIdx;
-        pairFormats(f.items, dataIdx);
-        dataIdx = savedDi;
-        continue;
-      }
-      if (dataIdx >= s->items.size()) {
-        d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
-        break;
-      }
-      Expr* it = s->items[dataIdx].get();
-      if (f.kind == FormatItem::A && !it->ty.isChar())
-        d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
-      else if (f.kind == FormatItem::B && !it->ty.isBit())
-        d_.error(it->loc, "a B format requires a BIT item", "(52)");
-      else if (f.kind == FormatItem::C && !it->ty.isComplex())
-        d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
-      else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
-        const char* letter = f.kind == FormatItem::F ? "F" : "E";
-        const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
-        d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
-      }
-      if (f.kind == FormatItem::P && isGet) {
-        validatePictureFormat(f, it, isGet, false);
-      } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-        validatePictureFormat(f, it, isGet, false);
-      } else if (f.kind == FormatItem::P) {
-        d_.error(it->loc, "a P format requires a numeric item", "(53)");
-      }
-      // C(real[,real]) may hold a P picture part (rule (51)); validate it as a
-      // numeric complex part.
-      if (f.kind == FormatItem::C) {
-        for (auto& sb : f.subs)
-          if (sb.kind == FormatItem::P)
-            validatePictureFormat(sb, it, isGet, true);
-      }
-      if (isGet) {
-        if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
-          d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
-                   "(53)");
-        bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
-                   it->kind == Expr::Subscript;
-        if (!ref)
-          d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
-        else if (it->ty.isStruct())
-          d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
-        else
+
+  // Helper to pair data formats with data items in a group
+  auto pairFormats = [&](std::vector<FormatItem>& fmts, std::vector<DataListElement>& items) {
+    size_t dataIdx = 0;
+    std::function<void(std::vector<FormatItem>&, size_t&)> pairRec = [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
+      for (auto& f : fmts) {
+        if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+            f.kind == FormatItem::Line || f.kind == FormatItem::Column)
+          continue; // a control format consumes no data item
+        if (f.kind == FormatItem::Remote) {
+          d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+          continue;
+        }
+        if (f.kind == FormatItem::Repeat) {
+          size_t savedDi = dataIdx;
+          pairRec(f.items, dataIdx);
+          dataIdx = savedDi;
+          continue;
+        }
+        if (dataIdx >= items.size()) {
+          d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+          break;
+        }
+        // Extract Expr* from DataListElement (skip IterDatalist)
+        Expr* it = nullptr;
+        if (auto* expr = std::get_if<ExprP>(&items[dataIdx])) {
+          it = expr->get();
+        } else {
+          // IterDatalist doesn't consume a format item directly
+          // It will be handled in codegen
+          dataIdx++;
+          continue;
+        }
+        if (!it || it->ty.k == TK::Void) {
+          dataIdx++;
+          continue;
+        }
+        if (f.kind == FormatItem::A && !it->ty.isChar())
+          d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+        else if (f.kind == FormatItem::B && !it->ty.isBit())
+          d_.error(it->loc, "a B format requires a BIT item", "(52)");
+        else if (f.kind == FormatItem::C && !it->ty.isComplex())
+          d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
+        else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+          const char* letter = f.kind == FormatItem::F ? "F" : "E";
+          const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+          d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
+        }
+        if (f.kind == FormatItem::P && isGet) {
+          validatePictureFormat(f, it, isGet, false);
+        } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+          validatePictureFormat(f, it, isGet, false);
+        } else if (f.kind == FormatItem::P) {
+          d_.error(it->loc, "a P format requires a numeric item", "(53)");
+        }
+        // C(real[,real]) may hold a P picture part (rule (51)); validate it as a
+        // numeric complex part.
+        if (f.kind == FormatItem::C) {
+          for (auto& sb : f.subs)
+            if (sb.kind == FormatItem::P)
+              validatePictureFormat(sb, it, isGet, true);
+        }
+        if (isGet) {
+          if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
+            d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                     "(53)");
+          bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                     it->kind == Expr::Subscript;
+          if (!ref)
+            d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
           checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
-      } else if (it->ty.isVoid()) {
-        d_.error(it->loc, "invalid data list item", "(110)");
+          if (it->ty.k == TK::Void)
+            d_.error(it->loc, "invalid data list item", "(110)");
+          if (it->ty.isBit() && it->ty.len > 1)
+            d_.error(it->loc, "GET EDIT of a BIT(n>1) value is not implemented in this stage", "(110)");
+          if (it->ty.isStruct())
+            d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
+          if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P) {
+            d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                     "(53)");
+          }
+          // A numeric PICTURE variable is numeric character data (rule (19)):
+          // GET EDIT reads an arithmetic value and edits it, so it is not the
+          // character-token path below (ADR-292).
+          if (it->ty.isChar() && it->ty.picture.empty() &&
+              ((it->kind == Expr::VarRef && !it->memberPath.empty()) || it->kind == Expr::Subscript)) {
+            d_.error(it->loc,
+                     "GET EDIT of a CHARACTER member or array element is not implemented in this "
+                     "stage",
+                     "(110)");
+          }
+        }
+        ++dataIdx;
       }
-      ++dataIdx;
-    }
+    };
+    size_t idx = 0;
+    pairRec(fmts, idx);
   };
-  pairFormats(s->formats, dataIdx);
-  size_t dataFormats = 0;
-  bool hasRepeat = false;
-  std::function<void(std::vector<FormatItem>&)> countDataFormats = [&](std::vector<FormatItem>& fmts) {
-    for (auto& f : fmts) {
-      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
-        ++dataFormats;
-      else if (f.kind == FormatItem::Repeat) {
-        hasRepeat = true;
-        countDataFormats(f.items);
-      }
+
+  // Process each edit group independently to preserve format boundaries
+  for (auto& group : s->editGroups) {
+    // Remote formats splice before typing so the copies are typed here.
+    if (!expandRemoteFormats(group.formats, group.loc))
+      continue;
+    // Type data items (expressions only)
+    for (auto& item : group.items) {
+      if (auto* expr = std::get_if<ExprP>(&item))
+        typeExpr(expr->get(), sc, p);
     }
-  };
-  countDataFormats(s->formats);
-  if (!hasRepeat && dataFormats < s->items.size())
-    d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
+    // First pass: type all format items including nested Repeat groups.
+    typeFormats(group.formats);
+    // Aggregate items transmit element-wise; expansion runs before format
+    // pairing so EDIT counts line up.
+    if (!expandAggregateItemsInGroup(group, sc, p, isGet))
+      continue;
+    // Second pass: pair data formats with data items, skipping control formats
+    // and Repeat groups (which expand at runtime).
+    pairFormats(group.formats, group.items);
+  }
 }
 
 // A constant subscript is range-checked at compile time (SUBSCRIPTRANGE, rule

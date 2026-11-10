@@ -338,9 +338,10 @@ private:
   void emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
                        llvm::Value* defW, llvm::Value* defD,
                        const std::vector<Val>& dataItems);
-  void emitGetEditItems(HStmt* s);
-  void emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
-                      llvm::Value* defW);
+void emitGetEditItems(HStmt* s);
+  void emitGetEditItem(const HFormatItem& f, HStmt* s,
+                       const std::vector<HDataItem>& items,
+                       size_t& di, llvm::Value* defW);
   // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
   // and ";"-terminated; names are compile-time globals, values reuse the
   // list-directed printers.

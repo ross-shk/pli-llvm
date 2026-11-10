@@ -101,6 +101,11 @@ private:
   bool parseSingleFormatItem(FormatItem& fi);
   // FORMAT statement (rule (44)): FORMAT(formatlist); with labels for R(ref).
   StmtP parseFormatStmt(const std::vector<std::string>& labels);
+  
+  // Data-list iteration (rule 111): parse a single datalist-element
+  DataListElement parseDataListElement();
+  // Parse DO specification (rules 72, 73) for iterative datalists
+  bool parseDoSpecification(std::vector<DoSpec>& specs);
   StmtP parseCall();
   StmtP parseWait();  // WAIT (rule 82, QR2.8): WAIT(ev,...)[(count)];
   StmtP parseDelay(); // DELAY (rule 83, QR2.8): DELAY(expr);
@@ -207,10 +212,15 @@ private:
   ExprP parseExprOrPlaceholder();
   ExprP parseUnary();
   ExprP parsePower();
+  // Parse a simple variable reference (VarRef or Subscript) for lvalue contexts.
+  ExprP parseReference();
   ExprP parsePrimary();
   // A ': ... :' enquiry designator (ADR-206/207/208): captures the raw words
   // between the colons for the five enquiry built-ins to interpret.
   ExprP parseTypeDesignator(const char* rule);
+
+  // Deep-copy a FormatItem (recursive for nested items and subs).
+  FormatItem cloneFormatItem(const FormatItem& f);
 
   // --- INITIAL itemlist (rules 26-31) ---------------------------------
   // Parse a comma-separated list of INITIAL items, stopping at the enclosing

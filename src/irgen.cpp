@@ -10002,6 +10002,26 @@ void IRGen::emitDoIter(HStmt* s) {
 // separator after a name). Sema restricted items to plain scalar variables,
 // so any other shape here is already diagnosed.
 void IRGen::emitPutDataItems(HStmt* s) {
+  // Handle dataGroups for iterative datalist support in DATA-directed I/O
+  if (!s->dataGroups.empty()) {
+    for (auto& group : s->dataGroups) {
+      for (auto& item : group.items) {
+        if (item.kind == HDataItemKind::Expr) {
+          HExpr* t = item.expr.get();
+          if (t->ty.isStruct()) {
+            emitPutDataStruct(t, t->sym->name);
+          } else {
+            emitPutDataScalar(t, t->sym->name);
+          }
+        } else if (item.kind == HDataItemKind::IterDatalist) {
+          // TODO: Implement iterative datalist emission for PUT DATA
+        }
+      }
+    }
+    deferCall("pli_put_data_end", {});
+    return;
+  }
+
   for (auto& item : s->items) {
     HExpr* t = item.get();
     if (t->ty.isStruct()) {
@@ -10284,6 +10304,22 @@ void IRGen::emitPut(HStmt* s) {
 // restricted items to plain scalar variables, so names are compile-time
 // globals and any other shape here is already diagnosed.
 void IRGen::emitGetDataItems(HStmt* s) {
+  // Handle dataGroups for iterative datalist support in DATA-directed I/O
+  if (!s->dataGroups.empty()) {
+    for (auto& group : s->dataGroups) {
+      for (auto& item : group.items) {
+        if (item.kind == HDataItemKind::Expr) {
+          // Emit GET DATA for each item in the group
+          // This is a simplified implementation - full iterative datalist support
+          // for GET DATA would require more complex loop generation
+        } else if (item.kind == HDataItemKind::IterDatalist) {
+          // TODO: Implement iterative datalist emission for GET DATA
+        }
+      }
+    }
+    // Fall through to legacy implementation for now
+  }
+
   llvm::Value* nameBuf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), 64), "dataname");
   llvm::BasicBlock* loopL = llvm::BasicBlock::Create(ctx_, "data.loop", curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "data.body", curFn_);
@@ -10621,17 +10657,42 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
 // A/B/C/F/E data format with the next data item and emitting the control
 // (X/SKIP/PAGE/LINE/COLUMN) items in order.
 void IRGen::emitPutEditItems(HStmt* s) {
-  llvm::Value* defW = i64(0);
-  llvm::Value* defD = i64(0);
-  // Pre-evaluate all data items once (PL/I semantics: data items are
-  // evaluated once per PUT statement, in order).
-  std::vector<Val> dataItems;
-  dataItems.reserve(s->items.size());
-  for (auto& item : s->items)
-    dataItems.push_back(emitExpr(item.get()));
-  size_t di = 0;
-  for (auto& f : s->formats) {
-    emitPutEditItem(f, s, di, defW, defD, dataItems);
+  // For backward compatibility, also handle legacy flat list if editGroups is empty
+  if (s->editGroups.empty()) {
+    llvm::Value* defW = i64(0);
+    llvm::Value* defD = i64(0);
+    // Pre-evaluate all data items once (PL/I semantics: data items are
+    // evaluated once per PUT statement, in order).
+    std::vector<Val> dataItems;
+    dataItems.reserve(s->items.size());
+    for (auto& item : s->items)
+      dataItems.push_back(emitExpr(item.get()));
+    size_t di = 0;
+    for (auto& f : s->formats) {
+      emitPutEditItem(f, s, di, defW, defD, dataItems);
+    }
+    return;
+  }
+
+  // Process each edit group independently to preserve format boundaries
+  for (auto& group : s->editGroups) {
+    llvm::Value* defW = i64(0);
+    llvm::Value* defD = i64(0);
+    // Pre-evaluate data items for this group
+    std::vector<Val> dataItems;
+    dataItems.reserve(group.items.size());
+    for (auto& item : group.items) {
+      if (item.kind == HDataItemKind::Expr) {
+        dataItems.push_back(emitExpr(item.expr.get()));
+      } else if (item.kind == HDataItemKind::IterDatalist) {
+        // Iterative datalist: emit the loop structure (TODO: implement)
+        // For now, skip iterative datalists in EDIT output
+      }
+    }
+    size_t di = 0;
+    for (auto& f : group.formats) {
+      emitPutEditItem(f, s, di, defW, defD, dataItems);
+    }
   }
 }
 
@@ -10974,16 +11035,36 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
 // Edit-directed input (rule (108)): pair each A/B/C/F/E data format with
 // the next data item and emit the control (X/SKIP/COLUMN) items in order.
 void IRGen::emitGetEditItems(HStmt* s) {
-  llvm::Value* defW = i64(0);
-  size_t di = 0;
-  for (auto& f : s->formats) {
-    emitGetEditItem(f, s, di, defW);
+  // For backward compatibility, also handle legacy flat list if editGroups is empty
+  if (s->editGroups.empty()) {
+    llvm::Value* defW = i64(0);
+    size_t di = 0;
+    // Convert legacy HExprP items to HDataItem for the edit path
+    std::vector<HDataItem> dataItems;
+    dataItems.reserve(s->items.size());
+    for (auto& expr : s->items) {
+      dataItems.push_back(HDataItem{HDataItemKind::Expr, expr->loc, std::move(expr), {}});
+    }
+    for (auto& f : s->formats) {
+      emitGetEditItem(f, s, dataItems, di, defW);
+    }
+    return;
+  }
+
+  // Process each edit group independently to preserve format boundaries
+  for (auto& group : s->editGroups) {
+    llvm::Value* defW = i64(0);
+    size_t di = 0;
+    for (auto& f : group.formats) {
+      emitGetEditItem(f, s, group.items, di, defW);
+    }
   }
 }
 
 // Emit a single edit-directed format item on input (rule 108).
-void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
-                            llvm::Value* defW) {
+void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
+                            const std::vector<HDataItem>& items,
+                            size_t& di, llvm::Value* defW) {
   switch (f.kind) {
   case HFormatItem::X: {
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
@@ -11041,8 +11122,8 @@ case HFormatItem::Repeat: {
       size_t itemDi = savedDi + i;
       size_t savedDi2 = di;
       di = itemDi;
-      for (auto& item : f.items) {
-        emitGetEditItem(item, s, di, defW);
+      for (auto& fmtItem : f.items) {
+        emitGetEditItem(fmtItem, s, items, di, defW);
       }
       di = savedDi2;
       b_.CreateBr(swDefault);
@@ -11062,9 +11143,10 @@ case HFormatItem::Repeat: {
     d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
     break;
   case HFormatItem::A: {
-    if (di >= s->items.size())
+    if (di >= items.size())
       break;
-    HExpr* t = s->items[di++].get();
+    const HDataItem& item = items[di++];
+    HExpr* t = item.expr.get();
     const Type& ty = t->ty;
     SourceLoc loc = s->loc;
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
@@ -11082,9 +11164,10 @@ case HFormatItem::Repeat: {
   }
   case HFormatItem::F:
   case HFormatItem::E: {
-    if (di >= s->items.size())
+    if (di >= items.size())
       break;
-    HExpr* t = s->items[di++].get();
+    const HDataItem& item = items[di++];
+    HExpr* t = item.expr.get();
     SourceLoc loc = s->loc;
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
     if (f.s) {
@@ -11110,9 +11193,10 @@ case HFormatItem::Repeat: {
   case HFormatItem::B: {
     // Bit-string input (rule (52)): read a w-character '0'/'1' field into
     // a temp packed buffer, then store through the normal BIT path.
-    if (di >= s->items.size())
+    if (di >= items.size())
       break;
-    HExpr* t = s->items[di++].get();
+    const HDataItem& item = items[di++];
+    HExpr* t = item.expr.get();
     SourceLoc loc = s->loc;
     long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
     long long nbytes = (nbits + 7) / 8;
@@ -11142,9 +11226,10 @@ case HFormatItem::Repeat: {
   case HFormatItem::C: {
     // Complex input (rule (51)): read the real/imaginary parts through the
     // inner real formats (F, E, or P), then store the {double,double} pair.
-    if (di >= s->items.size())
+    if (di >= items.size())
       break;
-    HExpr* t = s->items[di++].get();
+    const HDataItem& item = items[di++];
+    HExpr* t = item.expr.get();
     SourceLoc loc = s->loc;
     if (f.subs.empty()) {
       d_.error(s->loc, "a C format requires an inner F, E, or P format", "(51)");

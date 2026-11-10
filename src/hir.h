@@ -126,6 +126,37 @@ struct HFormatItem {
   std::vector<HFormatItem> items;
 };
 
+// DO specification for iterative datalist (rules 72, 73)
+struct HDoSpec {
+  HExprP control;           // control variable reference
+  HExprP from;              // initial value
+  HExprP to;                // TO bound
+  HExprP by;                // BY step (optional)
+  HExprP whileCond;         // WHILE condition (optional)
+  SourceLoc loc;
+};
+
+// Data list element kind for iterative datalist (rule 111)
+enum class HDataItemKind { Expr, IterDatalist };
+
+// Data list element: either an expression or an iterative datalist (rule 111)
+struct HDataItem {
+  HDataItemKind kind = HDataItemKind::Expr;
+  SourceLoc loc;
+  HExprP expr;                              // for Expr kind
+  struct IterDatalist {
+    std::vector<HDataItem> items;           // nested datalist
+    std::vector<HDoSpec> specs;             // control specifications
+  } iterDatalist;                           // for IterDatalist kind
+};
+
+// EDIT-directed I/O: per (datalist) formatlist group (rule 108)
+struct HEditGroup {
+  std::vector<HDataItem> items;
+  std::vector<HFormatItem> formats;
+  SourceLoc loc;
+};
+
 struct HStmt {
   enum Kind {
     Null,
@@ -209,7 +240,14 @@ struct HStmt {
   bool line = false;              // LINE(n) stream option (rule 105)
   HExprP skipCount;
   HExprP lineCount;               // LINE(n) expression
-  std::vector<HExprP> items;
+  std::vector<HExprP> items;      // legacy: flat list of expressions (for backward compat)
+  std::vector<HDataItem> dataItems; // new: variant list supporting iterative datalists (rule 111)
+  // Edit-directed transmission (rule (108)); per (datalist) formatlist group,
+  // preserving format list boundaries for iterative datalist support.
+  std::vector<HEditGroup> editGroups;
+  // Data-directed transmission (rule (106)); per (datalist) group for iterative
+  // datalist support in PUT DATA/GET DATA.
+  std::vector<HEditGroup> dataGroups;
   // Edit-directed transmission (rule (108)); mirrors the AST flag and format
   // list, with lowered width/decimals expressions.
   bool edit = false;

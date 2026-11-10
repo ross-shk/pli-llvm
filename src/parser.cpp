@@ -3243,6 +3243,27 @@ ExprP Parser::cloneExpr(const Expr* e) {
   return c;
 }
 
+// Deep-copy a FormatItem (recursive for nested items and subs).
+FormatItem Parser::cloneFormatItem(const FormatItem& f) {
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneExpr(f.w.get());
+  c.d = cloneExpr(f.d.get());
+  c.s = cloneExpr(f.s.get());
+  c.remote = f.remote;
+  c.pic = f.pic;
+  for (const auto& sb : f.subs) {
+    c.subs.push_back(cloneFormatItem(sb));
+  }
+  if (f.kind == FormatItem::Repeat) {
+    c.count = cloneExpr(f.count.get());
+    for (const auto& it : f.items) {
+      c.items.push_back(cloneFormatItem(it));
+    }
+  }
+  return c;
+}
+
 // select-statement (extension, ADR-104): SELECT [( expr )]; WHEN ...; END;
 // desugars in the parser to an IF-chain, so sema and codegen are untouched:
 //   SELECT; WHEN (p) S; OTHERWISE T; END;  ->  IF p THEN S; ELSE T;
@@ -3660,7 +3681,16 @@ StmtP Parser::parsePut() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            st->items.push_back(parseExpr());
+            DataListElement elem = parseDataListElement();
+            if (!std::holds_alternative<ExprP>(elem) && 
+                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
+                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
+              resync();
+              return nullptr;
+            }
+            if (auto* expr = std::get_if<ExprP>(&elem)) {
+              st->items.push_back(std::move(*expr));
+            }
             if (!eat(Tok::Comma))
               break;
           }
@@ -3698,11 +3728,25 @@ StmtP Parser::parsePut() {
       sawData = true;
       if (expect(Tok::LParen, "(106)")) {
         if (!at(Tok::RParen)) {
+          EditGroup group;
+          group.loc = st->loc;
           for (;;) {
-            st->items.push_back(parseExpr());
+            DataListElement elem = parseDataListElement();
+            if (!std::holds_alternative<ExprP>(elem) && 
+                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
+                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
+              resync();
+              return nullptr;
+            }
+            if (auto* expr = std::get_if<ExprP>(&elem)) {
+              group.items.push_back(std::move(*expr));
+            } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&elem)) {
+              group.items.push_back(std::move(*iter));
+            }
             if (!eat(Tok::Comma))
               break;
           }
+          st->dataGroups.push_back(std::move(group));
         }
         expect(Tok::RParen, "(106)");
       }
@@ -3766,7 +3810,16 @@ StmtP Parser::parseGet() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            st->items.push_back(parseExpr());
+            DataListElement elem = parseDataListElement();
+            if (!std::holds_alternative<ExprP>(elem) && 
+                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
+                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
+              resync();
+              return nullptr;
+            }
+            if (auto* expr = std::get_if<ExprP>(&elem)) {
+              st->items.push_back(std::move(*expr));
+            }
             if (!eat(Tok::Comma))
               break;
           }
@@ -3815,11 +3868,25 @@ StmtP Parser::parseGet() {
       st->data = true;
       if (expect(Tok::LParen, "(106)")) {
         if (!at(Tok::RParen)) {
+          EditGroup group;
+          group.loc = st->loc;
           for (;;) {
-            st->items.push_back(parseExpr());
+            DataListElement elem = parseDataListElement();
+            if (!std::holds_alternative<ExprP>(elem) && 
+                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
+                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
+              resync();
+              return nullptr;
+            }
+            if (auto* expr = std::get_if<ExprP>(&elem)) {
+              group.items.push_back(std::move(*expr));
+            } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&elem)) {
+              group.items.push_back(std::move(*iter));
+            }
             if (!eat(Tok::Comma))
               break;
           }
+          st->dataGroups.push_back(std::move(group));
         }
         expect(Tok::RParen, "(106)");
       }
@@ -3862,31 +3929,173 @@ bool Parser::parseEditClause(Stmt* st) {
     // ( datalist )   rules (110),(111)
     if (!expect(Tok::LParen, "(110)"))
       return false;
+    
+    // Parse datalist (rule 110): {,• datalist-element•••}
+    // A datalist-element is either:
+    // - an iterative datalist: ( datalist DO do-specification )
+    // - an expression
+    std::vector<DataListElement> datalistItems;
     if (!at(Tok::RParen)) {
       for (;;) {
-        st->items.push_back(parseExpr());
+        DataListElement elem = parseDataListElement();
+        if (!std::holds_alternative<ExprP>(elem) && 
+            (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
+             !std::get<std::unique_ptr<IterDatalist>>(elem))) {
+          return false;
+        }
+        datalistItems.push_back(std::move(elem));
         if (!eat(Tok::Comma))
           break;
       }
     }
     expect(Tok::RParen, "(110)");
+    
     // formatlist  ( {,• format•••} )   rules (45)-(54)
     if (!expect(Tok::LParen, "(45)"))
       return false;
+    std::vector<FormatItem> formatlist;
     if (!at(Tok::RParen)) {
       for (;;) {
-        if (!parseFormatItem(st))
+        if (!parseFormatItemInto(formatlist))
           return false;
         if (!eat(Tok::Comma))
           break;
       }
     }
     expect(Tok::RParen, "(45)");
+    
+    // Store as an EditGroup to preserve boundaries
+    EditGroup group;
+    group.loc = st->loc;
+    group.items = std::move(datalistItems);
+    group.formats = std::move(formatlist);
+    st->editGroups.push_back(std::move(group));
+    
+    // Also flatten into items and formats for backward compatibility with existing code paths
+    // (will be removed after all consumers updated)
+    for (auto& g : st->editGroups) {
+      for (auto& item : g.items) {
+        if (auto* expr = std::get_if<ExprP>(&item)) {
+          // Need to clone the expression since ExprP is unique_ptr
+          if (expr->get()) {
+            st->items.push_back(cloneExpr(expr->get()));
+          }
+        }
+      }
+      for (auto& fmt : g.formats) {
+        st->formats.push_back(this->cloneFormatItem(fmt));
+      }
+    }
+    
     // A further ( datalist ) formatlist group, comma-separated.
     if (!eat(Tok::Comma))
       break;
   }
   st->edit = true;
+  return true;
+}
+
+// Parse a single datalist-element (rule 111): ( datalist DO do-specification ) | expression
+DataListElement Parser::parseDataListElement() {
+  if (at(Tok::LParen)) {
+    SourceLoc parenLoc = cur().loc;
+    advance(); // eat '('
+    
+    // Parse nested datalist (recursive)
+    std::vector<DataListElement> nestedItems;
+    while (!at(Tok::RParen) && !at(Tok::Eof)) {
+      nestedItems.push_back(parseDataListElement());
+      if (!eat(Tok::Comma)) break;
+    }
+expect(Tok::RParen, "(110)");
+    
+    if (atWord("DO")) {
+      // Iterative datalist: ( datalist DO do-specification )
+      advance(); // DO
+      auto iter = std::make_unique<IterDatalist>(parenLoc);
+      iter->items = std::move(nestedItems);
+      if (!parseDoSpecification(iter->specs)) {
+        return DataListElement{};
+      }
+      return DataListElement{std::move(iter)};
+    } else {
+      // Parenthesized expression list — flatten into datalist items
+      // Each expression becomes a DataListElement
+      if (nestedItems.size() == 1) {
+        return std::move(nestedItems[0]);
+      }
+      // Multiple expressions in parens without DO - diagnose per spec
+      d_.error(parenLoc, "parenthesized expression list without DO not allowed here", "(111)");
+      return DataListElement{};
+    }
+  } else {
+    // Simple expression
+    ExprP expr = parseExpr();
+    if (!expr) {
+      return DataListElement{};
+    }
+    return DataListElement{std::move(expr)};
+  }
+}
+
+// Parse DO specification (rules 72, 73): reference = {,• specification•••}
+// specification ::= expression ( BY expression [ TO expression ] | TO expression [ BY expression ] ) [ WHILE ( expression ) ]
+bool Parser::parseDoSpecification(std::vector<DoSpec>& specs) {
+  for (;;) {
+    DoSpec spec;
+    spec.loc = cur().loc;
+    
+    // Control variable: reference (lvalue) - parse as reference (not full expression)
+    if (!at(Tok::Word)) {
+      d_.error(cur().loc, "control variable required in DO specification", "(72)");
+      return false;
+    }
+    spec.control = parseReference();
+    if (!spec.control || (spec.control->kind != Expr::VarRef && spec.control->kind != Expr::Subscript)) {
+      d_.error(spec.control->loc, "control variable must be a reference", "(72)");
+      return false;
+    }
+    
+    expect(Tok::Eq, "(72)");
+    
+    // Parse specification (rule 73): expr (BY expr [TO expr] | TO expr [BY expr]) [WHILE expr]
+    spec.from = parseExpr();
+    if (!spec.from) return false;
+    
+    if (atWord("BY")) {
+      advance();
+      spec.by = parseExpr();
+      if (!spec.by) return false;
+      if (atWord("TO")) {
+        advance();
+        spec.to = parseExpr();
+        if (!spec.to) return false;
+      }
+    } else if (atWord("TO")) {
+      advance();
+      spec.to = parseExpr();
+      if (!spec.to) return false;
+      if (atWord("BY")) {
+        advance();
+        spec.by = parseExpr();
+        if (!spec.by) return false;
+      }
+    } else {
+      d_.error(cur().loc, "BY or TO required in DO specification", "(73)");
+      return false;
+    }
+    
+    if (atWord("WHILE")) {
+      advance();
+      expect(Tok::LParen, "(73)");
+      spec.whileCond = parseExpr();
+      expect(Tok::RParen, "(73)");
+    }
+    
+    specs.push_back(std::move(spec));
+    
+    if (!eat(Tok::Comma)) break; // multiple specs = nested loops (left-to-right = outer-to-inner)
+  }
   return true;
 }
 
@@ -3928,22 +4137,6 @@ static ExprP cloneFormatExpr(const Expr* e) {
   return c;
 }
 
-static FormatItem cloneFormatItem(const FormatItem& f) {
-  FormatItem c;
-  c.kind = f.kind;
-  c.w = cloneFormatExpr(f.w.get());
-  c.d = cloneFormatExpr(f.d.get());
-  c.s = cloneFormatExpr(f.s.get());
-  c.remote = f.remote;
-  c.pic = f.pic;
-  for (const auto& sb : f.subs)
-    c.subs.push_back(cloneFormatItem(sb));
-  c.count = cloneFormatExpr(f.count.get());
-  for (const auto& it : f.items)
-    c.items.push_back(cloneFormatItem(it));
-  return c;
-}
-
 bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
   if (cur().kind == Tok::LParen) {
     SourceLoc lparenLoc = cur().loc;
@@ -3974,7 +4167,7 @@ bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
       long long n = count->ival;
       for (long long i = 0; i < n; ++i)
         for (const FormatItem& gi : group)
-          out.push_back(cloneFormatItem(gi));
+          out.push_back(this->cloneFormatItem(gi));
     } else {
       FormatItem fi;
       fi.kind = FormatItem::Repeat;
@@ -5164,6 +5357,56 @@ ExprP Parser::parseTypeDesignator(const char* rule) {
   }
   t->sval = raw;
   return t;
+}
+
+// Parse a simple variable reference (VarRef or Subscript) for use as a control
+// variable or other lvalue context. Does not parse full expressions with operators.
+ExprP Parser::parseReference() {
+  // A reference starts with a word (variable name), possibly followed by
+  // subscripts or member selection. We reuse parsePrimary for the base,
+  // but stop before any binary/unary operators.
+  ExprP base = parsePrimary();
+  if (!base)
+    return nullptr;
+  // Allow subscript and member selection to chain
+  while (at(Tok::LParen) || at(Tok::Dot)) {
+    if (at(Tok::LParen)) {
+      // Subscript: base(expr, ...)
+      SourceLoc loc = cur().loc;
+      advance(); // (
+      std::vector<ExprP> args;
+      if (!at(Tok::RParen)) {
+        for (;;) {
+          args.push_back(parseExpr());
+          if (!eat(Tok::Comma))
+            break;
+        }
+      }
+      expect(Tok::RParen, "(126)");
+      auto sub = std::make_unique<Expr>();
+      sub->kind = Expr::Subscript;
+      sub->loc = base->loc;
+      sub->a = std::move(base);
+      sub->args = std::move(args);
+      base = std::move(sub);
+    } else if (at(Tok::Dot)) {
+      // Member selection: base.member
+      advance(); // .
+      if (!at(Tok::Word)) {
+        d_.error(cur().loc, "expected member name after '.'", "(127)");
+        return nullptr;
+      }
+      std::string member = cur().text;
+      advance();
+      auto mem = std::make_unique<Expr>();
+      mem->kind = Expr::Subscript; // Reuse Subscript for member access (qualified)
+      mem->loc = base->loc;
+      mem->a = std::move(base);
+      mem->path.push_back(member); // Store member name in path field
+      base = std::move(mem);
+    }
+  }
+  return base;
 }
 
 ExprP Parser::parsePrimary() {
