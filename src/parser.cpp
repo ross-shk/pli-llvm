@@ -1585,6 +1585,8 @@ StmtP Parser::parseDeclare() {
         DeclItem base;
         base.level = level;
         parseDeclTail(base);
+        // Consume comma before members (if present)
+        eat(Tok::Comma);
         if (!base.dynBounds.empty())
           d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
                    "(13)");
@@ -1608,14 +1610,14 @@ StmtP Parser::parseDeclare() {
             break;
           }
           mem.name = cur().text;
-          mem.loc = cur().loc;
-          advance();
-          parseDeclTail(mem);
-          members.push_back(std::move(mem));
-          if (!eat(Tok::Comma))
-            break;
-        }
-        // If the last member has INITIAL but the structure base doesn't,
+mem.loc = cur().loc;
+           advance();
+           parseDeclTail(mem);
+           members.push_back(std::move(mem));
+           if (!eat(Tok::Comma))
+             break;
+         }
+         // If the last member has INITIAL but the structure base doesn't,
         // and we're at the end of the structure (no more members), this INITIAL
         // is likely a structure-level INITIAL that appears after members (valid PL/I).
         // Move it from the last member to the base structure.
@@ -1722,9 +1724,9 @@ StmtP Parser::parseDeclare() {
           item.labelAttr = base.labelAttr;
           item.imaginary = base.imaginary;
           item.dataAttr = base.dataAttr;
-          item.genericEntries = base.genericEntries;
-          st->decls.push_back(std::move(item));
-          // Clone members
+item.genericEntries = base.genericEntries;
+           st->decls.push_back(std::move(item));
+           // Clone members
           for (const auto& m : members) {
             DeclItem mi;
             mi.name = m.name;
@@ -1795,9 +1797,9 @@ StmtP Parser::parseDeclare() {
             mi.labelAttr = m.labelAttr;
             mi.imaginary = m.imaginary;
             mi.dataAttr = m.dataAttr;
-            mi.genericEntries = m.genericEntries;
-            st->decls.push_back(std::move(mi));
-          }
+mi.genericEntries = m.genericEntries;
+             st->decls.push_back(std::move(mi));
+           }
         }
         // Continue to next declaration in the DECLARE statement
         if (!eat(Tok::Comma))
@@ -1933,6 +1935,47 @@ StmtP Parser::parseDeclare() {
     }
     if (!eat(Tok::Comma))
       break;
+  }
+  // For non-factored structures: if a structure's last member has INITIAL
+  // but the structure base doesn't, this INITIAL is likely a structure-level
+  // INITIAL that appears after members (valid PL/I). Move it from the last
+  // member to the base structure.
+  for (size_t i = 0; i < st->decls.size(); ++i) {
+    DeclItem& item = st->decls[i];
+    if (item.level > 0) {
+      // Find the structure base (nearest preceding item with level < item.level)
+      int baseIdx = -1;
+      for (int k = (int)i - 1; k >= 0; --k) {
+        if (st->decls[k].level > 0 && st->decls[k].level < item.level) {
+          baseIdx = k;
+          break;
+        }
+      }
+      if (baseIdx >= 0) {
+        // This item is a member of a structure. Check if it's the last member.
+        bool isLastMember = true;
+        for (size_t k = i + 1; k < st->decls.size(); ++k) {
+          if (st->decls[k].level > 0 && st->decls[k].level <= item.level) {
+            // Found next item at same or lower level - this member is not the last
+            isLastMember = false;
+            break;
+          }
+        }
+        // More precise check: this is the last member if the next item
+        // at level <= structure's level appears after all members
+        DeclItem& base = st->decls[baseIdx];
+        if (isLastMember && base.initItems.empty() && !item.initItems.empty()) {
+          base.initItems = cloneInitItems(item.initItems);
+          base.init = cloneExpr(item.init.get());
+          base.valueInit = cloneExpr(item.valueInit.get());
+          base.initCall = cloneExpr(item.initCall.get());
+          item.initItems.clear();
+          item.init.reset();
+          item.valueInit.reset();
+          item.initCall.reset();
+        }
+      }
+    }
   }
   expect(Tok::Semi, "(9)");
   return st;

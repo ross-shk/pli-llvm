@@ -448,7 +448,19 @@ def main():
     WINDOWS_SKIP = {
         ("tests/builtins", "system"): "needs Unix true/false commands",
         ("tests/core", "socket_pair"): "needs <sys/socket.h>",
+        ("tests/core", "c_struct_return"): "needs clang in PATH",
+        ("tests/core", "cbyvalue"): "needs clang in PATH",
+        ("tests/core", "cinterop"): "needs clang in PATH",
+        ("tests/core", "c_call_pli_abi"): "needs clang in PATH",
+        ("tests/core", "entry_mixed"): "needs clang in PATH",
         ("tests/driver", "task_record"): "needs a POSIX FIFO",
+        ("tests/driver", "link"): "needs clang in PATH",
+        ("tests/driver", "multic"): "needs clang in PATH",
+        ("tests/driver", "multimod"): "needs clang in PATH",
+        ("tests/driver", "package"): "needs clang in PATH",
+        ("tests/driver", "rt_platform"): "needs clang in PATH",
+        ("tests/driver", "struct_mirror"): "needs clang in PATH",
+        ("tests/driver", "winsock"): "needs clang in PATH",
     }
 
     def work(job):
