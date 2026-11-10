@@ -521,13 +521,51 @@ def compile_pli(bench_name: str, pli_file, opt: str, output: Path,
     return rc == 0
 
 
+def _windows_sdk_flags() -> List[str]:
+    """Return -isystem flags for Windows SDK include directories."""
+    if not IS_WINDOWS:
+        return []
+    # Common SDK locations
+    sdk_roots = [
+        r"C:\Program Files (x86)\Windows Kits\10",
+        r"C:\Program Files\Windows Kits\10",
+    ]
+    for root in sdk_roots:
+        root_path = Path(root)
+        if root_path.exists():
+            # Find latest version subdirectory
+            versions = sorted([d for d in root_path.iterdir() if d.is_dir()], reverse=True)
+            for ver in versions:
+                include_dirs = [
+                    ver / "Include" / "ucrt",
+                    ver / "Include" / "um",
+                    ver / "Include" / "shared",
+                ]
+                flags = []
+                for inc in include_dirs:
+                    if inc.exists():
+                        flags.append(f"-isystem{inc}")
+                if flags:
+                    return flags
+    return []
+
+
+def _is_wsl() -> bool:
+    """Detect if running in WSL."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
 def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
               compiler: Optional[str] = None) -> bool:
     """Compile a C benchmark with the given compiler at the given optimization level."""
     if compiler is None:
         compiler = CC
     src = BENCHMARK_DIR / c_file
-    cmd = ([compiler, opt] + _c_policy_flags() + _c_runtime_flags()
+    cmd = ([compiler, opt] + _c_policy_flags() + _c_runtime_flags() + _windows_sdk_flags()
            + [str(src), "-o", str(output)])
     cmd.extend(_stack_flags())
     if bench_name in BENCHMARKS_REQUIRING_MATH and not IS_WINDOWS:
@@ -1019,6 +1057,15 @@ def main():
         print("Build first: cmake -G Ninja -S . -B build/cmake && "
               "cmake --build build/cmake -j$(nproc)")
         return 1
+
+    # WSL socket limit mitigation: limit parallel jobs to avoid vsock exhaustion
+    if _is_wsl():
+        print("WSL detected: limiting parallel jobs to 2 to avoid socket exhaustion")
+        if hasattr(args, 'jobs') and args.jobs:
+            args.jobs = min(args.jobs, 2)
+        else:
+            # This will be used by ThreadPoolExecutor
+            os.environ["JOBS"] = "2"
 
     opt_levels = ["-O2"] if args.checks_forced else OPT_LEVELS
 

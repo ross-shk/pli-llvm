@@ -1552,7 +1552,239 @@ StmtP Parser::parseDeclare() {
   st->kind = Stmt::Declare;
   st->loc = cur().loc;
   for (;;) {
-    if (at(Tok::LParen)) {
+    // Factored structure declaration: DECLARE <level> (N1, N2, ...) ...
+    // Check for level number followed by '(' before parsing a regular item.
+    if (at(Tok::Number) && !cur().isFloat) {
+      SourceLoc levelLoc = cur().loc;
+      int level = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+      if (level > kMaxStructureLevel) {
+        d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+        level = 0;
+      }
+      advance(); // consume level number
+      if (at(Tok::LParen)) {
+        // Factored structure declaration: DECLARE <level> (N1, N2) [attrs] ...
+        SourceLoc floc = cur().loc;
+        advance(); // (
+        std::vector<std::pair<std::string, SourceLoc>> names;
+        for (;;) {
+          if (at(Tok::Word)) {
+            names.push_back({cur().text, cur().loc});
+            advance();
+          } else {
+            d_.error(cur().loc, "expected a name in factored declaration", "(11)");
+            break;
+          }
+          if (!eat(Tok::Comma))
+            break;
+        }
+        expect(Tok::RParen, "(11)");
+        if (names.empty())
+          d_.error(floc, "factored declaration has no names", "(11)");
+        // Parse the attribute tail for the factored structure (level item)
+        DeclItem base;
+        base.level = level;
+        parseDeclTail(base);
+        if (!base.dynBounds.empty())
+          d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
+                   "(13)");
+        // Now parse member declarations (level+1, level+2, ...) until we hit
+        // a declaration at the same or lower level, or end of DECLARE.
+        std::vector<DeclItem> members;
+        while (at(Tok::Number) && !cur().isFloat) {
+          int memLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+          if (memLevel <= level)
+            break; // end of this structure's members
+          if (memLevel > kMaxStructureLevel) {
+            d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+            memLevel = level + 1;
+          }
+          advance();
+          DeclItem mem;
+          mem.level = memLevel;
+          if (!at(Tok::Word)) {
+            d_.error(cur().loc, "expected a name in DECLARE", "(11)");
+            resync();
+            break;
+          }
+          mem.name = cur().text;
+          mem.loc = cur().loc;
+          advance();
+          parseDeclTail(mem);
+          members.push_back(std::move(mem));
+          if (!eat(Tok::Comma))
+            break;
+        }
+        // Clone the factored structure for each name
+        for (auto& [n, nl] : names) {
+          // Create the level item
+          DeclItem item;
+          item.name = n;
+          item.loc = nl;
+          item.level = level;
+          item.ty = base.ty;
+          item.isEntry = base.isEntry;
+          item.extName = base.extName;
+          item.entryParams = base.entryParams;
+          item.entryByValue = base.entryByValue;
+          item.controlled = base.controlled;
+          item.like = base.like;
+          item.picture = base.picture;
+          item.fileAttr = base.fileAttr;
+          item.nonprint = base.nonprint;
+          item.genericEntries = base.genericEntries;
+          item.initItems = cloneInitItems(base.initItems);
+          item.init = cloneExpr(base.init.get());
+          item.valueInit = cloneExpr(base.valueInit.get());
+          item.slenExpr = cloneExpr(base.slenExpr.get());
+          item.initCall = cloneExpr(base.initCall.get());
+          // Clone dynBounds and dynLbBounds
+          item.dynBounds.clear();
+          for (const auto& e : base.dynBounds)
+            item.dynBounds.push_back(cloneExpr(e.get()));
+          item.dynLbBounds.clear();
+          for (const auto& e : base.dynLbBounds)
+            item.dynLbBounds.push_back(cloneExpr(e.get()));
+          item.reserved = base.reserved;
+          item.basedBase = base.basedBase;
+          item.basedNoPtr = base.basedNoPtr;
+          item.definedBase = base.definedBase;
+          // Clone definedSubs (each contains ExprP)
+          item.definedSubs.clear();
+          for (const auto& ds : base.definedSubs) {
+            DefinedSub cds;
+            cds.isub = ds.isub;
+            cds.axis = ds.axis;
+            cds.mult = ds.mult;
+            cds.add = ds.add;
+            cds.expr = cloneExpr(ds.expr.get());
+            item.definedSubs.push_back(std::move(cds));
+          }
+          item.hasPos = base.hasPos;
+          item.pos = base.pos;
+          item.area = base.area;
+          item.areaSize = cloneExpr(base.areaSize.get());
+          item.areaStar = base.areaStar;
+          item.sawStatic = base.sawStatic;
+          item.external = base.external;
+          item.extName = base.extName;
+          item.offset = base.offset;
+          item.offsetRef = base.offsetRef;
+          item.aligned = base.aligned;
+          item.unaligned = base.unaligned;
+          item.optional = base.optional;
+          item.entryVariable = base.entryVariable;
+          item.isCondition = base.isCondition;
+          item.entryIsFunction = base.entryIsFunction;
+          item.entryRetTy = base.entryRetTy;
+          item.returnsStructName = base.returnsStructName;
+          item.reducible = base.reducible;
+          item.abnormalLabel = base.abnormalLabel;
+          item.normal = base.normal;
+          item.picture = base.picture;
+          item.reserved = base.reserved;
+          item.unionAttr = base.unionAttr;
+          item.labelAttr = base.labelAttr;
+          item.imaginary = base.imaginary;
+          item.dataAttr = base.dataAttr;
+          item.genericEntries = base.genericEntries;
+          st->decls.push_back(std::move(item));
+          // Clone members
+          for (const auto& m : members) {
+            DeclItem mi;
+            mi.name = m.name;
+            mi.loc = m.loc;
+            mi.level = m.level;
+            mi.ty = m.ty;
+            mi.isEntry = m.isEntry;
+            mi.extName = m.extName;
+            mi.entryParams = m.entryParams;
+            mi.entryByValue = m.entryByValue;
+            mi.controlled = m.controlled;
+            mi.like = m.like;
+            mi.picture = m.picture;
+            mi.fileAttr = m.fileAttr;
+            mi.nonprint = m.nonprint;
+            mi.genericEntries = m.genericEntries;
+            mi.initItems = cloneInitItems(m.initItems);
+            mi.init = cloneExpr(m.init.get());
+            mi.valueInit = cloneExpr(m.valueInit.get());
+            mi.slenExpr = cloneExpr(m.slenExpr.get());
+            mi.initCall = cloneExpr(m.initCall.get());
+            // Clone dynBounds and dynLbBounds
+            mi.dynBounds.clear();
+            for (const auto& e : m.dynBounds)
+              mi.dynBounds.push_back(cloneExpr(e.get()));
+            mi.dynLbBounds.clear();
+            for (const auto& e : m.dynLbBounds)
+              mi.dynLbBounds.push_back(cloneExpr(e.get()));
+            mi.reserved = m.reserved;
+            mi.basedBase = m.basedBase;
+            mi.basedNoPtr = m.basedNoPtr;
+            mi.definedBase = m.definedBase;
+            // Clone definedSubs (each contains ExprP)
+            mi.definedSubs.clear();
+            for (const auto& ds : m.definedSubs) {
+              DefinedSub cds;
+              cds.isub = ds.isub;
+              cds.axis = ds.axis;
+              cds.mult = ds.mult;
+              cds.add = ds.add;
+              cds.expr = cloneExpr(ds.expr.get());
+              mi.definedSubs.push_back(std::move(cds));
+            }
+            mi.hasPos = m.hasPos;
+            mi.pos = m.pos;
+            mi.area = m.area;
+            mi.areaSize = cloneExpr(m.areaSize.get());
+            mi.areaStar = m.areaStar;
+            mi.sawStatic = m.sawStatic;
+            mi.external = m.external;
+            mi.extName = m.extName;
+            mi.offset = m.offset;
+            mi.offsetRef = m.offsetRef;
+            mi.aligned = m.aligned;
+            mi.unaligned = m.unaligned;
+            mi.optional = m.optional;
+            mi.entryVariable = m.entryVariable;
+            mi.isCondition = m.isCondition;
+            mi.entryIsFunction = m.entryIsFunction;
+            mi.entryRetTy = m.entryRetTy;
+            mi.returnsStructName = m.returnsStructName;
+            mi.reducible = m.reducible;
+            mi.abnormalLabel = m.abnormalLabel;
+            mi.normal = m.normal;
+            mi.picture = m.picture;
+            mi.reserved = m.reserved;
+            mi.unionAttr = m.unionAttr;
+            mi.labelAttr = m.labelAttr;
+            mi.imaginary = m.imaginary;
+            mi.dataAttr = m.dataAttr;
+            mi.genericEntries = m.genericEntries;
+            st->decls.push_back(std::move(mi));
+          }
+        }
+        // Continue to next declaration in the DECLARE statement
+        if (!eat(Tok::Comma))
+          break;
+        continue;
+      }
+      // Not a factored structure: put back the level number and parse normally
+      // We can't easily put back, so we'll parse the level number as part of the item
+      // by creating a DeclItem with the level already set
+      DeclItem item;
+      item.level = level;
+      if (!at(Tok::Word)) {
+        d_.error(cur().loc, "expected a name in DECLARE", "(11)");
+        resync();
+        return st;
+      }
+      item.name = cur().text;
+      item.loc = cur().loc;
+      advance();
+      parseDeclTail(item);
+      st->decls.push_back(std::move(item));
+    } else if (at(Tok::LParen)) {
       // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... — every
       // name in the parenthesised list shares the dimension + attribute tail.
       // Parse the name list, parse the tail once, then clone it per name.
@@ -1575,9 +1807,6 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
-      if (base.initCall)
-        d_.error(floc, "INITIAL CALL in a factored declaration is not implemented in this stage",
-                 "(27)");
       if (!base.dynBounds.empty())
         d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
                  "(13)");
@@ -1606,7 +1835,57 @@ StmtP Parser::parseDeclare() {
         item.init = cloneExpr(base.init.get());
         item.valueInit = cloneExpr(base.valueInit.get());
         item.slenExpr = cloneExpr(base.slenExpr.get());
+        item.initCall = cloneExpr(base.initCall.get());
+        // Clone dynBounds and dynLbBounds
+        item.dynBounds.clear();
+        for (const auto& e : base.dynBounds)
+          item.dynBounds.push_back(cloneExpr(e.get()));
+        item.dynLbBounds.clear();
+        for (const auto& e : base.dynLbBounds)
+          item.dynLbBounds.push_back(cloneExpr(e.get()));
         item.reserved = base.reserved;
+        item.basedBase = base.basedBase;
+        item.basedNoPtr = base.basedNoPtr;
+        item.definedBase = base.definedBase;
+        // Clone definedSubs (each contains ExprP)
+        item.definedSubs.clear();
+        for (const auto& ds : base.definedSubs) {
+          DefinedSub cds;
+          cds.isub = ds.isub;
+          cds.axis = ds.axis;
+          cds.mult = ds.mult;
+          cds.add = ds.add;
+          cds.expr = cloneExpr(ds.expr.get());
+          item.definedSubs.push_back(std::move(cds));
+        }
+        item.hasPos = base.hasPos;
+        item.pos = base.pos;
+        item.area = base.area;
+        item.areaSize = cloneExpr(base.areaSize.get());
+        item.areaStar = base.areaStar;
+        item.sawStatic = base.sawStatic;
+        item.external = base.external;
+        item.extName = base.extName;
+        item.offset = base.offset;
+        item.offsetRef = base.offsetRef;
+        item.aligned = base.aligned;
+        item.unaligned = base.unaligned;
+        item.optional = base.optional;
+        item.entryVariable = base.entryVariable;
+        item.isCondition = base.isCondition;
+        item.entryIsFunction = base.entryIsFunction;
+        item.entryRetTy = base.entryRetTy;
+        item.returnsStructName = base.returnsStructName;
+        item.reducible = base.reducible;
+        item.abnormalLabel = base.abnormalLabel;
+        item.normal = base.normal;
+        item.picture = base.picture;
+        item.reserved = base.reserved;
+        item.unionAttr = base.unionAttr;
+        item.labelAttr = base.labelAttr;
+        item.imaginary = base.imaginary;
+        item.dataAttr = base.dataAttr;
+        item.genericEntries = base.genericEntries;
         st->decls.push_back(std::move(item));
       }
     } else {

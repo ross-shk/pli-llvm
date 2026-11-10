@@ -8699,36 +8699,41 @@ void IRGen::emitAllocate(HStmt* s) {
     if (!bsym->controlled && bsym->ty.isArray() &&
         (bsym->ty.isDynamic() || !bbounds.empty())) {
       // A dynamic-extent BASED heap array (rules (25),(89)): size the block
-      // from the live DECLARE bounds at ALLOCATE time. The first axis may be
-      // dynamic (later axes are static — sema gates the rest); each reference
-      // reads the same live bounds through the dope slots below.
+      // from the live DECLARE bounds at ALLOCATE time. All dynamic axes are
+      // supported; each reference reads the same live bounds through the dope
+      // slots below.
       const Type& el = bsym->ty.elementType();
       long long elemSz =
           (long long)mod_.getDataLayout().getTypeAllocSize(llvmTy(el)).getFixedValue();
       if (elemSz <= 0)
         elemSz = 1;
       llvm::Value* total = i64(elemSz);
+      std::vector<llvm::Value*> ubs;
+      std::vector<llvm::Value*> lbs;
+      ubs.reserve(bsym->ty.dims.size());
+      lbs.reserve(bsym->ty.dims.size());
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
         // A per-ALLOCATE extent overrides the DECLARE bound (rule (89)); sema
-        // admits a single bound on a 1-D BASED array.
+        // admits bounds matching the array rank.
         llvm::Value* ub = i64(d.ub);
-        if (k == 0 && !bbounds.empty() && bbounds[0].ub)
-          ub = toI64(emitExpr(bbounds[0].ub.get()), s->loc);
-        else if (k == 0 && bsym->dynUb)
-          ub = toI64(emitExpr(bsym->dynUb), s->loc);
+        if (k < bbounds.size() && bbounds[k].ub)
+          ub = toI64(emitExpr(bbounds[k].ub.get()), s->loc);
+        else if (d.dyn && bsym->dynUbAxes.size() > k && bsym->dynUbAxes[k])
+          ub = toI64(emitExpr(bsym->dynUbAxes[k]), s->loc);
         llvm::Value* lb =
-            (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
-        if (k == 0) {
-          // Later references check against the ALLOCATE-time extent, which
-          // may differ from the entry-evaluated one when the bound changed.
-          dynUb_[bsym] = {ub};
-          if (d.lbDyn && bsym->dynLb)
-            dynLb_[bsym] = {lb};
-        }
+            (d.lbDyn && bsym->dynLbAxes.size() > k && bsym->dynLbAxes[k])
+                ? toI64(emitExpr(bsym->dynLbAxes[k]), s->loc)
+                : i64(d.lb);
+        ubs.push_back(ub);
+        lbs.push_back(lb);
         llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "bheap.e1"), i64(1), "bheap.ext");
         total = b_.CreateMul(total, ext, "bheap.tot");
       }
+      // Store live bounds for all dynamic axes so later references use the
+      // ALLOCATE-time extent.
+      dynUb_[bsym] = std::move(ubs);
+      dynLb_[bsym] = std::move(lbs);
       sz = total;
     }
     if (bsym->controlled) {

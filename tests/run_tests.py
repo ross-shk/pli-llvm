@@ -37,7 +37,7 @@ EXEC_TIMEOUT_MAX = 60
 # starves them under parallel load (the overflow drivers timed out cold);
 # they get their own budget while single-binary runs stay tight enough to
 # catch genuine hangs quickly.
-DRIVER_TIMEOUT = 60  # seconds per driver test
+DRIVER_TIMEOUT = 120  # seconds per driver test
 # The ceiling the load-scaled driver budget may reach.
 DRIVER_TIMEOUT_MAX = 300
 # Sanitizer drivers rebuild and instrument the runtime, so they need a larger
@@ -244,7 +244,11 @@ class Runner:
         if sh is None:
             # Git for Windows ships sh.exe outside the default PATH.
             for cand in (r"C:\Program Files\Git\bin\sh.exe",
-                         r"C:\Program Files (x86)\Git\bin\sh.exe"):
+                         r"C:\Program Files (x86)\Git\bin\sh.exe",
+                         r"C:\Program Files\Git\usr\bin\sh.exe",
+                         r"C:\Program Files (x86)\Git\usr\bin\sh.exe",
+                         r"C:\Git\bin\sh.exe",
+                         r"C:\Git\usr\bin\sh.exe"):
                 if Path(cand).exists():
                     sh = cand
                     break

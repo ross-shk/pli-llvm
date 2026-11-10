@@ -3251,10 +3251,9 @@ void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemT
       expandInitItems(it.items, elemTy, loc, out, maxElems);
       break;
     case InitItem::Iter: {
-      std::vector<Expr*> sub;
-      expandInitItems(it.items, elemTy, loc, sub, maxElems);
-      // An iteration factor is expanded into one vector slot per repetition:
-      // bound it before expanding, not after (the expansion is what allocates).
+      size_t before = out.size();
+      expandInitItems(it.items, elemTy, loc, out, maxElems);
+      size_t after = out.size();
       long long factor = it.factor;
       if (factor < 0)
         factor = 0;
@@ -3263,9 +3262,15 @@ void Sema::expandInitItems(const std::vector<InitItem>& items, const Type& elemT
         d_.error(loc, "an INITIAL repetition factor exceeds the number of elements", "(29)");
         break;
       }
-      for (long long k = 0; k < factor; ++k)
-        for (Expr* s : sub)
-          out.push_back(s);
+      for (long long k = 1; k < factor; ++k) {
+        for (size_t i = before; i < after; ++i) {
+          if (maxElems >= 0 && (long long)out.size() >= maxElems)
+            break;
+          out.push_back(out[i]);
+        }
+        if (maxElems >= 0 && (long long)out.size() >= maxElems)
+          break;
+      }
       break;
     }
     }
@@ -5238,17 +5243,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       // A dynamic-extent BASED heap array (rules (25),(89)): ALLOCATE sizes
       // the block from the live DECLARE bounds, so a bare `ALLOCATE x SET(p)`
-      // is served. Element types and later-axis dynamics were already gated at
-      // DECLARE; a dynamic axis past the first cannot reach here silently.
-      if (bsym->ty.isArray() && bsym->ty.isDynamic()) {
-        for (size_t k = 1; k < bsym->ty.dims.size(); ++k)
-          if (bsym->ty.dims[k].dyn || bsym->ty.dims[k].lbDyn) {
-            d_.error(s->allocBase[i]->loc,
-                     "ALLOCATE over a dynamic non-first axis is not implemented in this stage",
-                     "(13)");
-            break;
-          }
-      }
+      // is served. All dynamic axes (first and later) are supported; the block
+      // size is computed from the live extents at ALLOCATE time.
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
       bool hasCharLen = (i < s->allocCharLen.size() && s->allocCharLen[i]);
       // Type the per-ALLOCATE bound expressions first so their symbols resolve.
