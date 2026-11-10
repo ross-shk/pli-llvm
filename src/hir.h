@@ -201,6 +201,8 @@ struct HStmt {
   std::vector<std::string> params; // ENTRY parameter names
   bool entryIsFunction = false;
   Type entryRetTy{};
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
   // GET/PUT stream statement options (rules (104),(105))
@@ -325,6 +327,9 @@ struct HProc {
   bool isRecursive = false;            // RECURSIVE option (rule (5))
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)
+  // Field paths of dynamic members in the RETURNS structure (rule 13),
+  // relative to the structure root. Mirrors Proc::retDynMemberPaths.
+  std::vector<std::vector<unsigned>> retDynMemberPaths;
   bool isPackage = false;              // extension (ADR-109): skipped in codegen
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names

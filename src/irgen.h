@@ -157,6 +157,10 @@ private:
   // The runtime lower bound value of a dynamic lower bound (rule (13)), the
   // mirror of `dynUb_`, loaded once at block entry.
   std::unordered_map<Symbol*, std::vector<llvm::Value*>> dynLb_;
+  // Map from AST Proc* to HProc* for callee lookup during call emission.
+  std::unordered_map<const Proc*, const HProc*> procToHProc_;
+  // Owned synthetic symbols for return value dynamic member bounds.
+  std::vector<std::unique_ptr<Symbol>> ownedRetSyms_;
 
   // The membership table of each constant character alphabet used by
   // VERIFY/SEARCH (ADR-241), keyed by the alphabet's text.

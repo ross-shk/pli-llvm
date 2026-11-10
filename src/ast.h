@@ -168,6 +168,8 @@ struct DeclItem {
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
    bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
    Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+   // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+   std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
    std::string returnsStructName; // rule 127: a bare structure name naming the
                                   // structure whose shape this entry returns;
                                   // resolved to a deep copy in sema
@@ -300,6 +302,8 @@ struct Stmt {
   std::vector<std::string> params; // ENTRY parameter names
   bool entryIsFunction = false;
   Type entryRetTy{};
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
   // PUT/GET stream statement options (rules (104),(105))
@@ -463,6 +467,10 @@ struct Proc {
   // enclosing structure variable whose shape the function returns. The parser
   // records the name; sema resolves it to a deep copy of that type into retTy.
   std::string returnsStructName;
+  // Field paths of dynamic members in the RETURNS structure (rule 13), relative
+  // to the structure root; nested structures recurse. Collected by sema for
+  // HIR lowering so the caller can allocate buffers and the callee can deep-copy.
+  std::vector<std::vector<unsigned>> retDynMemberPaths;
   std::vector<std::string> params;     // rule (4) parameterlist
   bool isPackage = false;              // extension (ADR-109): a PACKAGE block —
                                        // scope and linkage only, never emitted

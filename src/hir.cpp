@@ -259,6 +259,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->params = s->params;
   h->entryIsFunction = s->entryIsFunction;
   h->entryRetTy = s->entryRetTy;
+  h->entryRetDynMemberPaths = s->entryRetDynMemberPaths;
   h->entryParamSyms = s->entryParamSyms;
   h->skip = s->skip;
   h->page = s->page;
@@ -580,6 +581,7 @@ HProgram lower(const Program& prog) {
     hp->isRecursive = prog.procs[i]->isRecursive;
     hp->isFunction = prog.procs[i]->isFunction;
     hp->retTy = prog.procs[i]->retTy;
+    hp->retDynMemberPaths = prog.procs[i]->retDynMemberPaths;
     hp->params = prog.procs[i]->params;
     hp->entryNames = prog.procs[i]->entryNames;
     hp->paramSyms = prog.procs[i]->paramSyms;

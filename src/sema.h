@@ -36,6 +36,8 @@ struct Symbol {
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
   std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
@@ -132,6 +134,14 @@ struct Symbol {
     HExpr* lb = nullptr;
   };
   std::vector<DynMemberH> dynMembers;
+  // Sema-time dynamic member info (rule 13): paths and bound expressions (Expr*),
+  // copied from DeclItem::dynMembers so LIKE declarations can inherit them.
+  struct SemaDynMemberInfo {
+    std::vector<unsigned> path;
+    Expr* ub = nullptr;
+    Expr* lb = nullptr;
+  };
+  std::vector<SemaDynMemberInfo> semaDynMembers;
 };
 
 struct Scope {

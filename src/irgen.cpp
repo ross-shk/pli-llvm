@@ -5963,6 +5963,9 @@ void IRGen::applyControlAttrs(llvm::Function* f, const HProc* p) {
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
+  // Map AST Proc* to HProc* for callee lookup during call emission.
+  if (p->src)
+    procToHProc_[p->src] = p;
   bool sret = p->isFunction && (p->retTy.isStruct() || p->retTy.isChar());
   // A structure-valued (rule 127) or character-valued (rules (34),(37))
   // function returns through a hidden result pointer and returns void: the
@@ -7403,12 +7406,141 @@ void IRGen::emitStmt(HStmt* s) {
       // Structure-valued function (rule 127): copy the returned structure's
       // storage into the caller's result buffer, then return void. In a
       // multi-entry procedure that buffer is the thunk's own result storage.
+      // If the structure has dynamic members (rule 13), perform a deep copy:
+      // save destination buffer pointers, copy static header, restore pointers,
+      // then copy each dynamic member's buffer contents.
       Val v = emitExpr(s->value.get());
       llvm::Value* dst = multiEntry_ ? multiResult_ : structRetPtr_;
-      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
-      b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
-      emitCtlEpilogue();
-      b_.CreateRetVoid();
+      
+      if (!curProc_->retDynMemberPaths.empty()) {
+        // Deep copy with dynamic members (rule 13).
+        const auto& dynPaths = curProc_->retDynMemberPaths;
+        
+        // Helper: fieldAddr from base through relative path.
+        auto fieldAddr = [&](llvm::Value* base, const Type& root,
+                             const std::vector<unsigned>& rel) {
+          llvm::Value* addr = base;
+          const Type* cur = &root;
+          for (unsigned f : rel) {
+            addr = structMemberGEP(*cur, addr, f, "ret.dcp.f");
+            cur = &cur->members[f]->ty;
+          }
+          return addr;
+        };
+        
+        // Save destination buffer pointers from sret buffer.
+        std::vector<llvm::Value*> savedPtrs;
+        savedPtrs.reserve(dynPaths.size());
+        for (const auto& rel : dynPaths) {
+          llvm::LoadInst* lp = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.sv");
+          if (packedMemberPath(curRetTy_, rel))
+            lp->setAlignment(llvm::Align(1));
+          savedPtrs.push_back(lp);
+        }
+        
+        // Flat copy static header (including pointer fields).
+        llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
+        b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+        
+        // Restore destination buffer pointers.
+        for (size_t i = 0; i < dynPaths.size(); ++i) {
+          llvm::StoreInst* sp = b_.CreateStore(savedPtrs[i], fieldAddr(dst, curRetTy_, dynPaths[i]));
+          if (packedMemberPath(curRetTy_, dynPaths[i]))
+            sp->setAlignment(llvm::Align(1));
+        }
+        
+        // Copy each dynamic member buffer.
+        for (size_t i = 0; i < dynPaths.size(); ++i) {
+          const auto& rel = dynPaths[i];
+          const Type& arr = structPathType(curRetTy_, rel);
+          const Type& el = arr.elementType();
+          
+          // Source: from v.ptr (callee's returned structure)
+          // The source structure's dynamic member bounds are in memberDyn_ keyed
+          // by the source symbol and path. The source is the returned value, which
+          // is a whole structure variable in the callee's frame.
+          // We need to find the source symbol. The returned expression v should be
+          // a VarRef to a local structure variable.
+          HExpr* sv = s->value.get();
+          if (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr) {
+            d_.error(s->loc,
+                     "a whole-structure source with a dynamic member must be a plain variable here",
+                     "(13)");
+            emitCtlEpilogue();
+            b_.CreateRetVoid();
+            return;
+          }
+          
+          std::vector<unsigned> srcFull = sv->memberPath;
+          srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+          
+          auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
+          // For the destination, the caller recorded bounds under a synthetic symbol
+          // that we don't have access to here. Since the caller and callee share the
+          // same template structure bounds (rule 13), we use the source bounds for
+          // both source and destination extent calculation. The extent check will
+          // catch any mismatch.
+          llvm::Value* sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
+          llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+          llvm::Value* dub = sub;
+          llvm::Value* dlb = slb;
+          
+          if (!dub || !sub) {
+            d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
+                     "(13)");
+            emitCtlEpilogue();
+            b_.CreateRetVoid();
+            return;
+          }
+          
+          const Dim& d0 = arr.dims[0];
+          llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
+          llvm::Value* du = dub;
+          llvm::Value* sl = d0.lbDyn && slb ? slb : i64(d0.lb);
+          llvm::Value* su = sub;
+          llvm::Value* dext = b_.CreateAdd(b_.CreateSub(du, dl, "dcp.e1"), i64(1), "dcp.dext");
+          llvm::Value* sext = b_.CreateAdd(b_.CreateSub(su, sl, "dcp.e2"), i64(1), "dcp.sext");
+          long long rest = 1;
+          for (size_t k = 1; k < arr.dims.size(); ++k)
+            rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+          if (rest != 1) {
+            dext = b_.CreateMul(dext, i64(rest), "dcp.dall");
+            sext = b_.CreateMul(sext, i64(rest), "dcp.sall");
+          }
+          
+          // Mismatched live extents would overflow the target: trap loudly
+          // through the subscript path rather than silently truncating.
+          std::string id = std::to_string(n_++);
+          llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "ret.dcp.fail." + id, curFn_);
+          llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ret.dcp.ok." + id, curFn_);
+          b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "dcp.mis"), failL, okL);
+          startBlock(failL);
+          llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "ret.dcp.abort." + id, curFn_);
+          emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
+          b_.SetInsertPoint(abL);
+          b_.CreateUnreachable();
+          startBlock(okL);
+          
+          llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.dp");
+          llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "ret.dcp.sp");
+          if (packedMemberPath(curRetTy_, rel))
+            dbuf->setAlignment(llvm::Align(1));
+          if (packedMemberPath(sv->ty, rel))
+            sbuf->setAlignment(llvm::Align(1));
+          llvm::Value* nbytes =
+              b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "ret.dcp.n");
+          b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
+        }
+        
+        emitCtlEpilogue();
+        b_.CreateRetVoid();
+      } else {
+        // No dynamic members: simple flat copy.
+        llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
+        b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+        emitCtlEpilogue();
+        b_.CreateRetVoid();
+      }
     } else if (curRetTy_.isChar()) {
       // Character-valued function (rules (34),(37)): copy the value into the
       // caller's hidden buffer, blank-padding or truncating (rule (86)). A
@@ -8336,9 +8468,10 @@ void IRGen::emitAssign(HStmt* s) {
       return;
     }
     HExpr* sv = s->value.get();
-    if (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr) {
+    bool srcIsCall = (sv && sv->kind == HExpr::Call);
+    if (!srcIsCall && (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr)) {
       d_.error(s->loc,
-               "a whole-structure source with a dynamic member must be a plain variable here",
+               "a whole-structure source with a dynamic member must be a plain variable or function call here",
                "(13)");
       return;
     }
@@ -8348,7 +8481,7 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* addr = base;
       const Type* cur = &root;
       for (unsigned f : rel) {
-       addr = structMemberGEP(*cur, addr, f, "dcp.f");
+        addr = structMemberGEP(*cur, addr, f, "dcp.f");
         cur = &cur->members[f]->ty;
       }
       return addr;
@@ -8372,19 +8505,36 @@ void IRGen::emitAssign(HStmt* s) {
       const Type& el = arr.elementType();
       std::vector<unsigned> dstFull = t->memberPath;
       dstFull.insert(dstFull.end(), rel.begin(), rel.end());
-      std::vector<unsigned> srcFull = sv->memberPath;
-      srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+      
+      // Source bounds: for a VarRef source, look up from memberDyn_. For a Call
+      // source, the function call emission recorded bounds under a synthetic
+      // symbol; we use destination bounds as proxy since both share the template.
+      llvm::Value* sub = nullptr;
+      llvm::Value* slb = nullptr;
+      if (!srcIsCall) {
+        std::vector<unsigned> srcFull = sv->memberPath;
+        srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+        auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
+        sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
+        slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+      }
+      
       auto dstIt = memberDyn_.find(MemberDyn{t->sym, dstFull});
-      auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
       llvm::Value* dub = dstIt != memberDyn_.end() ? dstIt->second.ub : nullptr;
       llvm::Value* dlb = dstIt != memberDyn_.end() ? dstIt->second.lb : nullptr;
-      llvm::Value* sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
-      llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+      
+      // For Call source, use destination bounds as proxy.
+      if (srcIsCall) {
+        sub = dub;
+        slb = dlb;
+      }
+      
       if (!dub || !sub) {
         d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
                  "(13)");
         return;
       }
+      
       const Dim& d0 = arr.dims[0];
       llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
       llvm::Value* du = dub;
@@ -8414,10 +8564,10 @@ void IRGen::emitAssign(HStmt* s) {
       b_.CreateUnreachable();
       startBlock(okL);
       llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
-      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "dcp.sp");
+      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, srcIsCall ? t->ty : sv->ty, rel), "dcp.sp");
       if (packedMemberPath(t->ty, rel))
         dbuf->setAlignment(llvm::Align(1));
-      if (packedMemberPath(sv->ty, rel))
+      if (!srcIsCall && packedMemberPath(sv->ty, rel))
         sbuf->setAlignment(llvm::Align(1));
       llvm::Value* nbytes =
           b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "dcp.n");
@@ -11896,8 +12046,118 @@ void IRGen::emitCall(HStmt* s) {
   // statement discards the returned value.
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
-  if (rty.isStruct() || rty.isChar())
-    args.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
+  
+  // For structure returns with dynamic members (rule 13), the caller must
+  // allocate buffers for the dynamic members and store their pointers in the
+  // sret buffer. The callee will deep-copy into these buffers.
+  llvm::Value* sretBuf = nullptr;
+  if (rty.isStruct()) {
+    // Try to get callee's HProc for dynamic member paths.
+    const HProc* calleeHProc = nullptr;
+    std::string returnsStructName;
+    std::vector<std::vector<unsigned>> retDynMemberPaths;
+    
+    if (callee) {
+      // Internal procedure: get HProc and returnsStructName.
+      auto it = procToHProc_.find(callee);
+      if (it != procToHProc_.end())
+        calleeHProc = it->second;
+      returnsStructName = callee->returnsStructName;
+      if (calleeHProc)
+        retDynMemberPaths = calleeHProc->retDynMemberPaths;
+    } else if (en && calleeSym->entryRetDynMemberPaths.size() > 0) {
+      // External entry: use Symbol's recorded dynamic member paths.
+      retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
+    }
+    
+    if (!retDynMemberPaths.empty()) {
+      // Structure return with dynamic members: allocate sret buffer and
+      // dynamic member buffers in caller's frame.
+      sretBuf = entryAlloca(llvmTy(rty), "sret");
+      
+      // Find the template structure symbol in caller's scope (for bounds).
+      Symbol* tplSym = nullptr;
+      if (!returnsStructName.empty()) {
+        // Search in caller's accessible symbols.
+        for (Symbol* sym : curProc_->localSyms)
+          if (sym->name == returnsStructName) { tplSym = sym; break; }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->paramSyms)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->directUses)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->env)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+      }
+      
+      // Create a synthetic symbol for the return value's dynamic member bounds.
+      // We use a unique name based on the call site.
+      std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
+      auto retSym = std::make_unique<Symbol>();
+      retSym->name = retSymName;
+      retSym->ty = rty;
+      retSym->kind = Symbol::Var;
+      retSym->irName = "%" + retSymName;
+      Symbol* retSymPtr = retSym.get();
+      ownedRetSyms_.push_back(std::move(retSym));
+      
+      for (const auto& relPath : retDynMemberPaths) {
+        const Type& arrTy = structPathType(rty, relPath);
+        const Type& elTy = arrTy.elementType();
+        llvm::Type* elLLVM = llvmTy(elTy);
+        
+        llvm::Value* ub = nullptr;
+        llvm::Value* lb = nullptr;
+        if (tplSym) {
+          auto it = memberDyn_.find(MemberDyn{tplSym, relPath});
+          if (it != memberDyn_.end()) {
+            ub = it->second.ub;
+            lb = it->second.lb;
+          }
+        }
+        if (!ub) {
+          const Dim& d0 = arrTy.dims[0];
+          ub = i64(d0.ub);
+          lb = i64(d0.lb);
+        }
+        
+        llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
+        long long rest = 1;
+        for (size_t k = 1; k < arrTy.dims.size(); ++k)
+          rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
+        if (rest != 1)
+          extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
+        
+        llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
+        
+        llvm::Value* fieldPtr = sretBuf;
+        const Type* curTy = &rty;
+        for (size_t i = 0; i < relPath.size(); ++i) {
+          unsigned f = relPath[i];
+          fieldPtr = b_.CreateStructGEP(llvmTy(*curTy), fieldPtr, f, "ret.gep");
+          curTy = &curTy->members[f]->ty;
+        }
+        llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
+        if (packedMemberPath(rty, relPath))
+          sp->setAlignment(llvm::Align(1));
+        
+        memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
+      }
+    } else {
+      sretBuf = entryAlloca(llvmTy(rty), "sret");
+    }
+  }
+  
+  if (rty.isStruct() || rty.isChar()) {
+    if (!sretBuf)
+      sretBuf = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+    args.push_back(sretBuf);
+  }
   // Evaluate each actual once for this call (rule 78): the scope keeps the
   // materialized values alive across the argument loop and the hidden length
   // arguments that follow it.
@@ -14610,10 +14870,109 @@ Val IRGen::emitExpr(HExpr* e) {
     std::vector<Symbol*> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
     std::vector<llvm::Value*> args;
     llvm::Value* sretPtr = nullptr;
+    
+    // Detect dynamic member paths in callee's return type (rule 13).
+    const HProc* calleeHProc = nullptr;
+    std::string returnsStructName;
+    std::vector<std::vector<unsigned>> retDynMemberPaths;
+    Symbol* calleeSym = e->sym;
+    
+    if (callee) {
+      // Internal procedure call.
+      auto it = procToHProc_.find(callee);
+      if (it != procToHProc_.end())
+        calleeHProc = it->second;
+      returnsStructName = callee->returnsStructName;
+      if (calleeHProc)
+        retDynMemberPaths = calleeHProc->retDynMemberPaths;
+    } else if (en && calleeSym->entryRetDynMemberPaths.size() > 0) {
+      // External entry call.
+      retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
+    }
+    
     if (rty.isStruct() || rty.isChar()) {
       // Hidden-buffer result (rules 127 and (34),(37)): the caller allocates
       // the result buffer and passes its address as the first argument.
-      sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+      // For structures with dynamic members (rule 13), also allocate dynamic
+      // member buffers in the caller's frame.
+      if (rty.isStruct() && !retDynMemberPaths.empty()) {
+        // Allocate sret buffer and dynamic member buffers.
+        sretPtr = entryAlloca(llvmTy(rty), "sret");
+        
+        // Find template structure symbol in caller's scope.
+        Symbol* tplSym = nullptr;
+        if (!returnsStructName.empty()) {
+          for (Symbol* sym : curProc_->localSyms)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->paramSyms)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->directUses)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->env)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+        }
+        
+        // Create synthetic symbol for return value bounds.
+        std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
+        auto retSym = std::make_unique<Symbol>();
+        retSym->name = retSymName;
+        retSym->ty = rty;
+        retSym->kind = Symbol::Var;
+        retSym->irName = "%" + retSymName;
+        Symbol* retSymPtr = retSym.get();
+        ownedRetSyms_.push_back(std::move(retSym));
+        
+        for (const auto& relPath : retDynMemberPaths) {
+          const Type& arrTy = structPathType(rty, relPath);
+          const Type& elTy = arrTy.elementType();
+          llvm::Type* elLLVM = llvmTy(elTy);
+          
+          llvm::Value* ub = nullptr;
+          llvm::Value* lb = nullptr;
+          if (tplSym) {
+            auto it = memberDyn_.find(MemberDyn{tplSym, relPath});
+            if (it != memberDyn_.end()) {
+              ub = it->second.ub;
+              lb = it->second.lb;
+            }
+          }
+          if (!ub) {
+            const Dim& d0 = arrTy.dims[0];
+            ub = i64(d0.ub);
+            lb = i64(d0.lb);
+          }
+          
+          llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
+          long long rest = 1;
+          for (size_t k = 1; k < arrTy.dims.size(); ++k)
+            rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
+          if (rest != 1)
+            extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
+          
+          llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
+          
+          llvm::Value* fieldPtr = sretPtr;
+          const Type* curTy = &rty;
+          for (size_t i = 0; i < relPath.size(); ++i) {
+            unsigned f = relPath[i];
+            fieldPtr = b_.CreateStructGEP(llvmTy(*curTy), fieldPtr, f, "ret.gep");
+            curTy = &curTy->members[f]->ty;
+          }
+          llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
+          if (packedMemberPath(rty, relPath))
+            sp->setAlignment(llvm::Align(1));
+          
+          memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
+        }
+      } else {
+        sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+      }
       args.push_back(sretPtr);
     }
     // Evaluate each actual once for this call (rule 78).
