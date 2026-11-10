@@ -239,6 +239,8 @@ struct HStmt {
   HExprP openIdent = nullptr;
   HExprP openLinesize = nullptr;
   HExprP openPagesize = nullptr;
+  // CLOSE options (rule (103))
+  HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )

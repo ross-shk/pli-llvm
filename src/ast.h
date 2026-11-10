@@ -183,11 +183,12 @@ struct DeclItem {
    bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
    bool reserved = false;         // RESERVED (ADR-203): no init
-   bool unionAttr = false;        // UNION (ADR-202): overlay with next member
-   bool labelAttr = false;        // LABEL (rule (21)): label variable
-   bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
-   bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
-bool dataAttr = false;         // a computational/string data attribute was given
+    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
+    bool labelAttr = false;        // LABEL (rule (21)): label variable
+    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+    bool printAttr = false;        // PRINT (rule 40): stream file with page/line formatting
+    bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
+    bool dataAttr = false;         // a computational/string data attribute was given
                                    // on this item (used to validate GENERIC)
     // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
     std::vector<std::pair<std::string, Type>> genericEntries;
@@ -335,6 +336,8 @@ struct Stmt {
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
+  // CLOSE options (rule (103))
+  ExprP closeIdent = nullptr;   // IDENT ( expression )
 // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
 // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
 // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).

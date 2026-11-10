@@ -239,6 +239,13 @@ void pli_file_set_pagesize(long long slot, long long n) {
   if (slot >= 0 && slot < PLI_MAX_FILES && n > 0)
     rt_pli_pagesize[slot] = (int)n;
 }
+void pli_file_set_ident(long long slot, const char *label, long long len) {
+  if (slot < 0 || slot >= PLI_MAX_FILES) return;
+  // Implementation-dependent: on z/OS, writes tape label.
+  // On POSIX: no-op for stream/record files.
+  // Store for potential future use (e.g., DEBUG output).
+  (void)label; (void)len;
+}
 
 /* FILE ( f ) input routing (rule 105): rt_next_char reads from the named file. */
 void pli_get_select(long long slot) {

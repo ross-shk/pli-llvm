@@ -698,6 +698,7 @@ private:
   static std::vector<unsigned char> packBitInit(const Expr* ini, int nbits);
   Val charTemp(int len); // alloca [len x i8]
   Val charOf(HExpr* e);  // materialise a character value
+  Val convertToChar(const Val& v, SourceLoc loc); // numeric -> CHAR for IDENT
   // Hidden result buffer for a character function (rules (34),(37)): a
   // `CHAR(*) VARYING` result (rule (18)) gets a caller-sized max
   // (kStarRetMax) so the callee never writes past the buffer; other results

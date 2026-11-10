@@ -1986,6 +1986,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(12)");
           item.sym->fileAttr = true;
           item.sym->fileNonprint = item.nonprint;
+          item.sym->filePrint = item.printAttr;
           item.sym->fileSlot = nextFileSlot_++;
           storage_.pop_back();
         }
@@ -5454,15 +5455,51 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (s->kind == Stmt::Open) {
       // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE take expressions.
       if (s->openIdent)
-        typeExpr(s->openIdent.get(), sc, p);
-      if (s->openLinesize)
+        typeExpr(s->openIdent.get(), sc, p); // any scalar type, converted to CHAR for label
+      if (s->openLinesize) {
         typeExpr(s->openLinesize.get(), sc, p);
-      if (s->openPagesize)
+        if (!s->openLinesize->ty.isFixed())
+          d_.error(s->openLinesize->loc, "LINESIZE expression must be numeric", "(101)");
+      }
+      if (s->openPagesize) {
         typeExpr(s->openPagesize.get(), sc, p);
-      if (s->openInput && (s->openLinesize || s->openPagesize))
-        d_.error(s->loc, "LINESIZE/PAGESIZE are not valid on an INPUT file", "(101)");
-      if (s->openRecord && (s->openLinesize || s->openPagesize))
-        d_.error(s->loc, "LINESIZE/PAGESIZE are STREAM-only options", "(101)");
+        if (!s->openPagesize->ty.isFixed())
+          d_.error(s->openPagesize->loc, "PAGESIZE expression must be numeric", "(101)");
+      }
+
+      // Validate combinations (rule 101)
+      // LINESIZE: only for STREAM/PRINT output files
+      // OUTPUT without RECORD = STREAM OUTPUT
+      // PRINT = STREAM PRINT (filePrint)
+      // STREAM = STREAM
+      // INPUT without RECORD = STREAM INPUT
+      // RECORD = RECORD (not STREAM)
+      bool isRecord = s->openRecord;
+      bool isPrint = s->fileSym && s->fileSym->filePrint;
+      bool isStream = false;
+      if (isRecord) {
+        isStream = false;
+      } else if (isPrint) {
+        isStream = true;
+      } else if (s->openInput) {
+        isStream = true;
+      } else {
+        // OUTPUT or default without RECORD = STREAM
+        isStream = true;
+      }
+
+      if (s->openLinesize && !isStream && !isPrint) {
+        d_.error(s->openLinesize->loc, "LINESIZE only valid for STREAM or PRINT files", "(101)");
+      }
+      if (s->openPagesize && !isPrint) {
+        d_.error(s->openPagesize->loc, "PAGESIZE only valid for PRINT files", "(101)");
+      }
+      // IDENT: no restriction (implementation-dependent)
+    }
+    if (s->kind == Stmt::Close) {
+      // CLOSE options (rule (103)): IDENT takes an expression.
+      if (s->closeIdent)
+        typeExpr(s->closeIdent.get(), sc, p); // any scalar type, converted to CHAR for label
     }
     break;
   case Stmt::Goto:

@@ -2626,6 +2626,12 @@ void Parser::parseDeclTail(DeclItem& item) {
         item.nonprint = true;
         continue;
       }
+      if (w == "PRINT") {
+        // PRINT (rule 40): stream file with page/line formatting.
+        advance();
+        item.printAttr = true;
+        continue;
+      }
       break; // not an attribute: next declaration item or end
     }
     if (at(Tok::LParen)) { // bare precision or dimension
@@ -5003,6 +5009,7 @@ StmtP Parser::parseOpen() {
              "(101)");
   else if (st->openUpdate && st->openInput)
     d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
+
   expect(Tok::Semi, "(100)");
   return st;
 }
@@ -5034,7 +5041,7 @@ StmtP Parser::parseClose() {
       // accepted as no-op per TR 25.084.
       advance();
       if (eat(Tok::LParen)) {
-        (void)parseExpr(); // parse for syntax validation, then discard
+        st->closeIdent = parseExpr();
         expect(Tok::RParen, "(103)");
       } else {
         d_.error(cur().loc, "CLOSE IDENT requires a parenthesized argument", "(103)");

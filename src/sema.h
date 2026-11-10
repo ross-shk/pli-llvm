@@ -28,6 +28,7 @@ struct Symbol {
   bool isCond = false;     // DECLARE name CONDITION; (rule 9) programmer-named condition
   bool fileAttr = false;   // FILE variable (rules 39,40): a named file
   bool fileNonprint = false; // NONPRINT (ADR-204): stream writes to this file discarded
+  bool filePrint = false;    // PRINT (rule 40): stream file with page/line formatting
   int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))

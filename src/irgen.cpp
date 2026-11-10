@@ -8982,9 +8982,6 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
 }
 
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
-// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
-// OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
-// binary record runtime.
 void IRGen::emitOpen(HStmt* s) {
   Symbol* f = s->fileSym;
   llvm::Value* name = globalString(s->openTitle);
@@ -9001,18 +8998,50 @@ void IRGen::emitOpen(HStmt* s) {
     if (s->openPagesize)
       b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
                     {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+    if (s->openIdent) {
+      Val v = emitExpr(s->openIdent.get());
+      if (!v.ty.isChar()) {
+        v = convertToChar(v, s->openIdent->loc);
+      }
+      // Ensure v.ptr and v.len are valid
+      if (!v.ptr || !v.len) {
+        d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
+        Val dst = charTemp(24);
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), dst.ptr, dst.len});
+      } else {
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), v.ptr, v.len});
+      }
+    }
     return;
   }
-   b_.CreateCall(
-       runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-       {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-        i64(f->fileNonprint ? 1 : 0)});
+  b_.CreateCall(
+      runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
+      {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+       i64(f->fileNonprint ? 1 : 0)});
   if (s->openLinesize)
     b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                   {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
   if (s->openPagesize)
     b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
                   {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+  if (s->openIdent) {
+    Val v = emitExpr(s->openIdent.get());
+    if (!v.ty.isChar()) {
+      v = convertToChar(v, s->openIdent->loc);
+    }
+    // Ensure v.ptr and v.len are valid
+    if (!v.ptr || !v.len) {
+      d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
+      Val dst = charTemp(24);
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(f), dst.ptr, dst.len});
+    } else {
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(f), v.ptr, v.len});
+    }
+  }
 }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
@@ -9512,6 +9541,22 @@ void IRGen::emitRecordRead(HStmt* s) {
 
 // CLOSE (rules 102,103): close the FILE variable's slot.
 void IRGen::emitClose(HStmt* s) {
+  if (s->closeIdent) {
+    Val v = emitExpr(s->closeIdent.get());
+    if (!v.ty.isChar()) {
+      v = convertToChar(v, s->closeIdent->loc);
+    }
+    // Ensure v.ptr and v.len are valid
+    if (!v.ptr || !v.len) {
+      d_.error(s->closeIdent->loc, "internal: IDENT value missing pointer or length", "(103)");
+      Val dst = charTemp(24);
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(s->fileSym), dst.ptr, dst.len});
+    } else {
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(s->fileSym), v.ptr, v.len});
+    }
+  }
   b_.CreateCall(runtimeFn("pli_file_close"), {fileSlotValue(s->fileSym)});
 }
 
@@ -14022,6 +14067,30 @@ Val IRGen::charOf(HExpr* e) {
     emitCharOfFloat(dst.ptr, dst.len, v.reg);
   } else {
     llvm::Value* iv = toI64(convert(v, Type::fixedBin(31, 0), e->loc));
+    emitCharOfFixed(dst.ptr, dst.len, iv);
+  }
+  return dst;
+}
+
+// Convert any scalar value to CHAR for IDENT (implementation-dependent label).
+// IBM: IDENT value is a character label.
+Val IRGen::convertToChar(const Val& v, SourceLoc loc) {
+  if (v.ty.isChar()) {
+    // Ensure v.len is valid for Char types
+    if (!v.len) {
+      d_.error(loc, "internal: CHAR value missing length in IDENT", "(101)");
+      Val dst = charTemp(24);
+      dst.len = i64(24);
+      return dst;
+    }
+    return v;
+  }
+  // Numeric -> CHAR via CHAR(n) built-in
+  Val dst = charTemp(24); // reasonable default length
+  if (v.ty.k == TK::Float) {
+    emitCharOfFloat(dst.ptr, dst.len, v.reg);
+  } else {
+    llvm::Value* iv = toI64(convert(v, Type::fixedBin(31, 0), loc));
     emitCharOfFixed(dst.ptr, dst.len, iv);
   }
   return dst;
