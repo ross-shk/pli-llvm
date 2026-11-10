@@ -5149,14 +5149,20 @@ void IRGen::allocaLocals(HProc* p) {
     if (!dynUb_.count(s)) {
       std::vector<llvm::Value*> ubs(s->ty.dims.size(), nullptr);
       std::vector<llvm::Value*> lbs(s->ty.dims.size(), nullptr);
-      if (s->dynUb)
-        ubs[0] = toI64(emitExpr(s->dynUb));
-      else if (s->ty.dims[0].adj)
-        ubs[0] = i64(s->ty.dims[0].ub);
-      else if (s->ty.dims[0].dyn)
-        ubs[0] = i64(s->ty.dims[0].ub);
-      if (s->dynLb)
-        lbs[0] = toI64(emitExpr(s->dynLb));
+      // Evaluate bounds for ALL dynamic axes (Wave 2: later axes may be dynamic).
+      for (size_t k = 0; k < s->ty.dims.size(); ++k) {
+        const Dim& d = s->ty.dims[k];
+        HExpr* ue = (k < s->dynUbAxes.size()) ? s->dynUbAxes[k] : (k == 0 ? s->dynUb : nullptr);
+        HExpr* le = (k < s->dynLbAxes.size()) ? s->dynLbAxes[k] : (k == 0 ? s->dynLb : nullptr);
+        if (ue)
+          ubs[k] = toI64(emitExpr(ue));
+        else if (d.dyn || d.adj)
+          ubs[k] = i64(d.ub);
+        if (le)
+          lbs[k] = toI64(emitExpr(le));
+        else if (d.lbDyn)
+          lbs[k] = i64(d.lb);
+      }
       dynUb_[s] = std::move(ubs);
       dynLb_[s] = std::move(lbs);
     }
@@ -8708,6 +8714,14 @@ void IRGen::emitAllocate(HStmt* s) {
       if (elemSz <= 0)
         elemSz = 1;
       llvm::Value* total = i64(elemSz);
+      // For BASED arrays with dynamic later axes (Wave 2), re-evaluate all
+      // dynamic axis bounds at ALLOCATE time so bounds checks use the current
+      // values (which may have changed since procedure entry due to INIT etc.).
+      std::vector<llvm::Value*> allocUbs, allocLbs;
+      if (bsym->ty.isDynamic()) {
+        allocUbs.resize(bsym->ty.dims.size());
+        allocLbs.resize(bsym->ty.dims.size());
+      }
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
         // A per-ALLOCATE extent overrides the DECLARE bound (rule (89)); sema
@@ -8717,17 +8731,24 @@ void IRGen::emitAllocate(HStmt* s) {
           ub = toI64(emitExpr(bbounds[0].ub.get()), s->loc);
         else if (k == 0 && bsym->dynUb)
           ub = toI64(emitExpr(bsym->dynUb), s->loc);
+        else if (d.dyn && k < bsym->dynUbAxes.size() && bsym->dynUbAxes[k])
+          ub = toI64(emitExpr(bsym->dynUbAxes[k]), s->loc);
         llvm::Value* lb =
             (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
-        if (k == 0) {
-          // Later references check against the ALLOCATE-time extent, which
-          // may differ from the entry-evaluated one when the bound changed.
-          dynUb_[bsym] = {ub};
-          if (d.lbDyn && bsym->dynLb)
-            dynLb_[bsym] = {lb};
+        if (d.lbDyn && k < bsym->dynLbAxes.size() && bsym->dynLbAxes[k])
+          lb = toI64(emitExpr(bsym->dynLbAxes[k]), s->loc);
+        // Update dope vectors for all dynamic axes at ALLOCATE time so that
+        // subsequent references use the ALLOCATE-time bounds.
+        if (d.dyn) {
+          allocUbs[k] = ub;
+          allocLbs[k] = lb;
         }
         llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "bheap.e1"), i64(1), "bheap.ext");
         total = b_.CreateMul(total, ext, "bheap.tot");
+      }
+      if (!allocUbs.empty()) {
+        dynUb_[bsym] = std::move(allocUbs);
+        dynLb_[bsym] = std::move(allocLbs);
       }
       sz = total;
     }
@@ -12302,9 +12323,9 @@ long long IRGen::arrayExtent(const Type& arr) {
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
-                                     const std::vector<HExprP>& idxs, SourceLoc,
-                                     const std::vector<llvm::Value*>& dynUbs,
-                                     const std::vector<llvm::Value*>& dynLbs) {
+                                      const std::vector<HExprP>& idxs, SourceLoc,
+                                      const std::vector<llvm::Value*>& dynUbs,
+                                      const std::vector<llvm::Value*>& dynLbs) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 

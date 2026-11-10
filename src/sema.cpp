@@ -5232,17 +5232,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       }
       // A dynamic-extent BASED heap array (rules (25),(89)): ALLOCATE sizes
       // the block from the live DECLARE bounds, so a bare `ALLOCATE x SET(p)`
-      // is served. Element types and later-axis dynamics were already gated at
-      // DECLARE; a dynamic axis past the first cannot reach here silently.
-      if (bsym->ty.isArray() && bsym->ty.isDynamic()) {
-        for (size_t k = 1; k < bsym->ty.dims.size(); ++k)
-          if (bsym->ty.dims[k].dyn || bsym->ty.dims[k].lbDyn) {
-            d_.error(s->allocBase[i]->loc,
-                     "ALLOCATE over a dynamic non-first axis is not implemented in this stage",
-                     "(13)");
-            break;
-          }
-      }
+      // is served. Element types and later-axis dynamics are now supported
+      // (Wave 2): all axes can have runtime bounds, evaluated at entry.
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
       bool hasCharLen = (i < s->allocCharLen.size() && s->allocCharLen[i]);
       // Type the per-ALLOCATE bound expressions first so their symbols resolve.
