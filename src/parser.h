@@ -222,6 +222,9 @@ private:
   // Deep-copy a FormatItem (recursive for nested items and subs).
   FormatItem cloneFormatItem(const FormatItem& f);
 
+  // Deep-clone an InitItem (recursive for nested items).
+  InitItem cloneInitItem(const InitItem& item);
+
   // --- INITIAL itemlist (rules 26-31) ---------------------------------
   // Parse a comma-separated list of INITIAL items, stopping at the enclosing
   // ')'. Returns the item tree for sema to expand.

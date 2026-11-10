@@ -1575,12 +1575,6 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
-      if (base.init)
-        d_.error(floc, "INITIAL in a factored declaration is not implemented in this stage",
-                 "(26)");
-      if (base.initCall)
-        d_.error(floc, "INITIAL CALL in a factored declaration is not implemented in this stage",
-                 "(27)");
       if (!base.dynBounds.empty())
         d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
                  "(13)");
@@ -1603,15 +1597,104 @@ StmtP Parser::parseDeclare() {
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
         item.genericEntries = base.genericEntries;
+        item.sawStatic = base.sawStatic;
+
+        // Deep-clone INITIAL itemlist, scalar INITIAL, and INITIAL CALL for each factored name
+        for (const auto& initItem : base.initItems) {
+          item.initItems.push_back(cloneInitItem(initItem));
+        }
+        item.init = base.init ? cloneExpr(base.init.get()) : nullptr;
+        item.initCall = base.initCall ? cloneExpr(base.initCall.get()) : nullptr;
+
         st->decls.push_back(std::move(item));
       }
     } else {
-      DeclItem item;
-      if (!parseDeclItem(item)) {
-        resync();
-        return st;
+      // Check for structure factored declaration: level-number (names) ...
+      // e.g., DECLARE 1 (R1, R2), 2 A FIXED, ... INITIAL(...)
+      int factoredLevel = 0;
+      SourceLoc levelLoc;
+      if (at(Tok::Number) && !cur().isFloat) {
+        factoredLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+        if (factoredLevel > kMaxStructureLevel) {
+          d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+          factoredLevel = 0;
+        }
+        levelLoc = cur().loc;
+        advance();
+        if (at(Tok::LParen)) {
+          // Structure factored declaration: level (names) ...
+          advance(); // (
+          std::vector<std::pair<std::string, SourceLoc>> names;
+          for (;;) {
+            if (at(Tok::Word)) {
+              names.push_back({cur().text, cur().loc});
+              advance();
+            } else {
+              d_.error(cur().loc, "expected a name in factored declaration", "(11)");
+              break;
+            }
+            if (!eat(Tok::Comma))
+              break;
+          }
+          expect(Tok::RParen, "(11)");
+          if (names.empty())
+            d_.error(levelLoc, "factored declaration has no names", "(11)");
+          DeclItem base;
+          parseDeclTail(base);
+          if (!base.dynBounds.empty())
+            d_.error(levelLoc, "dynamic bounds in a factored declaration are not implemented in this stage",
+                     "(13)");
+          for (auto& [n, nl] : names) {
+            DeclItem item;
+            item.name = n;
+            item.loc = nl;
+            item.level = factoredLevel;
+            item.ty = base.ty;
+            item.isEntry = base.isEntry;
+            item.extName = base.extName;
+            item.entryParams = base.entryParams;
+            item.entryByValue = base.entryByValue;
+            item.controlled = base.controlled;
+            item.like = base.like;
+            item.picture = base.picture;
+            item.fileAttr = base.fileAttr;
+            item.nonprint = base.nonprint;
+            item.genericEntries = base.genericEntries;
+            item.sawStatic = base.sawStatic;
+
+            // Deep-clone INITIAL itemlist, scalar INITIAL, and INITIAL CALL for each factored name
+            for (const auto& initItem : base.initItems) {
+              item.initItems.push_back(cloneInitItem(initItem));
+            }
+            item.init = base.init ? cloneExpr(base.init.get()) : nullptr;
+            item.initCall = base.initCall ? cloneExpr(base.initCall.get()) : nullptr;
+
+            st->decls.push_back(std::move(item));
+          }
+          // After the structure factored names, continue to parse the remaining
+          // members (level 2, 3, etc.) as part of the same structure.
+          // This is handled by the normal parseDeclItem flow below.
+        } else {
+          // Not a factored declaration, put back and parse normally
+          // We need to re-parse this as a normal declaration item
+          // But we already consumed the number, so create a DeclItem manually
+          DeclItem item;
+          item.level = factoredLevel;
+          // Continue to parse the rest of the declaration
+          if (!parseDeclItem(item)) {
+            resync();
+            return st;
+          }
+          st->decls.push_back(std::move(item));
+        }
+      } else {
+        DeclItem item;
+        if (!parseDeclItem(item)) {
+          resync();
+          return st;
+        }
+        st->decls.push_back(std::move(item));
       }
-      st->decls.push_back(std::move(item));
     }
     if (!eat(Tok::Comma))
       break;
@@ -3260,6 +3343,18 @@ FormatItem Parser::cloneFormatItem(const FormatItem& f) {
     for (const auto& it : f.items) {
       c.items.push_back(cloneFormatItem(it));
     }
+  }
+  return c;
+}
+
+// Deep-clone an InitItem (recursive for nested items).
+InitItem Parser::cloneInitItem(const InitItem& item) {
+  InitItem c;
+  c.kind = item.kind;
+  c.factor = item.factor;
+  c.value = item.value ? cloneExpr(item.value.get()) : nullptr;
+  for (const auto& nested : item.items) {
+    c.items.push_back(cloneInitItem(nested));
   }
   return c;
 }
