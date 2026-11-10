@@ -1,0 +1,2 @@
+after read set(p), x=10                      
+PASS record_set

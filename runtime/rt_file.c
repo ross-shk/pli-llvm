@@ -174,6 +174,8 @@ struct kix_state {
 };
 static struct kix_state rt_kix[PLI_MAX_FILES];
 
+#include <unistd.h>
+
 /* CLOSE (rule 102): close the file in `slot` and release the slot. */
 void pli_file_close(long long slot) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
@@ -695,6 +697,89 @@ unsigned char pli_record_read_bit(long long slot) {
   return v;
 }
 
+/* Sequential READ with SET(ptr): store the record buffer address into the POINTER.
+ * The buffer is the target variable's memory (passed by reference for char,
+ * or a local static buffer for scalar types). The pointer is valid until the
+ * next I/O operation on the same file. */
+static __thread long long rt_record_read_buffer_fixed;
+static __thread double rt_record_read_buffer_float;
+static __thread unsigned char rt_record_read_buffer_bit;
+
+long long pli_record_read_fixed_set(long long slot, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long off;
+  if (!f)
+    return 0;
+  rt_rec_read_lock();
+  off = pli_plat_ftell(f);
+  if (rt_fbroker_fread(&rt_record_read_buffer_fixed, sizeof rt_record_read_buffer_fixed, f) != sizeof rt_record_read_buffer_fixed) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  rt_rec_set(slot, off, (long long)sizeof rt_record_read_buffer_fixed);
+  rt_rec_read_unlock();
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_record_read_buffer_fixed;
+  return rt_record_read_buffer_fixed;
+}
+
+double pli_record_read_float_set(long long slot, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long off;
+  if (!f)
+    return 0;
+  rt_rec_read_lock();
+  off = pli_plat_ftell(f);
+  if (rt_fbroker_fread(&rt_record_read_buffer_float, sizeof rt_record_read_buffer_float, f) != sizeof rt_record_read_buffer_float) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  rt_rec_set(slot, off, (long long)sizeof rt_record_read_buffer_float);
+  rt_rec_read_unlock();
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_record_read_buffer_float;
+  return rt_record_read_buffer_float;
+}
+
+void pli_record_read_char_set(long long slot, char *p, long long len, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long off;
+  if (!f || len <= 0)
+    return;
+  rt_rec_read_lock();
+  off = pli_plat_ftell(f);
+  if (rt_fbroker_fread(p, (size_t)len, f) != (size_t)len) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return;
+  }
+  rt_rec_set(slot, off, len);
+  rt_rec_read_unlock();
+  if (setPtr)
+    *(char**)setPtr = p;
+}
+
+unsigned char pli_record_read_bit_set(long long slot, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long off;
+  if (!f)
+    return 0;
+  rt_rec_read_lock();
+  off = pli_plat_ftell(f);
+  if (rt_fbroker_fread(&rt_record_read_buffer_bit, sizeof rt_record_read_buffer_bit, f) != sizeof rt_record_read_buffer_bit) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  rt_rec_set(slot, off, (long long)sizeof rt_record_read_buffer_bit);
+  rt_rec_read_unlock();
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_record_read_buffer_bit;
+  return rt_record_read_buffer_bit;
+}
+
 /* REWRITE (rule (112)): overwrite the current record in place. The transfer
  * type fixes the record size, so a different size is an ERROR (see
  * rt_rec_current). */
@@ -853,7 +938,7 @@ long long pli_record_read_keyed_fixed(long long slot, char *key, long long keyle
     return 0;
   }
   if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
@@ -869,7 +954,7 @@ double pli_record_read_keyed_float(long long slot, char *key, long long keylen) 
     return 0;
   }
   if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
@@ -902,12 +987,92 @@ unsigned char pli_record_read_keyed_bit(long long slot, char *key, long long key
     return 0;
   }
   if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
   rt_kix[slot].current_idx = idx + 1;
   return v;
+}
+
+/* Keyed READ with SET(ptr): store the record buffer address into the POINTER.
+ * Uses thread-local buffers for scalar types. The pointer is valid until the
+ * next I/O operation on the same file. */
+static __thread long long rt_keyed_read_buffer_fixed;
+static __thread double rt_keyed_read_buffer_float;
+static __thread unsigned char rt_keyed_read_buffer_bit;
+
+long long pli_record_read_keyed_fixed_set(long long slot, char *key, long long keylen, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&rt_keyed_read_buffer_fixed, sizeof rt_keyed_read_buffer_fixed, 1, f) != 1) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  rt_kix[slot].current_idx = idx + 1;
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_keyed_read_buffer_fixed;
+  return rt_keyed_read_buffer_fixed;
+}
+
+double pli_record_read_keyed_float_set(long long slot, char *key, long long keylen, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&rt_keyed_read_buffer_float, sizeof rt_keyed_read_buffer_float, 1, f) != 1) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  rt_kix[slot].current_idx = idx + 1;
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_keyed_read_buffer_float;
+  return rt_keyed_read_buffer_float;
+}
+
+void pli_record_read_keyed_char_set(long long slot, char *key, long long keylen,
+                                    char *p, long long len, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long idx;
+  if (!f || len <= 0 || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return;
+  }
+  long long rlen = rt_kix[slot].ent[idx].len;
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(p, 1, (size_t)(rlen < len ? rlen : len), f) != (size_t)(rlen < len ? rlen : len)) {
+    pli_signal_error("READ from keyed file failed");
+    return;
+  }
+  rt_kix[slot].current_idx = idx + 1;
+  if (setPtr)
+    *(char**)setPtr = p;
+}
+
+unsigned char pli_record_read_keyed_bit_set(long long slot, char *key, long long keylen, char *setPtr) {
+  FILE *f = rec_file(slot, "READ");
+  long long idx;
+  if (!f || (idx = kix_lookup(slot, key, keylen)) < 0) {
+    if (f) pli_signal_error("READ key not found");
+    return 0;
+  }
+  if (pli_plat_fseek(f, rt_kix[slot].ent[idx].off, SEEK_SET) != 0 ||
+      pli_plat_fread(&rt_keyed_read_buffer_bit, sizeof rt_keyed_read_buffer_bit, 1, f) != 1) {
+    pli_signal_error("READ from keyed file failed");
+    return 0;
+  }
+  rt_kix[slot].current_idx = idx + 1;
+  if (setPtr)
+    *(char**)setPtr = (char*)&rt_keyed_read_buffer_bit;
+  return rt_keyed_read_buffer_bit;
 }
 
 /* REWRITE ... KEYFROM(k): look up the key and rewrite the record in place. */
@@ -1048,8 +1213,10 @@ void pli_record_skip_keyed(long long slot, long long n) {
   st->current_idx = new_idx;
 }
 
-/* KEYED POSITION: find the key and set current_idx to idx + 1 for subsequent
- * sequential reads (used for KEY with IGNORE). Returns 1 on success, 0 on failure. */
+/* KEYED POSITION: find the key and set current_idx to idx for subsequent
+ * sequential reads (used for KEY with IGNORE). Returns 1 on success, 0 on failure.
+ * This positions AT the found key, so IGNORE(n) skips n records starting from
+ * that key, and the subsequent read gets the (n+1)th record from the key. */
 int pli_record_position_keyed(long long slot, char *key, long long keylen) {
   if (slot < 0 || slot >= PLI_MAX_FILES) return 0;
   FILE *f = rt_pli_files[slot];
@@ -1057,7 +1224,7 @@ int pli_record_position_keyed(long long slot, char *key, long long keylen) {
   if (!f || !st->is_keyed || !st->ent || st->count == 0) return 0;
   long long idx = kix_find(slot, key, keylen);
   if (idx < 0) return 0;
-  st->current_idx = idx + 1;
+  st->current_idx = idx;
   return 1;
 }
 
@@ -1079,7 +1246,7 @@ long long pli_record_read_keyed_next_fixed(long long slot) {
   long long off = st->ent[idx].off;
   long long v = 0;
   if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
@@ -1102,7 +1269,7 @@ double pli_record_read_keyed_next_float(long long slot) {
   long long off = st->ent[idx].off;
   double v = 0;
   if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }
@@ -1147,7 +1314,7 @@ unsigned char pli_record_read_keyed_next_bit(long long slot) {
   long long off = st->ent[idx].off;
   unsigned char v = 0;
   if (pli_plat_fseek(f, off, SEEK_SET) != 0 ||
-      pli_plat_fread(&v, sizeof v, 1, f) != sizeof v) {
+      pli_plat_fread(&v, sizeof v, 1, f) != 1) {
     pli_signal_error("READ from keyed file failed");
     return 0;
   }

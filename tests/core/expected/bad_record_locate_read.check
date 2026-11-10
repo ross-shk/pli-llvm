@@ -1,0 +1,1 @@
+CHECK: error: LOCATE is valid only on WRITE

@@ -141,6 +141,7 @@ static bool needsWideDecLit(const HExpr* e, const Type& t) {
 
 // Compute the record size in bytes for a given PL/I type (for RECORD I/O).
 // FIXED: 8 bytes, FLOAT: 8 bytes, BIT(1): 1 byte, CHAR(n): n bytes.
+// Structures: sum of member sizes.
 static long long recordSize(const Type& ty) {
   switch (ty.k) {
   case TK::FixedBin:
@@ -151,6 +152,13 @@ static long long recordSize(const Type& ty) {
     return 1; // BIT(1) is 1 byte
   case TK::Char:
     return ty.len;
+  case TK::Struct: {
+    long long total = 0;
+    for (const auto& m : ty.members) {
+      total += recordSize(m->ty);
+    }
+    return total;
+  }
   default:
     return 8; // fallback
   }
@@ -9021,57 +9029,54 @@ void IRGen::emitOpen(HStmt* s) {
 void IRGen::emitRecordWrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
-  // LOCATE(v): write from the BASED variable's current buffer.
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+
+  // LOCATE(v): write from the BASED variable's current buffer using LOCATE protocol.
   if (s->locateVar) {
-    // For a based variable, we need the locator pointer (the buffer address),
-    // not the based variable's value. The locateVar expression is the based
-    // variable reference; its locPtr is the locator pointer expression.
-    HExpr* locExpr = s->locateVar.get();
-    llvm::Value* buf = nullptr;
-    if (locExpr && locExpr->locPtr) {
-      // Emit the locator pointer expression to get the buffer address.
-      Val locVal = emitExpr(locExpr->locPtr.get());
-      buf = locVal.reg; // locator pointer is a scalar pointer value
-    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
-      // Fallback: the based variable's symbol should have its locator.
-      // This case handles when locPtr is not directly on the expression.
-      // For now, try to get the address of the based variable.
-      buf = addressOf(locExpr->sym);
-    }
-    
-    if (!buf) {
-      // Should not happen for valid based variables
-      return;
-    }
-    
-    // EVENT(ev): reset before the operation.
-    llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
     if (eventAddr)
       b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
-    // Determine record size from the based variable's type.
-    const Type& ty = s->locateVar->ty;
-    llvm::Value* recSize = i64(recordSize(ty));
-    
-    // Write the record from the based variable's buffer.
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), buf)});
-      break;
-    case TK::Float:
-      b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), buf)});
-      break;
-    case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), buf), b_.getInt8Ty(), "rbit");
-      b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
-      break;
+    // For now, use the old write functions directly from the based variable's locator
+    // The LOCATE protocol (pli_record_locate_begin/commit) will be integrated later
+    HExpr* locExpr = s->locateVar.get();
+    llvm::Value* srcBuf = nullptr;
+    if (locExpr && locExpr->locPtr) {
+      Val locVal = emitExpr(locExpr->locPtr.get());
+      srcBuf = locVal.reg;
+    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
+      srcBuf = addressOf(locExpr->sym);
     }
-    case TK::Char:
-      b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, buf, recSize});
-      break;
-    default:
-      break; // other types are diagnosed by sema
+    
+    if (srcBuf) {
+      const Type& ty = s->locateVar->ty;
+      llvm::Value* recSize = i64(recordSize(ty));
+      
+      // Write the record from the based variable's buffer.
+      switch (ty.k) {
+      case TK::FixedBin:
+      case TK::FixedDec:
+        b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), srcBuf)});
+        break;
+      case TK::Float:
+        b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), srcBuf)});
+        break;
+      case TK::Bit: {
+        llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), srcBuf), b_.getInt8Ty(), "rbit");
+        b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+        break;
+      }
+      case TK::Char:
+        b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, srcBuf, recSize});
+        break;
+      case TK::Struct: {
+        // For structures, write the entire buffer
+        b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, srcBuf, recSize});
+        break;
+      }
+      default:
+        break; // other types are diagnosed by sema
+      }
     }
 
     // EVENT(ev): complete after the operation.
@@ -9080,8 +9085,6 @@ void IRGen::emitRecordWrite(HStmt* s) {
     return;
   }
 
-  // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9287,37 +9290,77 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
   } else if (hasKey) {
     // Normal keyed read by key
     Val k = emitExpr(s->keyOpt.get());
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
-      v.ty = Type::fixedBin(63, 0);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Float:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
-      v.ty = Type::flt(6);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Bit: {
-      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
-      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-      v.ty = Type::bit();
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    case TK::Char: {
-      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-      b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
-                    {slot, k.ptr, k.len, buf, i64(ty.len)});
-      v.ptr = buf;
-      v.len = i64(ty.len);
-      v.ty = ty;
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    default:
-      break; // other types are diagnosed by sema
+    if (s->setTarget) {
+      Val setVal = emitExpr(s->setTarget.get());
+      switch (ty.k) {
+      case TK::FixedBin:
+      case TK::FixedDec:
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed_set"),
+                              {slot, k.ptr, k.len, setVal.reg});
+        v.ty = Type::fixedBin(63, 0);
+        storeTo(t->sym, v, s->loc);
+        break;
+      case TK::Float:
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float_set"),
+                              {slot, k.ptr, k.len, setVal.reg});
+        v.ty = Type::flt(6);
+        storeTo(t->sym, v, s->loc);
+        break;
+      case TK::Bit: {
+        llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit_set"),
+                                       {slot, k.ptr, k.len, setVal.reg});
+        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+        v.ty = Type::bit();
+        storeTo(t->sym, v, s->loc);
+        break;
+      }
+      case TK::Char: {
+        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+        b_.CreateCall(runtimeFn("pli_record_read_keyed_char_set"),
+                      {slot, k.ptr, k.len, buf, i64(ty.len), setVal.reg});
+        v.ptr = buf;
+        v.len = i64(ty.len);
+        v.ty = ty;
+        storeTo(t->sym, v, s->loc);
+        break;
+      }
+      default:
+        break;
+      }
+    } else {
+      // Normal keyed read without SET
+      switch (ty.k) {
+      case TK::FixedBin:
+      case TK::FixedDec:
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
+        v.ty = Type::fixedBin(63, 0);
+        storeTo(t->sym, v, s->loc);
+        break;
+      case TK::Float:
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
+        v.ty = Type::flt(6);
+        storeTo(t->sym, v, s->loc);
+        break;
+      case TK::Bit: {
+        llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
+        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+        v.ty = Type::bit();
+        storeTo(t->sym, v, s->loc);
+        break;
+      }
+      case TK::Char: {
+        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+        b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
+                      {slot, k.ptr, k.len, buf, i64(ty.len)});
+        v.ptr = buf;
+        v.len = i64(ty.len);
+        v.ty = ty;
+        storeTo(t->sym, v, s->loc);
+        break;
+      }
+      default:
+        break;
+      }
     }
     // KEYTO( variable ): copy the search key into the KEYTO target.
     if (s->keyToOpt) {
@@ -9326,6 +9369,10 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
     }
   } else {
     // No KEY, no IGNORE: read next from current position (sequential on keyed)
+    // SET without KEY on keyed is not meaningful; fall through to normal read
+    if (s->setTarget) {
+      d_.warn(s->loc, "SET without KEY on keyed file may not be meaningful");
+    }
     switch (ty.k) {
     case TK::FixedBin:
     case TK::FixedDec:
@@ -9356,14 +9403,11 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
       break;
     }
     default:
-      break; // other types are diagnosed by sema
+      break;
     }
   }
 
-  // SET(p): store the record buffer address into the POINTER sink.
-  if (s->setTarget) {
-    // Placeholder for future implementation
-  }
+  // SET(p): handled inline in each branch above
 
   // EVENT(ev): complete after the operation.
   if (eventAddr)
@@ -9461,44 +9505,75 @@ void IRGen::emitRecordRead(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
   Val v;
-  switch (ty.k) {
-  case TK::FixedBin:
-  case TK::FixedDec:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
-    v.ty = Type::fixedBin(63, 0);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Float:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_float"), {slot});
-    v.ty = Type::flt(6);
-    storeTo(t->sym, v, s->loc);
-    break;
-  case TK::Bit: {
-    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit"), {slot});
-    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-    v.ty = Type::bit();
-    storeTo(t->sym, v, s->loc);
-    break;
-  }
-  case TK::Char: {
-    // Fill a reusable entry buffer, then assign into the target.
-    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-    b_.CreateCall(runtimeFn("pli_record_read_char"), {slot, buf, i64(ty.len)});
-    v.ptr = buf;
-    v.len = i64(ty.len);
-    v.ty = ty;
-    storeTo(t->sym, v, s->loc);
-    break;
-  }
-  default:
-    break; // other types are diagnosed by sema
-  }
-
-  // SET(p): store the record buffer address into the POINTER sink.
   if (s->setTarget) {
-    // For now, we read into a buffer and store its address.
-    // The runtime helper pli_record_read_into will be used in the future.
-    // For now, emit a placeholder.
+    Val setVal = emitExpr(s->setTarget.get());
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed_set"),
+                            {slot, setVal.reg});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_float_set"),
+                            {slot, setVal.reg});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit_set"),
+                                     {slot, setVal.reg});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_char_set"),
+                    {slot, buf, i64(ty.len), setVal.reg});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break;
+    }
+  } else {
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_float"), {slot});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit"), {slot});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_char"), {slot, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
+    }
   }
 
   // EVENT(ev): complete after the operation.

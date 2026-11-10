@@ -1,0 +1,1 @@
+CHECK: error: SET is valid only on READ or LOCATE

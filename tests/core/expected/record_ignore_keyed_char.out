@@ -1,0 +1,4 @@
+first=record 1        
+after ignore(2)=record 4        
+next=record 5        
+PASS
