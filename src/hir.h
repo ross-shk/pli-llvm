@@ -239,6 +239,10 @@ struct HStmt {
   HExprP openIdent = nullptr;
   HExprP openLinesize = nullptr;
   HExprP openPagesize = nullptr;
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  bool openBuffered = false;
+  bool openUnbuffered = false;
+  bool openExclusive = false;
   // CLOSE options (rule (103))
   HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.

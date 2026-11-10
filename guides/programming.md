@@ -1465,6 +1465,12 @@ is parsed and discarded (rule (103)), keeping hand-written source portable.
 diagnosed; it may appear on `declare f environment(...)` as an
 implementation-defined file attribute.
 
+`buffered`, `unbuffered`, and `exclusive` are accepted as file modifiers on
+both `declare file ...` and `open file(...) ...` (rules 39, 40, 100, 101).
+They are implementation-dependent attributes with no runtime effect in this
+compiler — the options are parsed, type-checked, and silently ignored, so
+hand-written source using them compiles and runs portably.
+
 An `open` that cannot open its file raises `undefinedfile(f)`. Without a
 handler the program stops with an error; a handler runs, and control resumes
 after the `open` with the file still closed:

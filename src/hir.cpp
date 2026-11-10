@@ -450,6 +450,10 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->openIdent = lowerExpr(s->openIdent.get());
   h->openLinesize = lowerExpr(s->openLinesize.get());
   h->openPagesize = lowerExpr(s->openPagesize.get());
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  h->openBuffered = s->openBuffered;
+  h->openUnbuffered = s->openUnbuffered;
+  h->openExclusive = s->openExclusive;
   h->closeIdent = lowerExpr(s->closeIdent.get());
   h->keyOpt = lowerExpr(s->keyOpt.get());
   h->keyToOpt = lowerExpr(s->keyToOpt.get());

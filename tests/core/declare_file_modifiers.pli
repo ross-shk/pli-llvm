@@ -1,0 +1,16 @@
+/* rules (39): DECLARE FILE with BUFFERED/UNBUFFERED/EXCLUSIVE. */
+ declare_file_modifiers: procedure options(main);
+     declare f file buffered;
+     declare g file unbuffered;
+     declare h file exclusive;
+     open file(f) title('buf.dat') output;
+     open file(g) title('unbuf.dat') output;
+     open file(h) title('excl.dat') output;
+     put file(f) list('buffered');
+     put file(g) list('unbuffered');
+     put file(h) list('exclusive');
+     close file(f);
+     close file(g);
+     close file(h);
+     put skip list('PASS declare_file_modifiers');
+ end declare_file_modifiers;

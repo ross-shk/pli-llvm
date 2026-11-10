@@ -2421,6 +2421,24 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (at(Tok::LParen)) skipParen("(39)");
         continue;
       }
+      if (w == "BUFFERED") {
+        // BUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.buffered = true;
+        continue;
+      }
+      if (w == "UNBUFFERED") {
+        // UNBUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.unbuffered = true;
+        continue;
+      }
+      if (w == "EXCLUSIVE") {
+        // EXCLUSIVE (rule 39): implementation-dependent file attribute.
+        advance();
+        item.exclusive = true;
+        continue;
+      }
       if (w == "TASK") {
         // task-attribute (rules (15),(79), QR2.8): a task name for CALL TASK.
         advance();
@@ -4993,6 +5011,12 @@ StmtP Parser::parseOpen() {
       d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
       advance();
       if (at(Tok::LParen)) skipParen("(101)");
+      continue;
+    }
+    if (atWord("BUFFERED") || atWord("UNBUFFERED") || atWord("EXCLUSIVE")) {
+      // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+      // file attributes; accepted with no runtime effect.
+      advance();
       continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");

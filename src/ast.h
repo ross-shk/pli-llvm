@@ -188,6 +188,10 @@ struct DeclItem {
     bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
     bool printAttr = false;        // PRINT (rule 40): stream file with page/line formatting
     bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
+    // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+    bool buffered = false;         // BUFFERED
+    bool unbuffered = false;       // UNBUFFERED
+    bool exclusive = false;        // EXCLUSIVE
     bool dataAttr = false;         // a computational/string data attribute was given
                                    // on this item (used to validate GENERIC)
     // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
@@ -336,6 +340,10 @@ struct Stmt {
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  bool openBuffered = false;    // BUFFERED
+  bool openUnbuffered = false;  // UNBUFFERED
+  bool openExclusive = false;   // EXCLUSIVE
   // CLOSE options (rule (103))
   ExprP closeIdent = nullptr;   // IDENT ( expression )
 // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the

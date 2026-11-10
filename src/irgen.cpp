@@ -9014,6 +9014,8 @@ void IRGen::emitOpen(HStmt* s) {
                       {fileSlotValue(f), v.ptr, v.len});
       }
     }
+    // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+    // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
     return;
   }
   b_.CreateCall(
@@ -9037,12 +9039,14 @@ void IRGen::emitOpen(HStmt* s) {
       Val dst = charTemp(24);
       b_.CreateCall(runtimeFn("pli_file_set_ident"),
                     {fileSlotValue(f), dst.ptr, dst.len});
-    } else {
-      b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                    {fileSlotValue(f), v.ptr, v.len});
+} else {
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), v.ptr, v.len});
+      }
     }
+    // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+    // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
   }
-}
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
