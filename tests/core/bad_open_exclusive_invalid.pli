@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): EXCLUSIVE requires DIRECT UPDATE. */
+bad_open_exclusive_invalid: procedure options(main);
+    declare f file;
+    open file(f) title('test.dat') output record sequential exclusive;
+end bad_open_exclusive_invalid;

@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): BACKWARDS requires RECORD SEQUENTIAL INPUT. */
+bad_open_backwards_invalid: procedure options(main);
+    declare f file;
+    open file(f) title('test.dat') output record sequential backwards;
+end bad_open_backwards_invalid;

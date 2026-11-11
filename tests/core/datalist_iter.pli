@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Data-list iteration (rule 111): iterative DO in datalists. */
+datalist_iter: procedure options(main);
+  declare a(10) fixed bin(31);
+  declare i fixed bin(31);
+  declare buf char(100);
+
+  /* Initialize array */
+  do i = 1 to 10; a(i) = i * 2; end;
+  
+  /* Single specification - iterative datalist per grammar:
+     EDIT ( ( (a(i)) DO i = 1 TO 10 ) ) (F(4))
+     Three levels: EDIT ( ( datalist ) formatlist )
+     where datalist = ( (a(i)) DO i = 1 TO 10 ) - an iterative datalist-element
+     containing datalist = (a(i)) - a single expression */
+  put string(buf) edit( (((a(i)) do i = 1 to 10)) ) (f(4));
+  
+  put skip list(buf);
+  
+  put skip list('PASS datalist_iter');
+end datalist_iter;

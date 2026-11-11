@@ -14464,3 +14464,86 @@ runtime cannot honour. GRAMMAR-COVERAGE.md rows (23), (26), (42), (91),
 program-lifetime storage keyed on declaring scope, not procedure (same bullet
 as the "parent frame" work planned in Wave 3 group 3); supporting
 expression-valued `INITIAL` on STATIC arrays is a later fold-user extension.
+
+---
+
+## ADR-385 — F(w,d,s) scale factor in edit-directed I/O (rules (50),(108))
+
+**Context.** The third operand of the `F` format item (`F(w,d,s)`) is a scale
+factor `s`: the value is multiplied by `10^s` before formatting on output, and
+divided by `10^s` after parsing on input (Y33-6003-0 §15748–15754). The
+implementation already served `F(w,d)` without the scale factor; the scale
+factor was accepted in the parser but not applied in the runtime formatters.
+
+**Decision.** Apply the scale factor in both PUT EDIT and GET EDIT paths:
+
+1. Parser: `parseFormatItemInto` already parses the optional third operand
+   `s` into `HFormatItem::s` (an `HExprP`). No change needed.
+2. IRGen (`emitPutEditItem` / `emitGetEditItem`): when `f.s` is present,
+   evaluate it at runtime and pass the scale factor to the runtime
+   formatters via new entry points:
+   - `pli_put_edit_float_scaled` / `pli_put_edit_fixed_scaled` for output
+   - `pli_get_edit_num_scaled` for input
+3. Runtime (`rt_edit.c`): implement the scaled variants:
+   - `pli_put_edit_float_scaled`: multiply the value by `10^fscale` before
+     calling the unscaled formatter.
+   - `pli_put_edit_fixed_scaled`: adjust the declared scale by `fscale`
+     (positive `fscale` multiplies the value; negative `fscale` increases
+     the declared scale) then call the unscaled formatter.
+   - `pli_get_edit_num_scaled`: parse the field, multiply by `10^fscale`,
+     return the scaled `double` for the caller to convert.
+
+**Consequences.** Tests `edit_scale.pli` and `format_scale_value.pli` pass
+with positive and negative scale factors. GRAMMAR-COVERAGE.md row (44)–(55)
+updated. The `E(w,d,s)` scale factor uses the same mechanism via
+`pli_put_edit_float_e_scaled`.
+
+---
+
+## ADR-386 — OPEN options classification (rules (100),(101))
+
+**Context.** TR 25.084 rule (101) lists the valid OPEN options. The compiler
+must classify each as operational (affects runtime behavior), implementation-
+dependent (accepted but no specified effect), or excluded (diagnosed).
+
+**Decision.** Classification of OPEN options in this compiler:
+
+| Option | Classification | Implementation |
+|--------|----------------|----------------|
+| `FILE(f)` | Required | Slot lookup, passed to runtime |
+| `TITLE('name')` | Operational | File path for `fopen`/`open` |
+| `INPUT` / `OUTPUT` / `UPDATE` | Operational | Mode for `fopen` (`r`, `w`, `r+`) |
+| `STREAM` / `PRINT` | Operational | Selects stream I/O path |
+| `RECORD` / `SEQUENTIAL` | Operational | Selects record I/O path |
+| `KEYED` / `DIRECT` | Operational | Keyed record I/O via `.dat` + `.kix` |
+| `IDENT(expr)` | Implementation-dependent | Expression evaluated for side effects, result discarded |
+| `LINESIZE(expr)` | Operational | Stored per-file, auto-wraps stream output at column |
+| `PAGESIZE(expr)` | Operational (partial) | Stored per-file, page counter tracked; ENDPAGE condition not implemented |
+| `ENVIRONMENT(...)` | Excluded (diagnosed) | Not a valid OPEN option per TR 25.084; valid only on `DECLARE FILE` (rule 39) |
+
+The `IDENT` option evaluates its argument expression at runtime (so side
+effects like function calls occur) but discards the result. This matches the
+"implementation-dependent user label" semantics: the standard imposes no
+requirement on what the implementation does with the value.
+
+**Consequences.** Tests `open_ident.pli`, `open_linesize.pli`,
+`open_pagesize.pli`, `open_linesize_pagesize.pli`, `close_ident.pli`,
+`bad_open_environment.pli` pass. GRAMMAR-COVERAGE.md row (100)–(103) updated.
+
+---
+
+## ADR-387 — RESERVED attribute as IBM Enterprise extension
+
+**Context.** TR 25.084 rule (15) lists the valid data attributes. `RESERVED`
+is not among them. IBM Enterprise PL/I supports `RESERVED` to reserve storage
+without initialization (similar to omitting `INITIAL` but explicitly marking
+the intent). The parser currently accepts it and diagnoses combination with
+`INITIAL`/`VALUE`/`INITIAL(CALL)`.
+
+**Decision.** Accept `RESERVED` as a documented IBM Enterprise extension.
+Record it in the Extensions table in GRAMMAR-COVERAGE.md. It has no codegen
+effect (storage is already uninitialized by default in this implementation).
+
+**Consequences.** Added to GRAMMAR-COVERAGE.md extensions table with test
+references `reserved_test.pli`, `bad_reserved_initial.pli`. No TR 25.084
+conformance claim for this feature.

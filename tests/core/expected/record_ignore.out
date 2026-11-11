@@ -1,0 +1,3 @@
+after ignore(2), x=30                      
+after ignore(1), x=50                      
+PASS record_ignore

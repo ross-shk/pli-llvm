@@ -1,0 +1,4 @@
+rec1=10                      
+after ignore(2) from rec2, x=40                      
+next=50                      
+PASS record_ignore_keyed

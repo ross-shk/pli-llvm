@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN BUFFERED option — buffered sequential record I/O. */
+open_buffered: procedure options(main);
+    declare f file;
+    open file(f) title('open_buffered.dat') output record sequential buffered;
+    write file(f) from(42);
+    close file(f);
+    put skip list('PASS open_buffered');
+end open_buffered;

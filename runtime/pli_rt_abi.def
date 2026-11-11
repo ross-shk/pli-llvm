@@ -244,6 +244,7 @@ PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
 PLI_FN(pli_string_get_close, VOID, (VOID))
 
 PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64, I64))    /* OPEN (100-103): slot, name, mode, nonprint(ADR-204) */
+PLI_FN(pli_file_open_ident, I32, (I64, CPTR, I64, I32))      /* OPEN IDENT (101): slot, ident_expr, ident_len, is_output */
 PLI_FN(pli_file_close, VOID, (I64))
 PLI_FN(pli_file_set_ident, VOID, (I64, CPTR, I64))        /* IDENT(expr) on OPEN/CLOSE: slot, label, len */
 PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
@@ -257,7 +258,7 @@ PLI_FN(pli_get_unselect, VOID, (VOID))
  * records — FIXED as 8 bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n)
  * as n raw bytes. A short READ (EOF) raises ERROR; ON ENDFILE stays
  * diagnosed. Mode 0 = INPUT, 1 = OUTPUT, like pli_file_open. */
-PLI_FN(pli_file_open_record, VOID, (I64, CPTR, I64, I64, I64))   /* OPEN RECORD (112): slot, name, mode, nonprint(ADR-204) */
+PLI_FN(pli_file_open_record, VOID, (I64, CPTR, I64, I64, I64, I64, I64))   /* OPEN RECORD: slot, name, namelen, mode, nonprint, buffering, backwards */
 PLI_FN(pli_record_write_fixed, VOID, (I64, I64))
 PLI_FN(pli_record_write_float, VOID, (I64, DOUBLE))
 PLI_FN(pli_record_write_char, VOID, (I64, PTR, I64))
@@ -272,12 +273,21 @@ PLI_FN(pli_record_read_float, DOUBLE, (I64))
 PLI_FN(pli_record_read_char, VOID, (I64, PTR, I64))
 PLI_FN(pli_record_read_bit, I8, (I64))
 
+/* BACKWARDS READ (rule 101): read record in reverse for RECORD SEQUENTIAL INPUT BACKWARDS. */
+PLI_FN(pli_record_read_fixed_backwards, I64, (I64))
+
+/* Sequential READ with SET(ptr): store record buffer address into POINTER. */
+PLI_FN(pli_record_read_fixed_set, I64, (I64, PTR))          /* returns value, stores buffer ptr */
+PLI_FN(pli_record_read_float_set, DOUBLE, (I64, PTR))
+PLI_FN(pli_record_read_char_set, VOID, (I64, PTR, I64, PTR))  /* slot, buf, buflen, setPtr */
+PLI_FN(pli_record_read_bit_set, I8, (I64, PTR))
+
 /* KEYED/DIRECT RECORD files (rules (112),(113), ADR-366): the data file holds
  * fixed-size binary records; a <name>.kix sidecar maps key -> (offset, length).
  * pli_file_open_keyed opens the data file and loads the sidecar; writes append
  * and index, reads look up the key, rewrites update in place, deletes shift the
  * tail; the sidecar is rewritten on close. Mode 0 = INPUT, 1 = OUTPUT, 2 = UPDATE. */
-PLI_FN(pli_file_open_keyed, VOID, (I64, CPTR, I64, I64, I64, I64))  /* slot, name, namelen, mode, nonprint, keyed=1 */
+PLI_FN(pli_file_open_keyed, VOID, (I64, CPTR, I64, I64, I64, I64, I64))  /* slot, name, namelen, mode, nonprint, keyed=1, exclusive */
 PLI_FN(pli_record_write_keyed_fixed, VOID, (I64, PTR, I64, I64))     /* slot, keyptr, keylen, value */
 PLI_FN(pli_record_write_keyed_float, VOID, (I64, PTR, I64, DOUBLE))
 PLI_FN(pli_record_write_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, valueptr, valuelen */
@@ -292,6 +302,12 @@ PLI_FN(pli_record_read_keyed_float, DOUBLE, (I64, PTR, I64))
 PLI_FN(pli_record_read_keyed_char, VOID, (I64, PTR, I64, PTR, I64))  /* slot, keyptr, keylen, buf, buflen */
 PLI_FN(pli_record_read_keyed_bit, I8, (I64, PTR, I64))
 
+/* Keyed READ with SET(ptr): store record buffer address into POINTER. */
+PLI_FN(pli_record_read_keyed_fixed_set, I64, (I64, PTR, I64, PTR))   /* slot, key, keylen, setPtr */
+PLI_FN(pli_record_read_keyed_float_set, DOUBLE, (I64, PTR, I64, PTR))
+PLI_FN(pli_record_read_keyed_char_set, VOID, (I64, PTR, I64, PTR, I64, PTR))  /* slot, key, keylen, buf, buflen, setPtr */
+PLI_FN(pli_record_read_keyed_bit_set, I8, (I64, PTR, I64, PTR))
+
 /* Record I/O options (rule 113): IGNORE, SET, LOCATE, UNLOCK */
 PLI_FN(pli_record_skip, VOID, (I64, I64, I64))                    /* IGNORE(n, rec_size): skip n records */
 PLI_FN(pli_record_skip_keyed, VOID, (I64, I64))                  /* KEYED IGNORE(n): skip n records in index */
@@ -304,22 +320,22 @@ PLI_FN(pli_record_unlock, VOID, (I64))                       /* UNLOCK: release 
 PLI_FN(pli_record_locate_begin, PTR, (I64))                  /* LOCATE: get buffer address for WRITE LOCATE */
 PLI_FN(pli_record_locate_commit, VOID, (I64))                /* LOCATE: commit the located record */
 
-/* Scale helpers for FIXED with negative scale and scale > precision */
-PLI_FN(pli_scale_decimal, VOID, (I64, I64, I64))     /* (val_lo, val_hi, scale) - 128-bit value as lo,hi halves */
-PLI_FN(pli_scale_binary, VOID, (I64, I64))           /* (val, scale) */
+ /* Scale helpers for FIXED with negative scale and scale > precision */
+ PLI_FN(pli_scale_decimal, VOID, (I64, I64, I64))     /* (val_lo, val_hi, scale) - 128-bit value as lo,hi halves */
+ PLI_FN(pli_scale_binary, VOID, (I64, I64))           /* (val, scale) */
 
-/* Multitasking (rules (79),(82),(83), QR2.8): EVENT completion flags are i32
- * words (0 incomplete, 1 complete) owned by PL/I variables; the runtime
- * serialises them behind one mutex+cond. TASK handles are opaque ids. */
-PLI_FN(pli_event_reset, VOID, (PTR))        /* CALL: mark the event incomplete */
-PLI_FN(pli_event_complete, VOID, (PTR))     /* task end: mark complete + wake */
-PLI_FN(pli_event_wait, VOID, (PTR))         /* WAIT(ev): until complete */
-PLI_FN(pli_wait_n, VOID, (PTR, I64, I64))   /* WAIT(evs)(k): array of addrs */
-PLI_FN(pli_event_status, I8, (PTR))         /* EVENT(ev) poll: 0/1 */
-PLI_FN(pli_delay, VOID, (I64))              /* DELAY(n): sleep n milliseconds */
-PLI_FN(pli_task_spawn, VOID, (PTR, PTR))    /* spawn wrapper(ctx), detached */
-PLI_FN(pli_task_spawn_p, VOID, (PTR, PTR, I64, I32)) /* spawn w/ priority */
-PLI_FN(pli_sched_main, VOID, (PTR))         /* run MAIN as a task (ADR-234) */
-PLI_FN(pli_task_note, VOID, (PTR))          /* CALL TASK: assign a handle id */
-PLI_FN(pli_task_priority_of, I32, (I64))    /* PRIORITY(t): read relative priority */
+ /* Multitasking (rules (79),(82),(83), QR2.8): EVENT completion flags are i32
+  * words (0 incomplete, 1 complete) owned by PL/I variables; the runtime
+  * serialises them behind one mutex+cond. TASK handles are opaque ids. */
+ PLI_FN(pli_event_reset, VOID, (PTR))        /* CALL: mark the event incomplete */
+ PLI_FN(pli_event_complete, VOID, (PTR))     /* task end: mark complete + wake */
+ PLI_FN(pli_event_wait, VOID, (PTR))         /* WAIT(ev): until complete */
+ PLI_FN(pli_wait_n, VOID, (PTR, I64, I64))   /* WAIT(evs)(k): array of addrs */
+ PLI_FN(pli_event_status, I8, (PTR))         /* EVENT(ev) poll: 0/1 */
+ PLI_FN(pli_delay, VOID, (I64))              /* DELAY(n): sleep n milliseconds */
+ PLI_FN(pli_task_spawn, VOID, (PTR, PTR))    /* spawn wrapper(ctx), detached */
+ PLI_FN(pli_task_spawn_p, VOID, (PTR, PTR, I64, I32)) /* spawn w/ priority */
+ PLI_FN(pli_sched_main, VOID, (PTR))         /* run MAIN as a task (ADR-234) */
+ PLI_FN(pli_task_note, VOID, (PTR))          /* CALL TASK: assign a handle id */
+ PLI_FN(pli_task_priority_of, I32, (I64))    /* PRIORITY(t): read relative priority */
 PLI_FN(pli_task_set_priority_of, VOID, (I64, I32)) /* PRIORITY(t)=n: set priority */

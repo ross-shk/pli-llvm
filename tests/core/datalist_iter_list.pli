@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Data-list iteration (rule 111): iterative DO in LIST-directed datalists. */
+datalist_iter_list: procedure options(main);
+  declare a(10) fixed bin(31);
+  declare i fixed bin(31);
+  declare buf char(100);
+
+  /* Initialize array */
+  do i = 1 to 10; a(i) = i * 2; end;
+  
+  /* Single specification - iterative datalist in LIST-directed */
+  put string(buf) list( ((a(i)) do i = 1 to 10) );
+  
+  put skip list(buf);
+  
+  put skip list('PASS datalist_iter_list');
+end datalist_iter_list;

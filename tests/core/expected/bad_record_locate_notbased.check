@@ -1,0 +1,1 @@
+CHECK: error: LOCATE requires a BASED variable

@@ -208,6 +208,8 @@ private:
   ExprP parseExprOrPlaceholder();
   ExprP parseUnary();
   ExprP parsePower();
+  // Parse a simple variable reference (VarRef or Subscript) for lvalue contexts.
+  ExprP parseReference();
   ExprP parsePrimary();
   // A ': ... :' enquiry designator (ADR-206/207/208): captures the raw words
   // between the colons for the five enquiry built-ins to interpret.

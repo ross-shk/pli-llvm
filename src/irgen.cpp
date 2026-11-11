@@ -9160,7 +9160,7 @@ void IRGen::emitOpen(HStmt* s) {
     b_.CreateCall(
         runtimeFn("pli_file_open_keyed"),
         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0), i64(1)});
+         i64(f->fileNonprint ? 1 : 0), i64(1), i64(s->openExclusive ? 1 : 0)});
     if (s->openLinesize)
       b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                     {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
@@ -9187,10 +9187,19 @@ void IRGen::emitOpen(HStmt* s) {
     // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
     return;
   }
-  b_.CreateCall(
-      runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-      {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-       i64(f->fileNonprint ? 1 : 0)});
+  if (s->openRecord) {
+    b_.CreateCall(
+        runtimeFn("pli_file_open_record"),
+        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+         i64(f->fileNonprint ? 1 : 0),
+         i64(s->openBuffered ? 1 : (s->openUnbuffered ? -1 : 0)),
+         i64(0) /* backwards - not yet supported */});
+  } else {
+    b_.CreateCall(
+        runtimeFn("pli_file_open"),
+        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+         i64(f->fileNonprint ? 1 : 0)});
+  }
   if (s->openLinesize)
     b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                   {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
@@ -11213,13 +11222,14 @@ void IRGen::emitGetEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   size_t di = 0;
   for (auto& f : s->formats) {
-    emitGetEditItem(f, s, di, defW);
+    emitGetEditItem(f, s, s->items, di, defW);
   }
 }
 
 // Emit a single edit-directed format item on input (rule 108).
-void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
-                            llvm::Value* defW) {
+void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
+                            const std::vector<HExprP>& items,
+                            size_t& di, llvm::Value* defW) {
   switch (f.kind) {
   case HFormatItem::X: {
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
@@ -11287,7 +11297,7 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
       size_t savedDi2 = di;
       di = itemDi;
       for (auto& item : f.items) {
-        emitGetEditItem(item, s, di, defW);
+        emitGetEditItem(item, s, items, di, defW);
       }
       di = savedDi2;
       b_.CreateBr(swDefault);

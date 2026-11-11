@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN PAGESIZE option with STREAM PRINT. */
+open_pagesize_valid: procedure options(main);
+    declare f file;
+    open file(f) title('open_pagesize_valid.dat') output stream print pagesize(20);
+    put file(f) list('hello');
+    close file(f);
+    put skip list('PASS open_pagesize_valid');
+end open_pagesize_valid;

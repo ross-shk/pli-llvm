@@ -1,0 +1,54 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Format iteration (rule (47)): nonpositive (≤0) repetition counts skip. */
+format_repeat_zero_neg: procedure options(main);
+    declare buf char(40);
+    declare a fixed bin(31);
+    declare c fixed bin(31);
+    declare n fixed bin(31);
+
+    /* Zero count skips the format group. */
+    a = 1;
+    put string(buf) edit(a) ((0)(f(4)), f(4));
+    get string(buf) edit(c) (f(4));
+    if c ^= 1 then do;
+        put skip list('FAIL zero count', c);
+        stop;
+    end;
+
+    /* Negative count skips the format group. */
+    a = 2;
+    put string(buf) edit(a) ((-1)(f(4)), f(4));
+    get string(buf) edit(c) (f(4));
+    if c ^= 2 then do;
+        put skip list('FAIL negative count', c);
+        stop;
+    end;
+
+    /* Variable negative count skips. */
+    n = -2;
+    a = 3;
+    put string(buf) edit(a) ((n)(f(4)), f(4));
+    get string(buf) edit(c) (f(4));
+    if c ^= 3 then do;
+        put skip list('FAIL variable negative count', c);
+        stop;
+    end;
+
+    /* Variable zero count skips. */
+    n = 0;
+    a = 4;
+    put string(buf) edit(a) ((n)(f(4)), f(4));
+    get string(buf) edit(c) (f(4));
+    if c ^= 4 then do;
+        put skip list('FAIL variable zero count', c);
+        stop;
+    end;
+
+    put skip list('PASS format_repeat_zero_neg');
+end format_repeat_zero_neg;
+
+f: proc(k) returns(fixed bin(31));
+    declare k fixed bin(31);
+    return(k);
+end f;
