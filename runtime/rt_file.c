@@ -202,7 +202,11 @@ struct kix_state {
 };
 static struct kix_state rt_kix[PLI_MAX_FILES];
 
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 /* CLOSE (rule 102): close the file in `slot` and release the slot. */
 void pli_file_close(long long slot) {
