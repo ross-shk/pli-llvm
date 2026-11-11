@@ -39,7 +39,7 @@ void FactStore::beginProc(const std::string& name) {
       cur_ = static_cast<int>(i);
       return;
     }
-  procs_.push_back(ProcFacts{name, {}});
+  procs_.push_back(ProcFacts{name, "", "", false, false, {}});
   cur_ = static_cast<int>(procs_.size()) - 1;
 }
 

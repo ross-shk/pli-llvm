@@ -1615,7 +1615,7 @@ StmtP Parser::parseDeclare() {
         // Distribute initItems if applicable
         if (distributeInit && idx < base.initItems.size()) {
           item.initItems.clear();
-          item.initItems.push_back(cloneInitItem(base.initItems[idx]));
+          item.initItems.push_back(::cloneInitItem(base.initItems[idx]));
           // For scalar INITIAL: if the distributed item is a single Value,
           // or a Group containing a single Value, also set the back-compat
           // `init` field (used by sema for M0 path).

@@ -344,7 +344,7 @@ private:
                        const std::vector<Val>& dataItems);
 void emitGetEditItems(HStmt* s);
   void emitGetEditItem(const HFormatItem& f, HStmt* s,
-                       const std::vector<HDataItem>& items,
+                       const std::vector<HExprP>& items,
                        size_t& di, llvm::Value* defW);
   // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
   // and ";"-terminated; names are compile-time globals, values reuse the

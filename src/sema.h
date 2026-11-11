@@ -371,7 +371,6 @@ private:
   // New nodes are typed here; the caller re-validates. Returns false after
   // a diagnostic.
   bool expandAggregateItems(Stmt* s, Scope* sc, Proc* p, bool isGet);
-  bool expandAggregateItemsInGroup(EditGroup& group, Scope* sc, Proc* p, bool isGet);
   bool checkAssignable(const Type& dst, const Type& src, SourceLoc loc, const char* what);
   // Later-axis match for a multi-axis adjustable parameter (rules (13),(36)):
   // the actual must be an array of the same rank with equal static later axes,
