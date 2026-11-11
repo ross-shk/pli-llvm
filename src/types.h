@@ -81,9 +81,18 @@ struct Dim {
 // Checked arithmetic for extent/stride/byte calculations.
 struct CheckedMath {
   // Returns {result, overflowed}
-  static std::pair<int64_t, bool> mul(int64_t a, int64_t b);
-  static std::pair<int64_t, bool> add(int64_t a, int64_t b);
-  static std::pair<int64_t, bool> sub(int64_t a, int64_t b);
+  static inline std::pair<int64_t, bool> mul(int64_t a, int64_t b) {
+    __int128 r = (__int128)a * (__int128)b;
+    return {(int64_t)r, r > INT64_MAX || r < INT64_MIN};
+  }
+  static inline std::pair<int64_t, bool> add(int64_t a, int64_t b) {
+    __int128 r = (__int128)a + (__int128)b;
+    return {(int64_t)r, r > INT64_MAX || r < INT64_MIN};
+  }
+  static inline std::pair<int64_t, bool> sub(int64_t a, int64_t b) {
+    __int128 r = (__int128)a - (__int128)b;
+    return {(int64_t)r, r > INT64_MAX || r < INT64_MIN};
+  }
 };
 
 // One axis descriptor — fully self-describing at runtime.
