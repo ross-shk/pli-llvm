@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN BUFFERED option — buffered sequential record I/O behavior test. */
+open_buffered_behavior: procedure options(main);
+    declare f file;
+    declare x fixed bin(31);
+    /* Create a file with multiple records */
+    open file(f) title('open_buffered_behavior.dat') output record sequential buffered;
+    write file(f) from(1);
+    write file(f) from(2);
+    write file(f) from(3);
+    close file(f);
+    /* Read back and verify */
+    open file(f) title('open_buffered_behavior.dat') input record sequential;
+    read file(f) into(x);
+    if x = 1 then put skip list('PASS open_buffered_behavior');
+    else put skip list('FAIL open_buffered_behavior: expected 1 got', x);
+    read file(f) into(x);
+    if x = 2 then put skip list('PASS open_buffered_behavior');
+    else put skip list('FAIL open_buffered_behavior: expected 2 got', x);
+    read file(f) into(x);
+    if x = 3 then put skip list('PASS open_buffered_behavior');
+    else put skip list('FAIL open_buffered_behavior: expected 3 got', x);
+    close file(f);
+end open_buffered_behavior;

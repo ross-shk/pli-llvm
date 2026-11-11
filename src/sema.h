@@ -32,6 +32,7 @@ struct Symbol {
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
+  bool openBackwards = false; // OPEN ... BACKWARDS (rule 101): read in reverse
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration

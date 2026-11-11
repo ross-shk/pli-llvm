@@ -73,6 +73,16 @@ int pli_plat_getchar(void) { return getchar(); }
 int pli_plat_fputc(int c, FILE *fp) { return fputc(c, fp); }
 int pli_plat_fflush(FILE *fp) { return fflush(fp); }
 int pli_plat_ferror(FILE *fp) { return ferror(fp); }
+/* Buffering control (for BUFFERED/UNBUFFERED OPEN options). */
+int pli_plat_setvbuf(FILE *fp, char *buf, int mode, size_t size) {
+#if defined(__APPLE__) || defined(__MACH__)
+  /* macOS doesn't export setvbuf from libc.dylib; accept but no-op. */
+  (void)fp; (void)buf; (void)mode; (void)size;
+  return 0;
+#else
+  return setvbuf(fp, buf, mode, size);
+#endif
+}
 /* Sequential record positioning (REWRITE/DELETE, rule (112)). POSIX uses the
  * ISO seek/tell pair: `long` is 64-bit on the LP64 targets, and a record file
  * larger than 2 GiB is out of scope for this slice. Windows needs the 64-bit

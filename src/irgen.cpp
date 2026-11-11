@@ -9003,12 +9003,13 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
      (void)emitExpr(s->openIdent.get());
    llvm::Value* name = globalString(s->openTitle);
    long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
-   if (s->openKeyed || s->openDirect) {
-     // Keyed/direct organisation: open the data file and load the .kix sidecar.
-     b_.CreateCall(
-         runtimeFn("pli_file_open_keyed"),
-         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-          i64(f->fileNonprint ? 1 : 0), i64(1)});
+if (s->openKeyed || s->openDirect) {
+      // Keyed/direct organisation: open the data file and load the .kix sidecar.
+      int exclusive = s->openExclusive ? 1 : 0;
+      b_.CreateCall(
+          runtimeFn("pli_file_open_keyed"),
+          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+           i64(f->fileNonprint ? 1 : 0), i64(1), i64(exclusive)});
      if (s->openLinesize)
        b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                      {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
@@ -9029,10 +9030,21 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
      }
      return;
    }
-    b_.CreateCall(
-        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0)});
+    if (s->openRecord) {
+      int buffering = 0;  // 0 = default, 1 = buffered, -1 = unbuffered
+      if (s->openBuffered) buffering = 1;
+      else if (s->openUnbuffered) buffering = -1;
+      int backwards = s->openBackwards ? 1 : 0;
+      b_.CreateCall(
+          runtimeFn("pli_file_open_record"),
+          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+           i64(f->fileNonprint ? 1 : 0), i64(buffering), i64(backwards)});
+    } else {
+      b_.CreateCall(
+          runtimeFn("pli_file_open"),
+          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+           i64(f->fileNonprint ? 1 : 0)});
+    }
    if (s->openLinesize)
      b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                    {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
@@ -9570,10 +9582,16 @@ void IRGen::emitRecordRead(HStmt* s) {
       break;
     }
   } else {
+    // Check if the file was opened with BACKWARDS for reverse reading
+    bool backwards = s->fileSym && s->fileSym->openBackwards;
     switch (ty.k) {
     case TK::FixedBin:
     case TK::FixedDec:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+      if (backwards) {
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed_backwards"), {slot});
+      } else {
+        v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+      }
       v.ty = Type::fixedBin(63, 0);
       storeTo(t->sym, v, s->loc);
       break;

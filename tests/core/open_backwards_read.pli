@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN BACKWARDS option — verify reverse read order. */
+open_backwards_read: procedure options(main);
+    declare f file;
+    declare x fixed bin(31);
+    /* First create a file with some records */
+    open file(f) title('open_backwards_read.dat') output record sequential;
+    write file(f) from(1);
+    write file(f) from(2);
+    write file(f) from(3);
+    write file(f) from(4);
+    write file(f) from(5);
+    close file(f);
+    /* Now open with BACKWARDS and read - should get last record first */
+    open file(f) title('open_backwards_read.dat') input record sequential backwards;
+    read file(f) into(x);
+    if x = 5 then put skip list('PASS open_backwards_read');
+    else put skip list('FAIL open_backwards_read: expected 5 got', x);
+    read file(f) into(x);
+    if x = 4 then put skip list('PASS open_backwards_read');
+    else put skip list('FAIL open_backwards_read: expected 4 got', x);
+    read file(f) into(x);
+    if x = 3 then put skip list('PASS open_backwards_read');
+    else put skip list('FAIL open_backwards_read: expected 3 got', x);
+    read file(f) into(x);
+    if x = 2 then put skip list('PASS open_backwards_read');
+    else put skip list('FAIL open_backwards_read: expected 2 got', x);
+    read file(f) into(x);
+    if x = 1 then put skip list('PASS open_backwards_read');
+    else put skip list('FAIL open_backwards_read: expected 1 got', x);
+    close file(f);
+end open_backwards_read;

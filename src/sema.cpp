@@ -5579,6 +5579,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       s->fileSym->openRecord = s->openRecord;
       s->fileSym->openKeyed = s->openKeyed;
       s->fileSym->openDirect = s->openDirect;
+      s->fileSym->openBackwards = s->openBackwards;
     }
     if (s->kind == Stmt::Open) {
       // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE take expressions.

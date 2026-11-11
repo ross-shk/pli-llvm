@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN EXCLUSIVE with DIRECT UPDATE — golden test. */
+open_exclusive_direct: procedure options(main);
+    declare f file;
+    declare x fixed bin(31);
+    /* Create a keyed file */
+    open file(f) title('open_exclusive_direct.dat') output record direct;
+    write file(f) from(100) keyfrom('key1');
+    write file(f) from(200) keyfrom('key2');
+    close file(f);
+    /* Open with EXCLUSIVE for DIRECT UPDATE */
+    open file(f) title('open_exclusive_direct.dat') update record direct exclusive;
+    read file(f) into(x) key('key1');
+    if x = 100 then put skip list('PASS open_exclusive_direct');
+    else put skip list('FAIL open_exclusive_direct: expected 100 got', x);
+    read file(f) into(x) key('key2');
+    if x = 200 then put skip list('PASS open_exclusive_direct');
+    else put skip list('FAIL open_exclusive_direct: expected 200 got', x);
+    close file(f);
+end open_exclusive_direct;

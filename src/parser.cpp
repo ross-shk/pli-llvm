@@ -1472,7 +1472,7 @@ StmtP Parser::parseOn(Proc* owner) {
     SourceLoc l = cur().loc;
     advance();
     st->snap = true;
-    d_.warn(l, "SNAP is accepted but has no effect in this stage", "(91)");
+    d_.remark(l, "SNAP prefix accepted (implementation-dependent); no runtime effect", "(91)");
   }
   // ON ERROR SYSTEM; establishes the system action (rule 91).
   if (atWord("SYSTEM") && peek().kind == Tok::Semi) {
@@ -5312,6 +5312,7 @@ StmtP Parser::parseClose() {
     if (atWord("IDENT")) {
       // CLOSE IDENT(expr) (rule 103): implementation-dependent user label;
       // accepted as no-op per TR 25.084.
+      SourceLoc prevLoc = cur().loc;
       advance();
       if (eat(Tok::LParen)) {
         (void)parseExpr(); // parse for syntax validation, then discard
@@ -5321,6 +5322,7 @@ StmtP Parser::parseClose() {
         resync();
         return nullptr;
       }
+      d_.remark(prevLoc, "CLOSE IDENT accepted (implementation-dependent no-op)", "(103)");
       continue;
     }
     d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");

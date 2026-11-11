@@ -57,6 +57,8 @@ int pli_plat_getchar(void);
 int pli_plat_fputc(int c, FILE *fp);
 int pli_plat_fflush(FILE *fp);
 int pli_plat_ferror(FILE *fp);
+/* Buffering control (for BUFFERED/UNBUFFERED OPEN options). */
+int pli_plat_setvbuf(FILE *fp, char *buf, int mode, size_t size);
 /* Sequential record positioning (REWRITE/DELETE, rule 112): a seek/tell pair
  * plus truncation after a DELETE shifts the tail down. */
 int pli_plat_fseek(FILE *fp, long long off, int whence);

@@ -196,6 +196,7 @@ struct kix_state {
   long long cap;
   int dirty;
   int is_keyed;    /* 1 when this slot was opened KEYED/DIRECT */
+  int exclusive;   /* 1 when EXCLUSIVE was specified on OPEN (for DIRECT UPDATE) */
   long long current_idx; /* current index position for sequential READ (IGNORE) */
   char kixpath[512]; /* sidecar path, populated at open for save-on-close */
 };
@@ -316,6 +317,7 @@ static void kix_reset(long long slot) {
   st->count = st->cap = 0;
   st->dirty = 0;
   st->is_keyed = 0;
+  st->exclusive = 0;
   st->current_idx = 0;
 }
 
@@ -517,9 +519,12 @@ static int rt_rec_current(long long slot, long long want, long long *off, const 
  * unhandled and raises ERROR (rule (97)). An UPDATE open permits REWRITE of
  * the current record and DELETE of it in place. Images are host byte order
  * (implementation-defined).
- * nonprint=1 (ADR-204): like pli_file_open, output is silently discarded. */
+ * nonprint=1 (ADR-204): like pli_file_open, output is silently discarded.
+ * buffering: 0 = default, 1 = buffered, -1 = unbuffered (for RECORD SEQUENTIAL).
+ * backwards: 1 = position to end of file for reverse reading (INPUT RECORD SEQUENTIAL). */
 void pli_file_open_record(long long slot, const char *name, long long namelen,
-                          long long mode, long long nonprint) {
+                          long long mode, long long nonprint,
+                          long long buffering, long long backwards) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
@@ -542,15 +547,28 @@ void pli_file_open_record(long long slot, const char *name, long long namelen,
   rt_pli_nonprint[slot] = 0;
   /* mode 0 = INPUT, 1 = OUTPUT, 2 = UPDATE (read and write in place). */
   rt_pli_files[slot] = pli_plat_fopen(buf, mode == 2 ? "r+b" : (mode ? "wb" : "rb"));
+  if (rt_pli_files[slot]) {
+    /* Apply buffering mode if specified. */
+    if (buffering == 1) {
+      pli_plat_setvbuf(rt_pli_files[slot], NULL, _IOFBF, 65536);  // 64KB full buffering
+    } else if (buffering == -1) {
+      pli_plat_setvbuf(rt_pli_files[slot], NULL, _IONBF, 0);  // unbuffered
+    }
+    /* BACKWARDS: for INPUT RECORD SEQUENTIAL, position to end of file. */
+    if (backwards && mode == 0) {
+      fseek(rt_pli_files[slot], 0, SEEK_END);
+    }
+  }
   if (!rt_pli_files[slot])
     rt_undef_file(slot);
 }
 
 /* KEYED/DIRECT OPEN: open the data file and load the <name>.kix sidecar index.
  * OUTPUT mode opens r+b when the file exists (read+write for REWRITE/DELETE)
- * and wb when it does not; INPUT opens rb; UPDATE opens r+b. */
+ * and wb when it does not; INPUT opens rb; UPDATE opens r+b.
+ * exclusive: 1 when EXCLUSIVE was specified (requires DIRECT UPDATE). */
 void pli_file_open_keyed(long long slot, const char *name, long long namelen,
-                         long long mode, long long nonprint, long long keyed) {
+                         long long mode, long long nonprint, long long keyed, long long exclusive) {
   if (slot < 0 || slot >= PLI_MAX_FILES)
     return;
   char buf[256];
@@ -561,6 +579,7 @@ void pli_file_open_keyed(long long slot, const char *name, long long namelen,
   rt_rec_reset(slot);
   kix_reset(slot);
   rt_kix[slot].is_keyed = 1;
+  rt_kix[slot].exclusive = (int)exclusive;
   if (rt_pli_files[slot]) {
     rt_file_out_detach(rt_pli_files[slot]);
     pli_plat_fclose(rt_pli_files[slot]);
@@ -720,6 +739,38 @@ unsigned char pli_record_read_bit(long long slot) {
     return 0;
   }
   rt_rec_set(slot, off, (long long)sizeof v);
+  rt_rec_read_unlock();
+  return v;
+}
+
+/* BACKWARDS READ (rule 101): read records in reverse order for RECORD SEQUENTIAL
+ * INPUT opened with BACKWARDS. Seeks back one record, reads it, and updates
+ * the current record position. Only FIXED BIN is implemented for now. */
+long long pli_record_read_fixed_backwards(long long slot) {
+  FILE *f = rec_file(slot, "READ BACKWARDS");
+  long long v = 0;
+  long long off;
+  if (!f)
+    return 0;
+  rt_rec_read_lock();
+  off = pli_plat_ftell(f);
+  /* Need at least 8 bytes (one FIXED BIN record) to read backwards. */
+  if (off < 8) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  /* Seek back one record (8 bytes for FIXED BIN). */
+  fseek(f, off - 8, SEEK_SET);
+  if (rt_fbroker_fread(&v, sizeof v, f) != sizeof v) {
+    rt_rec_read_unlock();
+    rt_rec_endfile(slot);
+    return 0;
+  }
+  /* After reading, seek back to the start of the record we just read
+   * so the next backwards read will get the previous record. */
+  fseek(f, off - 8, SEEK_SET);
+  rt_rec_set(slot, off - 8, (long long)sizeof v);
   rt_rec_read_unlock();
   return v;
 }

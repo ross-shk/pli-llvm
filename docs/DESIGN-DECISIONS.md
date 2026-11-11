@@ -14529,3 +14529,21 @@ requirement on what the implementation does with the value.
 **Consequences.** Tests `open_ident.pli`, `open_linesize.pli`,
 `open_pagesize.pli`, `open_linesize_pagesize.pli`, `close_ident.pli`,
 `bad_open_environment.pli` pass. GRAMMAR-COVERAGE.md row (100)–(103) updated.
+
+---
+
+## ADR-387 — RESERVED attribute as IBM Enterprise extension
+
+**Context.** TR 25.084 rule (15) lists the valid data attributes. `RESERVED`
+is not among them. IBM Enterprise PL/I supports `RESERVED` to reserve storage
+without initialization (similar to omitting `INITIAL` but explicitly marking
+the intent). The parser currently accepts it and diagnoses combination with
+`INITIAL`/`VALUE`/`INITIAL(CALL)`.
+
+**Decision.** Accept `RESERVED` as a documented IBM Enterprise extension.
+Record it in the Extensions table in GRAMMAR-COVERAGE.md. It has no codegen
+effect (storage is already uninitialized by default in this implementation).
+
+**Consequences.** Added to GRAMMAR-COVERAGE.md extensions table with test
+references `reserved_test.pli`, `bad_reserved_initial.pli`. No TR 25.084
+conformance claim for this feature.
