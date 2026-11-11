@@ -300,6 +300,8 @@ private:
   void emitDoWhile(HStmt* s);
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
+  void emitPutListValue(const Val& v);
+  void emitPutIter(HExpr* e);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
   // ADR-233: the stream calls of one statement, deferred so the whole record
   // is written or read under the matching lock. A program without a task

@@ -42,6 +42,7 @@ struct HExpr {
     ComplexLit, // imaginary constant (rule 139): fval is the imaginary part
     Convert,    // explicit conversion (HIR only)
     TypeTag,    // ': ... :' enquiry designator (ADR-206/207/208): raw text in sval
+    PutIter,    // PUT LIST iteration: (expr DO var = from TO to [BY by])
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // the value's type after sema typing
@@ -64,6 +65,12 @@ struct HExpr {
 
   Type convTo{}; // Convert: the target type of the conversion
   bool isLabel = false;
+  // PutIter (PUT LIST iteration): fields for the DO specification
+  HExprP putIterExpr;   // the expression to evaluate each iteration
+  std::string putIterVar; // control variable name
+  HExprP putIterFrom;   // starting value
+  HExprP putIterTo;     // ending value
+  HExprP putIterBy;     // step value (null = 1)
 };
 
 // The AST and HIR expression kinds are not in the same order (HIR adds the

@@ -4058,7 +4058,59 @@ StmtP Parser::parsePut() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            st->items.push_back(parseExpr());
+            // Check for PUT LIST iteration: ( expr DO var = from TO to [BY by] )
+            if (at(Tok::LParen)) {
+              // Save position to potentially backtrack
+              size_t save = i_;
+              advance(); // consume (
+              ExprP expr = parseExpr();
+              if (atWord("DO")) {
+                // This is a PUT LIST iteration
+                advance(); // consume DO
+                if (!at(Tok::Word)) {
+                  d_.error(cur().loc, "expected control variable name after DO", "(109)");
+                  resync();
+                  return nullptr;
+                }
+                std::string varName = cur().text;
+                advance(); // consume variable name
+                if (!expect(Tok::Eq, "(109)")) {
+                  resync();
+                  return nullptr;
+                }
+                ExprP from = parseExpr();
+                ExprP to = nullptr;
+                ExprP by = nullptr;
+                if (atWord("TO")) {
+                  advance();
+                  to = parseExpr();
+                } else {
+                  d_.error(cur().loc, "expected TO in PUT LIST iteration", "(109)");
+                  resync();
+                  return nullptr;
+                }
+                if (atWord("BY")) {
+                  advance();
+                  by = parseExpr();
+                }
+                expect(Tok::RParen, "(109)");
+                ExprP iter = std::make_unique<Expr>();
+                iter->kind = Expr::PutIter;
+                iter->loc = expr->loc;
+                iter->putIterExpr = std::move(expr);
+                iter->putIterVar = std::move(varName);
+                iter->putIterFrom = std::move(from);
+                iter->putIterTo = std::move(to);
+                iter->putIterBy = std::move(by);
+                st->items.push_back(std::move(iter));
+              } else {
+                // Not a DO iteration, backtrack and parse as regular expression
+                i_ = save;
+                st->items.push_back(parseExpr());
+              }
+            } else {
+              st->items.push_back(parseExpr());
+            }
             if (!eat(Tok::Comma))
               break;
           }
@@ -5447,7 +5499,7 @@ ExprP Parser::parseExpr(int minPrec) {
       break;
     SourceLoc loc = cur().loc;
     advance();
-    ExprP rhs = parseExpr(p + 1); // all binary operators are left associative
+    ExprP rhs = parseExpr(p + 1);
     if (!rhs)
       return nullptr;
     auto e = std::make_unique<Expr>();
@@ -5779,7 +5831,7 @@ std::vector<InitItem> Parser::parseInitialList() {
 }
 
 // One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
-// '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
+// '( expr )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
 InitItem Parser::parseInitialItem() {
   auto valueStart = [](Tok k) {
     return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
@@ -5791,25 +5843,31 @@ InitItem Parser::parseInitialItem() {
     return InitItem{InitItem::Repeat, nullptr, 0, {}};
   }
   if (at(Tok::LParen)) {
-    // A leading '(' is an iteration factor '( n )' when a value or sublist
-    // follows it; a parenthesised constant '( n )' when ',' or ')' follows;
+    // A leading '(' is an iteration factor '( expr )' when a value or sublist
+    // follows it; a parenthesised expression '( expr )' when ',' or ')' follows;
     // otherwise it is a group '( item, ... )'. Decide without consuming.
     // A replicated literal '( n )'X (rule (129)+(143)) is an iteration
     // factor over the hex constant, not a parenthesised number.
     bool iterHex =
         peek().kind == Tok::Number && peek(2).kind == Tok::RParen && peek(3).kind == Tok::HexLit;
-    bool iter = iterHex || (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    bool iter = iterHex || (valueStart(peek().kind) && peek(2).kind == Tok::RParen &&
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
-    bool parenConst = !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    bool parenConst = !iterHex && valueStart(peek().kind) && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {
-      long long n = strtoll(cur().text.c_str(), nullptr, 10);
-      advance(); // n
-      advance(); // )
+      // Parse the iteration factor as an expression (can be a variable or constant)
+      ExprP factorExpr = parseExpr();
+      expect(Tok::RParen, "(28)");
       InitItem it;
       it.kind = InitItem::Iter;
-      it.factor = n;
+      it.value = std::move(factorExpr);
+      // If the factor is a constant integer literal, also store it in factor for compile-time expansion
+      if (it.value && it.value->kind == Expr::IntLit) {
+        it.factor = it.value->ival;
+      } else {
+        it.factor = -1; // indicates dynamic/runtime factor
+      }
       if (at(Tok::LParen)) {
         advance(); // (
         it.items = parseInitialList();
@@ -5819,14 +5877,12 @@ InitItem Parser::parseInitialItem() {
       return it;
     }
     if (parenConst) {
+      // Parse as a parenthesized expression value
+      ExprP val = parseExpr();
+      expect(Tok::RParen, "(28)");
       InitItem v;
       v.kind = InitItem::Value;
-      v.value = std::make_unique<Expr>();
-      v.value->loc = cur().loc;
-      v.value->kind = Expr::IntLit;
-      v.value->ival = strtoll(cur().text.c_str(), nullptr, 10);
-      advance(); // n
-      advance(); // )
+      v.value = std::move(val);
       return v;
     }
     InitItem g;

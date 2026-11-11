@@ -35,6 +35,7 @@ struct Expr {
     Star,       // '*' in a subscript list — a cross-section axis (rule 126); not a value
     ComplexLit, // imaginary constant 2i (rule 139): fval is the imaginary part
     TypeTag,    // ': ... :' enquiry designator (ADR-206/207/208): raw text in sval
+    PutIter,    // PUT LIST iteration: (expr DO var = from TO to [BY by])
   } kind = IntLit;
   SourceLoc loc{};
   Type ty{}; // assigned by sema
@@ -63,6 +64,12 @@ struct Expr {
   Tok op = Tok::Eof; // Binary / Unary operator
   ExprP a, b;
   std::vector<ExprP> args; // Call
+  // PutIter (PUT LIST iteration): fields for the DO specification
+  ExprP putIterExpr;   // the expression to evaluate each iteration
+  std::string putIterVar; // control variable name
+  ExprP putIterFrom;   // starting value
+  ExprP putIterTo;     // ending value
+  ExprP putIterBy;     // step value (null = 1)
 };
 
 struct Stmt;

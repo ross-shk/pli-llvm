@@ -54,6 +54,7 @@ HExprP convIf(HExprP e, const Type& dst) {
 
 HExprP lowerCallExpr(const Expr* e, bool substValue);
 HExprP lowerSubscriptExpr(const Expr* e, bool substValue);
+HExprP lowerPutIterExpr(const Expr* e);
 HExprP lowerExpr(const Expr* e, bool substValue = true);
 
 // Map an AST expression kind to its HIR counterpart. The two enums are not
@@ -87,6 +88,8 @@ static HExpr::Kind mapKind(Expr::Kind k) {
     return HExpr::ComplexLit;
   case Expr::TypeTag:
     return HExpr::TypeTag;
+  case Expr::PutIter:
+    return HExpr::PutIter;
   }
   return HExpr::IntLit;
 }
@@ -166,6 +169,8 @@ HExprP lowerExpr(const Expr* e, bool substValue) {
     return lowerCallExpr(e, substValue);
   if (e->kind == Expr::Subscript)
     return lowerSubscriptExpr(e, substValue);
+  if (e->kind == Expr::PutIter)
+    return lowerPutIterExpr(e);
   return lowerExprBase(e, substValue);
 }
 
@@ -174,6 +179,20 @@ HExprP lowerExpr(const Expr* e, bool substValue) {
 HExprP lowerSubscriptExpr(const Expr* e, bool substValue) {
   auto h = lowerExprBase(e, substValue);
   h->kind = HExpr::Subscript;
+  return h;
+}
+
+// Lower a PUT LIST iteration expression: (expr DO var = from TO to [BY by])
+HExprP lowerPutIterExpr(const Expr* e) {
+  auto h = lowerExprBase(e, false);
+  h->kind = HExpr::PutIter;
+  h->putIterVar = e->putIterVar;
+  h->putIterExpr = lowerExpr(e->putIterExpr.get(), false);
+  h->putIterFrom = lowerExpr(e->putIterFrom.get(), false);
+  h->putIterTo = lowerExpr(e->putIterTo.get(), false);
+  h->putIterBy = lowerExpr(e->putIterBy.get(), false);
+  // Pass through the resolved control variable symbol
+  h->sym = e->sym;
   return h;
 }
 
