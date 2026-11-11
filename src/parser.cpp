@@ -1423,10 +1423,10 @@ std::string Parser::parseCondition(std::string* fileArg) {
     }
     return name;
   }
-  if (w == "ENDFILE" || w == "UNDEFINEDFILE") {
-    // ENDFILE(file) and UNDEFINEDFILE(file) (rule 97) are file conditions:
+  if (w == "ENDFILE" || w == "UNDEFINEDFILE" || w == "ENDPAGE") {
+    // ENDFILE(file), UNDEFINEDFILE(file), ENDPAGE(file) (rule 97) are file conditions:
     // each names its file, and sema keys the handler per file slot
-    // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey).
+    // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey / kEndpageBaseCondKey).
     std::string cond = w;
     advance();
     if (!at(Tok::LParen)) {
@@ -1444,7 +1444,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     expect(Tok::RParen, "(97)");
     return cond;
   }
-  if (w == "ENDPAGE" || w == "KEY" || w == "NAME" ||
+  if (w == "KEY" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))
@@ -5168,8 +5168,15 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("STREAM") || atWord("PRINT")) {
+    if (atWord("STREAM")) {
       sawStream = true;
+      st->openStream = true;
+      advance();
+      continue;
+    }
+    if (atWord("PRINT")) {
+      sawStream = true;
+      st->openPrint = true;
       advance();
       continue;
     }
@@ -5233,6 +5240,26 @@ StmtP Parser::parseOpen() {
         resync();
         return nullptr;
       }
+      continue;
+    }
+    if (atWord("BUFFERED")) {
+      st->openBuffered = true;
+      advance();
+      continue;
+    }
+    if (atWord("UNBUFFERED")) {
+      st->openUnbuffered = true;
+      advance();
+      continue;
+    }
+    if (atWord("EXCLUSIVE")) {
+      st->openExclusive = true;
+      advance();
+      continue;
+    }
+    if (atWord("BACKWARDS")) {
+      st->openBackwards = true;
+      advance();
       continue;
     }
     if (atWord("ENVIRONMENT")) {

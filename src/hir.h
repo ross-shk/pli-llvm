@@ -273,10 +273,17 @@ struct HStmt {
 
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
+  bool openStream = false; // OPEN ... STREAM (rule (101)): stream transmission
+  bool openPrint = false;  // OPEN ... PRINT (rule (101)): print file attribute
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
   HExprP openIdent = nullptr;
   HExprP openLinesize = nullptr;
   HExprP openPagesize = nullptr;
+  // OPEN options (rule (101)): BUFFERED/UNBUFFERED/EXCLUSIVE/BACKWARDS flags.
+  bool openBuffered = false;
+  bool openUnbuffered = false;
+  bool openExclusive = false;
+  bool openBackwards = false;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )

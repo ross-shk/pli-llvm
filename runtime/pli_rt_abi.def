@@ -243,6 +243,7 @@ PLI_FN(pli_string_get_open, VOID, (PTR, I64))         /* STRING input (105) */
 PLI_FN(pli_string_get_close, VOID, (VOID))
 
 PLI_FN(pli_file_open, VOID, (I64, CPTR, I64, I64, I64))    /* OPEN (100-103): slot, name, mode, nonprint(ADR-204) */
+PLI_FN(pli_file_open_ident, I32, (I64, CPTR, I64, I32))      /* OPEN IDENT (101): slot, ident_expr, ident_len, is_output */
 PLI_FN(pli_file_close, VOID, (I64))
 PLI_FN(pli_put_select, VOID, (I64))                   /* FILE output routing (105) */
 PLI_FN(pli_put_unselect, VOID, (VOID))

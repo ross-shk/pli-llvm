@@ -155,6 +155,33 @@ void pli_file_open(long long slot, const char *name, long long namelen, long lon
   }
 }
 
+/* OPEN IDENT (rule 101): write or read user label.
+ * is_output: 1 = write label (OUTPUT mode), 0 = read label (INPUT/UPDATE mode).
+ * For now, only OUTPUT is implemented (writes label as first line of file).
+ * INPUT/UPDATE would require an lvalue address to store the read label. */
+int pli_file_open_ident(long long slot, const char *ident_expr, long long ident_len,
+                        int is_output) {
+  if (slot < 0 || slot >= PLI_MAX_FILES || !rt_pli_files[slot])
+    return -1;
+  if (is_output) {
+    /* Write the label as the first line of the file (header label). */
+    fseek(rt_pli_files[slot], 0, SEEK_SET);
+    if (ident_len > 0 && ident_expr) {
+      fwrite(ident_expr, 1, (size_t)ident_len, rt_pli_files[slot]);
+    }
+    fputc('\n', rt_pli_files[slot]);
+    fflush(rt_pli_files[slot]);
+  } else {
+    /* Read the first line as label - not yet implemented (needs lvalue).
+     * For now, just seek to skip the first line. */
+    char c;
+    while ((c = fgetc(rt_pli_files[slot])) != EOF && c != '\n') {
+      /* consume first line */
+    }
+  }
+  return 0;
+}
+
 /* KEYED/DIRECT sidecar index state: key -> (offset, length) in the data file.
  * Loaded at open, held in memory, rewritten at close when dirty. */
 struct kix_entry {

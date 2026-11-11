@@ -7,6 +7,29 @@
  * (the platform seam). The fputc_ helper further down is the internal
  * formatter sink, unrelated to stdio fputc. */
 
+/* ENDPAGE condition key base (rule 97): like ENDFILE/UNDEFINEDFILE, keyed by
+ * file slot so each STREAM PRINT file has its own ENDPAGE handler. */
+#define RT_ENDPAGE_KEY_BASE (-3000LL)
+
+/* Raise ENDPAGE condition for the given file slot (rule 97).
+ * Called when a STREAM PRINT file exceeds its PAGESIZE. */
+static void rt_stream_endpage(long long slot) {
+  if (slot < 0 || slot >= PLI_MAX_FILES)
+    return;
+  char *ctx = NULL;
+  char *fn = pli_on_top_fn_pair(RT_ENDPAGE_KEY_BASE - slot, (char *)&ctx);
+  if (!fn) {
+    pli_signal_error("ENDPAGE on stream print file: page overflow");
+    return;
+  }
+  union {
+    char *obj;
+    void (*fn)(void *);
+  } u;
+  u.obj = fn;
+  u.fn(ctx);
+}
+
 /* SYSPRINT state. A full implementation tracks page/line/column against
  * LINESIZE and PAGESIZE and raises ENDPAGE; M0 tracks the column only.
  *
@@ -51,6 +74,8 @@ int rt_pli_nonprint[PLI_MAX_FILES] = {0};
 volatile long long rt_pli_pages[PLI_MAX_FILES] = {0};
 int rt_pli_linesize[PLI_MAX_FILES] = {0};
 int rt_pli_pagesize[PLI_MAX_FILES] = {0};
+/* Per-file current line number (1-based) for ENDPAGE condition (rule 97). */
+int rt_pli_current_line[PLI_MAX_FILES] = {0};
 FILE *rt_out_f = NULL;
 FILE *rt_in_f = NULL;
 /* NONPRINT flag (ADR-204): when rt_out_discard is set, output is discarded
@@ -214,7 +239,25 @@ void rt_put_raw(const char *p, size_t n) {
       pli_memcpy(rt_file_out_buf + rt_file_out_pos, p, n);
       rt_file_out_pos += n;
     }
-    rt_col += (int)n;
+    /* Track newlines for ENDPAGE condition (rule 97).
+     * For files with PAGESIZE set, count lines and raise ENDPAGE on overflow. */
+    if (rt_cur_file_slot >= 0 && rt_pli_pagesize[rt_cur_file_slot] > 0) {
+      for (size_t i = 0; i < n; ++i) {
+        if (p[i] == '\n') {
+          rt_col = 0;
+          rt_items_on_line = 0;
+          rt_pli_current_line[rt_cur_file_slot]++;
+          if (rt_pli_current_line[rt_cur_file_slot] > rt_pli_pagesize[rt_cur_file_slot]) {
+            rt_stream_endpage(rt_cur_file_slot);
+            rt_pli_current_line[rt_cur_file_slot] = 1; /* Reset after ENDPAGE */
+          }
+        } else {
+          rt_col++;
+        }
+      }
+    } else {
+      rt_col += (int)n;
+    }
     return;
   }
   if (rt_out_discard)

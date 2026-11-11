@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN EXCLUSIVE option — exclusive access for DIRECT UPDATE.
+   Compile-only test; DIRECT UPDATE requires KEYED/DIRECT runtime support. */
+open_exclusive: procedure options(main);
+    declare f file;
+    open file(f) title('open_exclusive.dat') update record direct exclusive;
+    close file(f);
+    put skip list('PASS open_exclusive');
+end open_exclusive;

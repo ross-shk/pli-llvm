@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): BUFFERED/UNBUFFERED require RECORD SEQUENTIAL. */
+bad_open_buffered_norecord: procedure options(main);
+    declare f file;
+    open file(f) title('test.dat') output stream buffered;
+end bad_open_buffered_norecord;

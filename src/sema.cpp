@@ -3564,10 +3564,10 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
 
 // Rule (97): the conditions the runtime raises against one named file.
 static bool isFileCondName(const std::string& n) {
-  return n == "ENDFILE" || n == "UNDEFINEDFILE";
+  return n == "ENDFILE" || n == "UNDEFINEDFILE" || n == "ENDPAGE";
 }
 
-// Rule (97): ENDFILE and UNDEFINEDFILE are file conditions, so their handlers
+// Rule (97): ENDFILE, UNDEFINEDFILE, and ENDPAGE are file conditions, so their handlers
 // are keyed by the file: base - slot keeps each file's unit separate on the
 // shared ON stack.
 int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
@@ -3581,8 +3581,13 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
     return 0;
   }
   s->fileSym = f;
-  int base = s->condName == "UNDEFINEDFILE" ? Stmt::kUndefinedfileBaseCondKey
-                                            : Stmt::kEndfileBaseCondKey;
+  int base;
+  if (s->condName == "UNDEFINEDFILE")
+    base = Stmt::kUndefinedfileBaseCondKey;
+  else if (s->condName == "ENDPAGE")
+    base = Stmt::kEndpageBaseCondKey;
+  else
+    base = Stmt::kEndfileBaseCondKey;
   return base - f->fileSlot;
 }
 
@@ -5587,6 +5592,18 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(s->loc, "LINESIZE/PAGESIZE are not valid on an INPUT file", "(101)");
       if (s->openRecord && (s->openLinesize || s->openPagesize))
         d_.error(s->loc, "LINESIZE/PAGESIZE are STREAM-only options", "(101)");
+      // OPEN options (rule (101)): BUFFERED/UNBUFFERED/EXCLUSIVE/BACKWARDS validation.
+      if (s->openBuffered && s->openUnbuffered)
+        d_.error(s->loc, "BUFFERED and UNBUFFERED are mutually exclusive", "(101)");
+      if ((s->openBuffered || s->openUnbuffered) && !s->openRecord)
+        d_.error(s->loc, "BUFFERED/UNBUFFERED require RECORD SEQUENTIAL", "(101)");
+      if (s->openExclusive && (!s->openDirect || !s->openUpdate))
+        d_.error(s->loc, "EXCLUSIVE requires DIRECT UPDATE", "(101)");
+      if (s->openBackwards && (!s->openRecord || !s->openInput))
+        d_.error(s->loc, "BACKWARDS requires RECORD SEQUENTIAL INPUT", "(101)");
+      // PAGESIZE requires STREAM PRINT (rule (101)).
+      if (s->openPagesize && !(s->openStream && s->openPrint))
+        d_.error(s->loc, "PAGESIZE requires STREAM PRINT", "(101)");
     }
     break;
   case Stmt::Goto:

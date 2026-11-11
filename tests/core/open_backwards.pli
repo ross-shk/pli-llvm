@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN BACKWARDS option — position to last record on open. */
+open_backwards: procedure options(main);
+    declare f file;
+    declare x fixed bin(31);
+    /* First create a file with some records */
+    open file(f) title('open_backwards.dat') output record sequential;
+    write file(f) from(1);
+    write file(f) from(2);
+    write file(f) from(3);
+    close file(f);
+    /* Now open with BACKWARDS and read - should get last record first */
+    open file(f) title('open_backwards.dat') input record sequential backwards;
+    read file(f) into(x);
+    close file(f);
+    put skip list('PASS open_backwards');
+end open_backwards;

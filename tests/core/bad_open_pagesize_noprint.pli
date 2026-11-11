@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): PAGESIZE requires STREAM PRINT. */
+bad_open_pagesize_noprint: procedure options(main);
+    declare f file;
+    open file(f) title('test.dat') output stream pagesize(20);
+end bad_open_pagesize_noprint;

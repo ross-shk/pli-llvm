@@ -8975,13 +8975,15 @@ llvm::Value* IRGen::fileSlotValue(Symbol* f) {
   return b_.CreateCall(runtimeFn("pli_file_slot"), {key}, "fslot");
 }
 
-// A10: ON ENDFILE(f)/UNDEFINEDFILE(f) key = base - runtime slot.
+// A10: ON ENDFILE(f)/UNDEFINEDFILE(f)/ENDPAGE(f) key = base - runtime slot.
 llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
   long long base = 0;
   if (s->condName == "UNDEFINEDFILE")
     base = Stmt::kUndefinedfileBaseCondKey;
   else if (s->condName == "ENDFILE")
     base = Stmt::kEndfileBaseCondKey;
+  else if (s->condName == "ENDPAGE")
+    base = Stmt::kEndpageBaseCondKey;
   else
     return i64(s->condKey);
   if (!s->fileSym)
@@ -8990,42 +8992,63 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
 }
 
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
-// The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
-// OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
-// binary record runtime.
-void IRGen::emitOpen(HStmt* s) {
-  Symbol* f = s->fileSym;
-  // IDENT(expr) (rule 101): implementation-dependent user label; evaluate
-  // the expression for side effects but discard the result (ADR-373).
-  if (s->openIdent)
-    (void)emitExpr(s->openIdent.get());
-  llvm::Value* name = globalString(s->openTitle);
-  long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
-  if (s->openKeyed || s->openDirect) {
-    // Keyed/direct organisation: open the data file and load the .kix sidecar.
+ // The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
+ // OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
+ // binary record runtime.
+ void IRGen::emitOpen(HStmt* s) {
+   Symbol* f = s->fileSym;
+   // IDENT(expr) (rule 101): implementation-dependent user label; evaluate
+   // the expression for side effects but discard the result (ADR-373).
+   if (s->openIdent)
+     (void)emitExpr(s->openIdent.get());
+   llvm::Value* name = globalString(s->openTitle);
+   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
+   if (s->openKeyed || s->openDirect) {
+     // Keyed/direct organisation: open the data file and load the .kix sidecar.
+     b_.CreateCall(
+         runtimeFn("pli_file_open_keyed"),
+         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+          i64(f->fileNonprint ? 1 : 0), i64(1)});
+     if (s->openLinesize)
+       b_.CreateCall(runtimeFn("pli_file_set_linesize"),
+                     {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+     if (s->openPagesize)
+       b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
+                     {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+     // OPEN IDENT: write label on OUTPUT
+     if (s->openIdent) {
+       Val ident_val = emitExpr(s->openIdent.get());
+       // For CHAR expressions, we need to pass the pointer and length
+       // ident_val.ptr is a GlobalVariable* (pointer to array), convert to i8*
+       llvm::Value* ident_ptr = ident_val.ptr;
+       // Bitcast to i8* since runtime expects const char*
+       ident_ptr = b_.CreateBitCast(ident_ptr, b_.getPtrTy(), "ident.ptr");
+       llvm::Value* ident_len = ident_val.len;
+       b_.CreateCall(runtimeFn("pli_file_open_ident"),
+                     {fileSlotValue(f), ident_ptr, ident_len, i32(!s->openInput)});
+     }
+     return;
+   }
     b_.CreateCall(
-        runtimeFn("pli_file_open_keyed"),
+        runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0), i64(1)});
-    if (s->openLinesize)
-      b_.CreateCall(runtimeFn("pli_file_set_linesize"),
-                    {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
-    if (s->openPagesize)
-      b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
-                    {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
-    return;
-  }
-   b_.CreateCall(
-       runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
-       {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-        i64(f->fileNonprint ? 1 : 0)});
-  if (s->openLinesize)
-    b_.CreateCall(runtimeFn("pli_file_set_linesize"),
-                  {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
-  if (s->openPagesize)
-    b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
-                  {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
-}
+         i64(f->fileNonprint ? 1 : 0)});
+   if (s->openLinesize)
+     b_.CreateCall(runtimeFn("pli_file_set_linesize"),
+                   {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+   if (s->openPagesize)
+     b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
+                   {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+   // OPEN IDENT: write label on OUTPUT
+   if (s->openIdent) {
+     Val ident_val = emitExpr(s->openIdent.get());
+     llvm::Value* ident_ptr = ident_val.ptr;
+     ident_ptr = b_.CreateBitCast(ident_ptr, b_.getPtrTy(), "ident.ptr");
+     llvm::Value* ident_len = ident_val.len;
+     b_.CreateCall(runtimeFn("pli_file_open_ident"),
+                   {fileSlotValue(f), ident_ptr, ident_len, i32(!s->openInput)});
+   }
+ }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
@@ -10364,6 +10387,10 @@ void IRGen::emitPut(HStmt* s) {
       }
     }
   }
+  // PUT LIST (rule 104): implicit SKIP(1) after the data list when no explicit
+  // SKIP/PAGE/LINE is present.
+  if (!s->edit && !s->data && !s->skip && !s->page && !s->line)
+    deferCall("pli_put_skip", {i64(1)});
   if (s->stringTarget)
     deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
   if (s->copy)

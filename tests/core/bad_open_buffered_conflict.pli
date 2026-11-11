@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): BUFFERED and UNBUFFERED are mutually exclusive. */
+bad_open_buffered_conflict: procedure options(main);
+    declare f file;
+    open file(f) title('test.dat') output record sequential buffered unbuffered;
+end bad_open_buffered_conflict;

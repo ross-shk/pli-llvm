@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN IDENT option — write label on OUTPUT. */
+open_ident_write: procedure options(main);
+    declare f file;
+    open file(f) title('open_ident_write.dat') output ident('USERLABEL123');
+    put file(f) list('hello');
+    close file(f);
+    put skip list('PASS open_ident_write');
+end open_ident_write;

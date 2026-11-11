@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* rule (101): OPEN UNBUFFERED option — unbuffered sequential record I/O. */
+open_unbuffered: procedure options(main);
+    declare f file;
+    open file(f) title('open_unbuffered.dat') output record sequential unbuffered;
+    write file(f) from(42);
+    close file(f);
+    put skip list('PASS open_unbuffered');
+end open_unbuffered;

@@ -319,17 +319,24 @@ struct Stmt {
   bool openInput = false;
   bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
                            // read and write in place (REWRITE/DELETE)
-  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
-                           // file; READ/WRITE transfer fixed-size binary records
+bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
+                            // file; READ/WRITE transfer fixed-size binary records
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
-                           // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
-                           // KEYTO/KEYFROM to address records by key
+                            // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
+                            // KEYTO/KEYFROM to address records by key
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
-                           // direct organisation; same keyed access as KEYED
+                            // direct organisation; same keyed access as KEYED
+  bool openStream = false; // OPEN ... STREAM (rule (101)): stream transmission
+  bool openPrint = false;  // OPEN ... PRINT (rule (101)): print file attribute
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
+  // OPEN options (rule (101)): BUFFERED/UNBUFFERED/EXCLUSIVE/BACKWARDS flags.
+  bool openBuffered = false;
+  bool openUnbuffered = false;
+  bool openExclusive = false;
+  bool openBackwards = false;
 // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
 // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
 // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
@@ -426,6 +433,9 @@ struct Stmt {
   // RT_UNDEFINEDFILE_KEY_BASE).
   static constexpr int kEndfileBaseCondKey = -1000;
   static constexpr int kUndefinedfileBaseCondKey = -2000;
+  // ENDPAGE(f) (rule 97): raised when a STREAM PRINT file exceeds PAGESIZE.
+  // Keyed by file slot like ENDFILE/UNDEFINEDFILE.
+  static constexpr int kEndpageBaseCondKey = -3000;
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1
