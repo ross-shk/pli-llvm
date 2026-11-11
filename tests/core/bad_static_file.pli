@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC on FILE (rule 23) — must be diagnosed */
+bad_static_file: procedure options(main);
+    dcl f file static;  /* ERROR (23): STATIC on FILE */
+    put skip list('FAIL - should not reach here');
+end bad_static_file;

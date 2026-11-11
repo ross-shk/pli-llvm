@@ -28,6 +28,7 @@ struct Symbol {
   bool isCond = false;     // DECLARE name CONDITION; (rule 9) programmer-named condition
   bool fileAttr = false;   // FILE variable (rules 39,40): a named file
   bool fileNonprint = false; // NONPRINT (ADR-204): stream writes to this file discarded
+  bool filePrint = false;    // PRINT (rule 40): stream file with page/line formatting
   int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
   bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
@@ -35,6 +36,8 @@ struct Symbol {
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
   std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
@@ -131,6 +134,25 @@ struct Symbol {
     HExpr* lb = nullptr;
   };
   std::vector<DynMemberH> dynMembers;
+  // Sema-time dynamic member info (rule 13): paths and bound expressions (Expr*),
+  // copied from DeclItem::dynMembers so LIKE declarations can inherit them.
+  struct SemaDynMemberInfo {
+    std::vector<unsigned> path;
+    Expr* ub = nullptr;
+    Expr* lb = nullptr;
+  };
+  std::vector<SemaDynMemberInfo> semaDynMembers;
+
+  // Fully constructed array descriptor for this symbol (if array).
+  // Built at declaration after bounds are known; for parameters, built
+  // at call site from hidden args.
+  std::unique_ptr<ArrayDesc> arrayDesc;
+
+  // For parameters: the expected descriptor shape from the ENTRY declaration.
+  std::vector<AxisDesc> paramAxes; // mirrors Type::paramAxes
+
+  // For adjustable CHAR(*): the hidden length parameter index.
+  int charStarLenParamIdx = -1;
 };
 
 struct Scope {

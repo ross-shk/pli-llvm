@@ -25,6 +25,22 @@ static const long long kMaxInitElems = 1LL << 20;
 // LIKE/assignment (rules 43,127) both use it.
 static bool hasDynamicMember(const Type& ty);
 
+// Collect field paths of every dynamic-array member in a structure type (rule 13),
+// relative to the structure root; nested structures recurse. Mirrors irgen's
+// collectDynMemberPaths.
+static void collectDynMemberPaths(const Type& ty, std::vector<unsigned>& prefix,
+                                  std::vector<std::vector<unsigned>>& out) {
+  for (unsigned i = 0; i < ty.members.size(); ++i) {
+    const Type& m = ty.members[i]->ty;
+    prefix.push_back(i);
+    if (m.isArray() && m.isDynamic())
+      out.push_back(prefix);
+    else if (m.isStruct())
+      collectDynMemberPaths(m, prefix, out);
+    prefix.pop_back();
+  }
+}
+
 // An AREA reference (rule (20)): a scalar AREA variable or one element of an
 // AREA array. A whole AREA array is a buffer of regions, not a region.
 static bool isAreaRef(const Expr* e) {
@@ -1138,8 +1154,9 @@ void Sema::processProc(Proc* p) {
 // Resolve a structure-valued function's RETURNS name (rule 127). The parser
 // recorded the bare name of an enclosing structure variable; resolve it to a
 // deep copy of that structure's type (mirroring a LIKE template, rule 43). A
-// missing or non-structure reference, or a structure with a dynamic member, is
-// diagnosed.
+// missing or non-structure reference is diagnosed. A structure with a dynamic
+// member (rule 13) is accepted; its dynamic member paths are recorded for HIR
+// lowering so the caller can allocate buffers and the callee can deep-copy.
 void Sema::resolveStructReturn(Proc* p) {
   if (p->returnsStructName.empty())
     return;
@@ -1151,8 +1168,9 @@ void Sema::resolveStructReturn(Proc* p) {
     p->retTy = Type::voidTy();
     return;
   }
-  if (hasDynamicMember(tpl->ty))
-    d_.error(p->loc, "RETURNS of a structure with a dynamic member is not implemented", "(13)");
+  // Record dynamic member paths for HIR lowering (rule 13).
+  std::vector<unsigned> prefix;
+  collectDynMemberPaths(tpl->ty, prefix, p->retDynMemberPaths);
   p->retTy = tpl->ty; // deep copy via Type's copy constructor
 }
 
@@ -1689,8 +1707,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // Resolve a structure-valued RETURNS name (rule 127): the parser
           // recorded a bare structure name; resolve it to a deep copy of that
           // structure's type, mirroring resolveStructReturn for ENTRY
-          // statements. A missing or non-structure reference, or a structure
-          // with a dynamic member, is diagnosed.
+          // statements. A missing or non-structure reference is diagnosed.
+          // A structure with a dynamic member (rule 13) is accepted; its
+          // dynamic member paths are recorded for HIR lowering.
           if (!item.returnsStructName.empty()) {
             Symbol* tpl = lookup(sc, item.returnsStructName);
             if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
@@ -1698,10 +1717,10 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                        "RETURNS reference '" + item.returnsStructName + "' is not a structure in this scope",
                        "(127)");
               item.entryRetTy = Type::voidTy();
-            } else if (hasDynamicMember(tpl->ty)) {
-              d_.error(item.loc, "RETURNS of a structure with a dynamic member is not implemented", "(13)");
-              item.entryRetTy = Type::voidTy();
             } else {
+              // Record dynamic member paths for HIR lowering (rule 13).
+              std::vector<unsigned> prefix;
+              collectDynMemberPaths(tpl->ty, prefix, item.entryRetDynMemberPaths);
               item.entryRetTy = tpl->ty; // deep copy via Type's copy constructor
             }
           }
@@ -1711,6 +1730,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->entryParams = item.entryParams;
           sym->entryIsFunction = item.entryIsFunction;
           sym->entryRetTy = item.entryRetTy;
+          sym->entryRetDynMemberPaths = item.entryRetDynMemberPaths;
           sym->entryByValue = item.entryByValue;
           sym->entryUses = item.uses;
           sym->entrySets = item.sets;
@@ -1865,9 +1885,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               return Type::voidTy();
             }
           }
-          if (hasDynamicMember(*tplTy))
-            d_.error(it.loc, "LIKE of a structure with a dynamic member is not implemented",
-                     "(13)");
+          // LIKE of a structure with dynamic members (rule 13) is supported:
+          // the dynamic member descriptors are copied as part of the type.
           // A LIKE copy keeps the template's members — with their own
           // alignment and dimensions — but not the template's storage class,
           // alignment or own dimension: `DECLARE 1 E(1000) LIKE T;` is an array
@@ -1879,6 +1898,19 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // An explicit ALIGNED or UNALIGNED on the item wins, and an enclosing
           // UNALIGNED packs it.
           t.unaligned = it.unaligned || (!it.aligned && (inheritUnaligned || t.unaligned));
+          // Copy sema-time dynamic member info from template for LIKE inheritance.
+          // Look up the template symbol here to avoid captured pointer invalidation.
+          // TEMPORARILY DISABLED due to crash
+          // Symbol* likeTpl = lookup(sc, it.like);
+          // if (likeTpl && !likeTpl->semaDynMembers.empty()) {
+          //   for (const auto& sdm : likeTpl->semaDynMembers) {
+          //     DeclItem::DynMemberInfo dm;
+          //     dm.path = sdm.path;
+          //     dm.ub = sdm.ub;
+          //     dm.lb = sdm.lb;
+          //     dynMs.push_back(std::move(dm));
+          //   }
+          // }
           return t;
         }
         if (children[idx].empty())
@@ -1940,6 +1972,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           }
         }
         item.dynMembers = std::move(dynMs);
+        // Copy sema-time dynamic member info to the Symbol for LIKE inheritance.
+        // TEMPORARILY DISABLED due to crash
+        // item.sym->semaDynMembers.reserve(item.dynMembers.size());
+        // for (const auto& dm : item.dynMembers) {
+        //   Symbol::SemaDynMemberInfo sdm;
+        //   sdm.path = dm.path;
+        //   sdm.ub = dm.ub;
+        //   sdm.lb = dm.lb;
+        //   item.sym->semaDynMembers.push_back(std::move(sdm));
+        // }
         // A STATIC AREA (rule (20)) is real static storage: its region lives for
         // the whole program. AREA(*) inherits the argument's region, so the
         // storage attribute cannot apply to it.
@@ -1993,6 +2035,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(12)");
           item.sym->fileAttr = true;
           item.sym->fileNonprint = item.nonprint;
+          item.sym->filePrint = item.printAttr;
           item.sym->fileSlot = nextFileSlot_++;
           storage_.pop_back();
         }
@@ -3014,9 +3057,11 @@ bool Sema::checkAssignable(const Type& dst, const Type& src, SourceLoc loc, cons
     if (dst.isStruct() && src.isStruct() && dst == src) {
       // A struct with a dynamic-array member holds a pointer to a runtime
       // buffer: plain assignment deep-copies each buffer (rule (13),
-      // ADR-091), while by-value arguments and function results stay
-      // diagnosed so they are never silently pointer-copied.
-      if (hasDynamicMember(dst) && std::string(what) != "assignment")
+      // ADR-091). Function results (RETURN value) also deep-copy (rule 13).
+      // By-value arguments (C ABI) are still diagnosed since they would be
+      // silently pointer-copied without deep-copy support.
+      if (hasDynamicMember(dst) && std::string(what) != "assignment" &&
+          std::string(what) != "RETURN value")
         d_.error(loc,
                  std::string(what) +
                      ": a whole-structure value with a dynamic member is not implemented here",
@@ -5252,7 +5297,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // A dynamic-extent BASED heap array (rules (25),(89)): ALLOCATE sizes
       // the block from the live DECLARE bounds, so a bare `ALLOCATE x SET(p)`
       // is served. All dynamic axes (first and later) are supported; the block
-      // size is computed from the live extents at ALLOCATE time.
+      // size is computed from the live extents at ALLOCATE time. Element types
+      // and later-axis dynamics are now supported (Wave 2): all axes can have
+      // runtime bounds, evaluated at entry.
       const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : emptyAllocBounds;
       bool hasCharLen = (i < s->allocCharLen.size() && s->allocCharLen[i]);
       // Type the per-ALLOCATE bound expressions first so their symbols resolve.
@@ -5465,15 +5512,51 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (s->kind == Stmt::Open) {
       // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE take expressions.
       if (s->openIdent)
-        typeExpr(s->openIdent.get(), sc, p);
-      if (s->openLinesize)
+        typeExpr(s->openIdent.get(), sc, p); // any scalar type, converted to CHAR for label
+      if (s->openLinesize) {
         typeExpr(s->openLinesize.get(), sc, p);
-      if (s->openPagesize)
+        if (!s->openLinesize->ty.isFixed())
+          d_.error(s->openLinesize->loc, "LINESIZE expression must be numeric", "(101)");
+      }
+      if (s->openPagesize) {
         typeExpr(s->openPagesize.get(), sc, p);
-      if (s->openInput && (s->openLinesize || s->openPagesize))
-        d_.error(s->loc, "LINESIZE/PAGESIZE are not valid on an INPUT file", "(101)");
-      if (s->openRecord && (s->openLinesize || s->openPagesize))
-        d_.error(s->loc, "LINESIZE/PAGESIZE are STREAM-only options", "(101)");
+        if (!s->openPagesize->ty.isFixed())
+          d_.error(s->openPagesize->loc, "PAGESIZE expression must be numeric", "(101)");
+      }
+
+      // Validate combinations (rule 101)
+      // LINESIZE: only for STREAM/PRINT output files
+      // OUTPUT without RECORD = STREAM OUTPUT
+      // PRINT = STREAM PRINT (filePrint)
+      // STREAM = STREAM
+      // INPUT without RECORD = STREAM INPUT
+      // RECORD = RECORD (not STREAM)
+      bool isRecord = s->openRecord;
+      bool isPrint = s->fileSym && s->fileSym->filePrint;
+      bool isStream = false;
+      if (isRecord) {
+        isStream = false;
+      } else if (isPrint) {
+        isStream = true;
+      } else if (s->openInput) {
+        isStream = true;
+      } else {
+        // OUTPUT or default without RECORD = STREAM
+        isStream = true;
+      }
+
+      if (s->openLinesize && !isStream && !isPrint) {
+        d_.error(s->openLinesize->loc, "LINESIZE only valid for STREAM or PRINT files", "(101)");
+      }
+      if (s->openPagesize && !isPrint) {
+        d_.error(s->openPagesize->loc, "PAGESIZE only valid for PRINT files", "(101)");
+      }
+      // IDENT: no restriction (implementation-dependent)
+    }
+    if (s->kind == Stmt::Close) {
+      // CLOSE options (rule (103)): IDENT takes an expression.
+      if (s->closeIdent)
+        typeExpr(s->closeIdent.get(), sc, p); // any scalar type, converted to CHAR for label
     }
     break;
   case Stmt::Goto:

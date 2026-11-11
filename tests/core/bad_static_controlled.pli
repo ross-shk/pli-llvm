@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC on CONTROLLED (non-package) (rule 23) — must be diagnosed */
+bad_static_controlled: procedure options(main);
+    dcl x fixed bin(31) controlled static;  /* ERROR (23): STATIC on CONTROLLED */
+    put skip list('FAIL - should not reach here');
+end bad_static_controlled;

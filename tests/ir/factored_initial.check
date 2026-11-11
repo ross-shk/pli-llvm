@@ -1,3 +1,2 @@
-# CHECK: @pli_g_A = internal global [3 x i32] [i32 1, i32 1, i32 2]
-# CHECK: @pli_g_B = internal global [3 x i32] [i32 1, i32 1, i32 2]
-# CHECK: @pli_g_C = internal global [3 x i32] [i32 1, i32 1, i32 2]
+CHECK: @pli_g_S1 = internal global i32 10
+CHECK: @pli_g_S2 = internal global i32 20

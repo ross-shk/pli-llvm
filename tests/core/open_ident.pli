@@ -1,10 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* rule (101): OPEN IDENT option — impl-dependent, no effect. */
-open_ident: procedure options(main);
-    declare f file;
-    open file(f) title('open_ident.dat') output ident('USERLABEL');
-    put file(f) list('hello');
-    close file(f);
-    put skip list('PASS open_ident');
-end open_ident;
+ /* rule (101): IDENT accepted, no runtime effect on stream files. */
+ open_ident: proc options(main);
+     dcl f file;
+     open file(f) title('test.dat') ident('VOL001') output;
+     put file(f) list('hello');
+     close file(f) ident('VOL001');
+     put skip list('PASS open_ident');
+ end open_ident;

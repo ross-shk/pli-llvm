@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* STATIC on a parameter (rule 23): invalid — parameters have no storage. */
+/* STATIC on PARAMETER (rule 23) — must be diagnosed */
 bad_static_param: procedure options(main);
-    dcl x fixed bin(31) static;  /* valid at block level */
-    call foo(x);
-    foo: proc(p) options(bypass);
-        dcl p fixed bin(31) static;  /* (23) - invalid */
-    end foo;
+    call test_static_param(0);
+    put skip list('FAIL - should not reach here');
 end bad_static_param;
+
+test_static_param: proc(p) options(bypass);
+    dcl p fixed bin(31) static;  /* ERROR (23): STATIC on PARAMETER */
+    return;
+end test_static_param;

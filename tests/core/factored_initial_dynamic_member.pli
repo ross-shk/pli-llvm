@@ -1,24 +1,24 @@
-/* SPDX-License-Identifier: Apache-2.0 */
- /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Factored structures with dynamic array member — each gets own buffer
-    initialized per the itemlist (rules 11, 13, 26, 30). */
- FACTORED_DYN_MEM: PROCEDURE OPTIONS(MAIN);
-   DECLARE N FIXED BIN(31) INITIAL(5);
-
-   /* Factored structures with dynamic array member — each gets own buffer */
-   DECLARE 1 (D1, D2),
-             2 LEN FIXED BIN(31),
-             2 ARR(N) FIXED BIN(31)
-             INITIAL((N, (N)0));
-
-   D1.LEN = N;
-   D2.LEN = N;
-   DO I = 1 TO N;
-     D1.ARR(I) = I * 10;
-     D2.ARR(I) = I * 20;
-   END;
-
-   PUT LIST('D1:'); PUT SKIP LIST((D1.ARR(I) DO I = 1 TO N));
-   PUT LIST('D2:'); PUT SKIP LIST((D2.ARR(I) DO I = 1 TO N));
-
- END FACTORED_DYN_MEM;
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Factored structures with dynamic array member — each gets own buffer
+    initialized per the itemlist (rules 11, 13, 26, 30). */
+ FACTORED_DYN_MEM: PROCEDURE OPTIONS(MAIN);
+   DECLARE N FIXED BIN(31) INITIAL(5);
+
+   /* Factored structures with dynamic array member — each gets own buffer */
+   DECLARE 1 (D1, D2),
+             2 LEN FIXED BIN(31),
+             2 ARR(N) FIXED BIN(31)
+             INITIAL((N, (N)0));
+
+   D1.LEN = N;
+   D2.LEN = N;
+   DO I = 1 TO N;
+     D1.ARR(I) = I * 10;
+     D2.ARR(I) = I * 20;
+   END;
+
+   PUT LIST('D1:'); PUT SKIP LIST((D1.ARR(I) DO I = 1 TO N));
+   PUT LIST('D2:'); PUT SKIP LIST((D2.ARR(I) DO I = 1 TO N));
+
+ END FACTORED_DYN_MEM;

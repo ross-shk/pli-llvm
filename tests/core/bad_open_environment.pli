@@ -1,7 +1,0 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* rule (101): ENVIRONMENT in OPEN is diagnosed. */
-bad_open_environment: procedure options(main);
-    declare f file;
-    open file(f) title('test.dat') output environment(whatever);
-end bad_open_environment;

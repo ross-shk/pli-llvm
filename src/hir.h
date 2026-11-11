@@ -118,6 +118,26 @@ struct HDeclItem {
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
 
+// Runtime array descriptor value (HIR-level).
+// Used for: passing to callees, LBOUND/HBOUND/DIM builtins, runtime checks.
+struct HArrayDesc {
+  std::vector<HExprP> lowerBounds;  // one per axis
+  std::vector<HExprP> upperBounds;
+  std::vector<HExprP> strides;      // element strides
+  HExprP baseAddr;                  // void* (i8*)
+  Type elementTy;
+  // Metadata flags
+  std::vector<AxisDesc::Provenance> provenances;
+  std::vector<AxisDesc::Lifetime> lifetimes;
+  std::vector<bool> isDynamic;
+  std::vector<bool> isAdjustable;
+  std::vector<bool> isSubscriptRange;
+  ArrayDesc::Owner owner = ArrayDesc::Owner::Automatic;
+  int ctlSlot = -1;
+  Symbol* basedLocator = nullptr;
+  Symbol* areaSymbol = nullptr;
+};
+
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
@@ -208,6 +228,8 @@ struct HStmt {
   std::vector<std::string> params; // ENTRY parameter names
   bool entryIsFunction = false;
   Type entryRetTy{};
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
   // GET/PUT stream statement options (rules (104),(105))
@@ -246,6 +268,12 @@ struct HStmt {
   HExprP openIdent = nullptr;
   HExprP openLinesize = nullptr;
   HExprP openPagesize = nullptr;
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  bool openBuffered = false;
+  bool openUnbuffered = false;
+  bool openExclusive = false;
+  // CLOSE options (rule (103))
+  HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )
@@ -326,6 +354,9 @@ struct HProc {
   bool isRecursive = false;            // RECURSIVE option (rule (5))
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)
+  // Field paths of dynamic members in the RETURNS structure (rule 13),
+  // relative to the structure root. Mirrors Proc::retDynMemberPaths.
+  std::vector<std::vector<unsigned>> retDynMemberPaths;
   bool isPackage = false;              // extension (ADR-109): skipped in codegen
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names

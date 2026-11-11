@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC on DEFINED (rule 23) — must be diagnosed */
+bad_static_defined: procedure options(main);
+    dcl x fixed bin(31);
+    dcl y fixed bin(31) defined x static;  /* ERROR (23): STATIC on DEFINED */
+    put skip list('FAIL - should not reach here');
+end bad_static_defined;

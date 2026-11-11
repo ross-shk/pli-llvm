@@ -1551,6 +1551,7 @@ StmtP Parser::parseDeclare() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Declare;
   st->loc = cur().loc;
+  int factoredLevel = 0;
   for (;;) {
     // Factored structure declaration: DECLARE <level> (N1, N2, ...) ...
     // Check for level number followed by '(' before parsing a regular item.
@@ -1610,14 +1611,14 @@ StmtP Parser::parseDeclare() {
             break;
           }
           mem.name = cur().text;
-mem.loc = cur().loc;
-           advance();
-           parseDeclTail(mem);
-           members.push_back(std::move(mem));
-           if (!eat(Tok::Comma))
-             break;
-         }
-         // If the last member has INITIAL but the structure base doesn't,
+          mem.loc = cur().loc;
+          advance();
+          parseDeclTail(mem);
+          members.push_back(std::move(mem));
+          if (!eat(Tok::Comma))
+            break;
+        }
+        // If the last member has INITIAL but the structure base doesn't,
         // and we're at the end of the structure (no more members), this INITIAL
         // is likely a structure-level INITIAL that appears after members (valid PL/I).
         // Move it from the last member to the base structure.
@@ -1654,152 +1655,39 @@ mem.loc = cur().loc;
         }
         // Clone the factored structure for each name
         for (auto& [n, nl] : names) {
-          // Create the level item
-          DeclItem item;
+          // Create the level item using cloneDeclItem for deep copy
+          DeclItem item = cloneDeclItem(base);
           item.name = n;
           item.loc = nl;
-          item.level = level;
-          item.ty = base.ty;
-          item.isEntry = base.isEntry;
-          item.extName = base.extName;
-          item.entryParams = base.entryParams;
-          item.entryByValue = base.entryByValue;
-          item.controlled = base.controlled;
-          item.like = base.like;
-          item.picture = base.picture;
+          // Per-name flags: FILE, NONPRINT, EXTERNAL, EXTNAME, OFFSET, OFFSETREF
           item.fileAttr = base.fileAttr;
           item.nonprint = base.nonprint;
-          item.genericEntries = base.genericEntries;
-          item.initItems = cloneInitItems(base.initItems);
-          item.init = cloneExpr(base.init.get());
-          item.valueInit = cloneExpr(base.valueInit.get());
-          item.slenExpr = cloneExpr(base.slenExpr.get());
-          item.initCall = cloneExpr(base.initCall.get());
-          // Clone dynBounds and dynLbBounds
-          item.dynBounds.clear();
-          for (const auto& e : base.dynBounds)
-            item.dynBounds.push_back(cloneExpr(e.get()));
-          item.dynLbBounds.clear();
-          for (const auto& e : base.dynLbBounds)
-            item.dynLbBounds.push_back(cloneExpr(e.get()));
-          item.reserved = base.reserved;
-          item.basedBase = base.basedBase;
-          item.basedNoPtr = base.basedNoPtr;
-          item.definedBase = base.definedBase;
-          // Clone definedSubs (each contains ExprP)
-          item.definedSubs.clear();
-          for (const auto& ds : base.definedSubs) {
-            DefinedSub cds;
-            cds.isub = ds.isub;
-            cds.axis = ds.axis;
-            cds.mult = ds.mult;
-            cds.add = ds.add;
-            cds.expr = cloneExpr(ds.expr.get());
-            item.definedSubs.push_back(std::move(cds));
-          }
-          item.hasPos = base.hasPos;
-          item.pos = base.pos;
-          item.area = base.area;
-          item.areaSize = cloneExpr(base.areaSize.get());
-          item.areaStar = base.areaStar;
-          item.sawStatic = base.sawStatic;
           item.external = base.external;
           item.extName = base.extName;
           item.offset = base.offset;
           item.offsetRef = base.offsetRef;
-          item.aligned = base.aligned;
-          item.unaligned = base.unaligned;
-          item.optional = base.optional;
-          item.entryVariable = base.entryVariable;
-          item.isCondition = base.isCondition;
-          item.entryIsFunction = base.entryIsFunction;
-          item.entryRetTy = base.entryRetTy;
-          item.returnsStructName = base.returnsStructName;
-          item.reducible = base.reducible;
-          item.abnormalLabel = base.abnormalLabel;
-          item.normal = base.normal;
-          item.picture = base.picture;
-          item.reserved = base.reserved;
-          item.unionAttr = base.unionAttr;
-          item.labelAttr = base.labelAttr;
-          item.imaginary = base.imaginary;
-          item.dataAttr = base.dataAttr;
-item.genericEntries = base.genericEntries;
-           st->decls.push_back(std::move(item));
-           // Clone members
+          // area and areaSize are per-allocation, not per-name
+          item.area = base.area;
+          item.areaSize = cloneExpr(base.areaSize.get());
+          item.areaStar = base.areaStar;
+          st->decls.push_back(std::move(item));
+          // Clone members
           for (const auto& m : members) {
-            DeclItem mi;
+            DeclItem mi = cloneDeclItem(m);
             mi.name = m.name;
             mi.loc = m.loc;
-            mi.level = m.level;
-            mi.ty = m.ty;
-            mi.isEntry = m.isEntry;
-            mi.extName = m.extName;
-            mi.entryParams = m.entryParams;
-            mi.entryByValue = m.entryByValue;
-            mi.controlled = m.controlled;
-            mi.like = m.like;
-            mi.picture = m.picture;
+            // Per-name flags for members
             mi.fileAttr = m.fileAttr;
             mi.nonprint = m.nonprint;
-            mi.genericEntries = m.genericEntries;
-            mi.initItems = cloneInitItems(m.initItems);
-            mi.init = cloneExpr(m.init.get());
-            mi.valueInit = cloneExpr(m.valueInit.get());
-            mi.slenExpr = cloneExpr(m.slenExpr.get());
-            mi.initCall = cloneExpr(m.initCall.get());
-            // Clone dynBounds and dynLbBounds
-            mi.dynBounds.clear();
-            for (const auto& e : m.dynBounds)
-              mi.dynBounds.push_back(cloneExpr(e.get()));
-            mi.dynLbBounds.clear();
-            for (const auto& e : m.dynLbBounds)
-              mi.dynLbBounds.push_back(cloneExpr(e.get()));
-            mi.reserved = m.reserved;
-            mi.basedBase = m.basedBase;
-            mi.basedNoPtr = m.basedNoPtr;
-            mi.definedBase = m.definedBase;
-            // Clone definedSubs (each contains ExprP)
-            mi.definedSubs.clear();
-            for (const auto& ds : m.definedSubs) {
-              DefinedSub cds;
-              cds.isub = ds.isub;
-              cds.axis = ds.axis;
-              cds.mult = ds.mult;
-              cds.add = ds.add;
-              cds.expr = cloneExpr(ds.expr.get());
-              mi.definedSubs.push_back(std::move(cds));
-            }
-            mi.hasPos = m.hasPos;
-            mi.pos = m.pos;
-            mi.area = m.area;
-            mi.areaSize = cloneExpr(m.areaSize.get());
-            mi.areaStar = m.areaStar;
-            mi.sawStatic = m.sawStatic;
             mi.external = m.external;
             mi.extName = m.extName;
             mi.offset = m.offset;
             mi.offsetRef = m.offsetRef;
-            mi.aligned = m.aligned;
-            mi.unaligned = m.unaligned;
-            mi.optional = m.optional;
-            mi.entryVariable = m.entryVariable;
-            mi.isCondition = m.isCondition;
-            mi.entryIsFunction = m.entryIsFunction;
-            mi.entryRetTy = m.entryRetTy;
-            mi.returnsStructName = m.returnsStructName;
-            mi.reducible = m.reducible;
-            mi.abnormalLabel = m.abnormalLabel;
-            mi.normal = m.normal;
-            mi.picture = m.picture;
-            mi.reserved = m.reserved;
-            mi.unionAttr = m.unionAttr;
-            mi.labelAttr = m.labelAttr;
-            mi.imaginary = m.imaginary;
-            mi.dataAttr = m.dataAttr;
-mi.genericEntries = m.genericEntries;
-             st->decls.push_back(std::move(mi));
-           }
+            mi.area = m.area;
+            mi.areaSize = cloneExpr(m.areaSize.get());
+            mi.areaStar = m.areaStar;
+            st->decls.push_back(std::move(mi));
+          }
         }
         // Continue to next declaration in the DECLARE statement
         if (!eat(Tok::Comma))
@@ -1822,7 +1710,7 @@ mi.genericEntries = m.genericEntries;
       parseDeclTail(item);
       st->decls.push_back(std::move(item));
     } else if (at(Tok::LParen)) {
-      // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... — every
+      // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... -- every
       // name in the parenthesised list shares the dimension + attribute tail.
       // Parse the name list, parse the tail once, then clone it per name.
       SourceLoc floc = cur().loc;
@@ -1843,107 +1731,189 @@ mi.genericEntries = m.genericEntries;
       if (names.empty())
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
+      factoredLevel = 0;
+      // Apply the factored level number to all factored items
+      if (factoredLevel > 0) {
+        base.level = factoredLevel;
+      }
       parseDeclTail(base);
-      if (!base.dynBounds.empty())
-        d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
-                 "(13)");
-      // For factored scalars: if INITIAL has N values and there are N names,
-      // distribute one value per name (PL/I factored scalar INITIAL semantics).
+      // Consume comma before potential members (if present)
+      eat(Tok::Comma);
+      // Check if this is a factored structure (members follow with higher level numbers)
+      bool isFactoredStructure = false;
+      if (at(Tok::Number) && !cur().isFloat) {
+        int memLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+        if (memLevel > base.level) {
+          isFactoredStructure = true;
+        }
+      }
+      if (isFactoredStructure) {
+        // Factored structure declaration: DECLARE <level> (N1, N2) [attrs] ...
+        if (!base.dynBounds.empty())
+          d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
+                   "(13)");
+        // Now parse member declarations (level+1, level+2, ...) until we hit
+        // a declaration at the same or lower level, or end of DECLARE.
+        std::vector<DeclItem> members;
+        while (at(Tok::Number) && !cur().isFloat) {
+          int memLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+          if (memLevel <= base.level)
+            break; // end of this structure's members
+          if (memLevel > kMaxStructureLevel) {
+            d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+            memLevel = base.level + 1;
+          }
+          advance();
+          DeclItem mem;
+          mem.level = memLevel;
+          if (!at(Tok::Word)) {
+            d_.error(cur().loc, "expected a name in DECLARE", "(11)");
+            resync();
+            break;
+          }
+          mem.name = cur().text;
+          mem.loc = cur().loc;
+          advance();
+          parseDeclTail(mem);
+          members.push_back(std::move(mem));
+          if (!eat(Tok::Comma))
+            break;
+        }
+        // If the last member has INITIAL but the structure base doesn't,
+        // and we're at the end of the structure (no more members), this INITIAL
+        // is likely a structure-level INITIAL that appears after members (valid PL/I).
+        // Move it from the last member to the base structure.
+        if (!members.empty() && base.initItems.empty() && !members.back().initItems.empty()) {
+          base.initItems = cloneInitItems(members.back().initItems);
+          base.init = cloneExpr(members.back().init.get());
+          base.valueInit = cloneExpr(members.back().valueInit.get());
+          base.initCall = cloneExpr(members.back().initCall.get());
+          members.back().initItems.clear();
+          members.back().init.reset();
+          members.back().valueInit.reset();
+          members.back().initCall.reset();
+        }
+        // Also parse any explicitly trailing structure-level attributes
+        if (at(Tok::Word)) {
+          const std::string word = cur().text;
+          if (word == "INITIAL" || word == "VALUE" || word == "INITCALL") {
+            DeclItem trailing;
+            trailing.level = base.level;
+            parseDeclTail(trailing);
+            if (!trailing.initItems.empty()) {
+              base.initItems = cloneInitItems(trailing.initItems);
+            }
+            if (trailing.init) {
+              base.init = cloneExpr(trailing.init.get());
+            }
+            if (trailing.valueInit) {
+              base.valueInit = cloneExpr(trailing.valueInit.get());
+            }
+            if (trailing.initCall) {
+              base.initCall = cloneExpr(trailing.initCall.get());
+            }
+          }
+        }
+        // Clone the factored structure for each name
+        for (auto& [n, nl] : names) {
+          // Create the level item using cloneDeclItem for deep copy
+          DeclItem item = cloneDeclItem(base);
+          item.name = n;
+          item.loc = nl;
+          // Per-name flags: FILE, NONPRINT, EXTERNAL, EXTNAME, OFFSET, OFFSETREF
+          item.fileAttr = base.fileAttr;
+          item.nonprint = base.nonprint;
+          item.external = base.external;
+          item.extName = base.extName;
+          item.offset = base.offset;
+          item.offsetRef = base.offsetRef;
+          // area and areaSize are per-allocation, not per-name
+          item.area = base.area;
+          item.areaSize = cloneExpr(base.areaSize.get());
+          item.areaStar = base.areaStar;
+          st->decls.push_back(std::move(item));
+          // Clone members
+          for (const auto& m : members) {
+            DeclItem mi = cloneDeclItem(m);
+            mi.name = m.name;
+            mi.loc = m.loc;
+            // Per-name flags for members
+            mi.fileAttr = m.fileAttr;
+            mi.nonprint = m.nonprint;
+            mi.external = m.external;
+            mi.extName = m.extName;
+            mi.offset = m.offset;
+            mi.offsetRef = m.offsetRef;
+            mi.area = m.area;
+            mi.areaSize = cloneExpr(m.areaSize.get());
+            mi.areaStar = m.areaStar;
+            st->decls.push_back(std::move(mi));
+          }
+        }
+        // Continue to next declaration in the DECLARE statement
+        if (!eat(Tok::Comma))
+          break;
+        continue;
+      }
+      // Factored scalar/array declaration (not a structure)
+      // Distribute INITIAL itemlists per name in factored declaration.
+      // Per PL/I (TR 25.084 rule 11): INITIAL((itemlist1), (itemlist2), ...)
+      // gives each name its own itemlist. A single INITIAL(itemlist) applies
+      // to all names. We detect the per-name form by checking that the number
+      // of top-level initItems equals the number of names AND each is a Group
+      // (parenthesized itemlist). A flat INITIAL(1, 2) for 2 names is a single
+      // shared itemlist, not per-name.
       bool distributeInit = false;
-      if (!base.initItems.empty() && base.initItems.size() == names.size() &&
-          !base.ty.isArray() && !base.ty.isStruct()) {
+      if (!names.empty() && base.initItems.size() == names.size()) {
         distributeInit = true;
+        for (const auto& it : base.initItems) {
+          if (it.kind != InitItem::Group) {
+            distributeInit = false;
+            break;
+          }
+        }
       }
       for (size_t idx = 0; idx < names.size(); ++idx) {
-        auto& [n, nl] = names[idx];
-        DeclItem item;
+        const auto& [n, nl] = names[idx];
+        DeclItem item = cloneDeclItem(base);  // deep clone per name
         item.name = n;
         item.loc = nl;
-        item.level = base.level;
-        item.ty = base.ty;
-        item.isEntry = base.isEntry;
-        item.extName = base.extName;
-        item.entryParams = base.entryParams;
-        item.entryByValue = base.entryByValue;
-        item.controlled = base.controlled;
-        item.like = base.like;
-        item.picture = base.picture;
+        // Distribute initItems if applicable
+        if (distributeInit && idx < base.initItems.size()) {
+          item.initItems.clear();
+          item.initItems.push_back(cloneInitItem(base.initItems[idx]));
+          // For scalar INITIAL: if the distributed item is a single Value,
+          // or a Group containing a single Value, also set the back-compat
+          // `init` field (used by sema for M0 path).
+          const auto& distributed = item.initItems[0];
+          if (distributed.kind == InitItem::Value && distributed.value) {
+            item.init = cloneExpr(distributed.value.get());
+          } else if (distributed.kind == InitItem::Group &&
+                     distributed.items.size() == 1 &&
+                     distributed.items[0].kind == InitItem::Value &&
+                     distributed.items[0].value) {
+            item.init = cloneExpr(distributed.items[0].value.get());
+          }
+        }
+        // Distribute initCall if applicable
+        if (item.initCall && distributeInit) {
+          // Each name gets its own copy of the INITIAL CALL
+          // (already deep-cloned by cloneDeclItem)
+        }
         // FILE (rules (39),(40)) and its NONPRINT modifier (ADR-204) are
         // per-name flags, not part of the type: copy them or every factored
         // name stays a non-file and OPEN/FILE( f ) rejects it (B15).
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
-        item.genericEntries = base.genericEntries;
-        // INITIAL itemlist (rule 26) and VALUE (ADR-108) are per-name: copy
-        // them so each factored name gets its own initializer.
-        if (distributeInit) {
-          // Distribute one INITIAL value per factored name.
-          item.initItems.clear();
-          InitItem distributed;
-          distributed.kind = base.initItems[idx].kind;
-          distributed.value = cloneExpr(base.initItems[idx].value.get());
-          distributed.factor = base.initItems[idx].factor;
-          distributed.items = cloneInitItems(base.initItems[idx].items);
-          item.initItems.push_back(std::move(distributed));
-          if (base.initItems[idx].kind == InitItem::Value && base.initItems[idx].value)
-            item.init = cloneExpr(base.initItems[idx].value.get());
-        } else {
-          item.initItems = cloneInitItems(base.initItems);
-          item.init = cloneExpr(base.init.get());
-        }
-        item.valueInit = cloneExpr(base.valueInit.get());
-        item.slenExpr = cloneExpr(base.slenExpr.get());
-        item.initCall = cloneExpr(base.initCall.get());
-        // Clone dynBounds and dynLbBounds
-        item.dynBounds.clear();
-        for (const auto& e : base.dynBounds)
-          item.dynBounds.push_back(cloneExpr(e.get()));
-        item.dynLbBounds.clear();
-        for (const auto& e : base.dynLbBounds)
-          item.dynLbBounds.push_back(cloneExpr(e.get()));
-        item.reserved = base.reserved;
-        item.basedBase = base.basedBase;
-        item.basedNoPtr = base.basedNoPtr;
-        item.definedBase = base.definedBase;
-        // Clone definedSubs (each contains ExprP)
-        item.definedSubs.clear();
-        for (const auto& ds : base.definedSubs) {
-          DefinedSub cds;
-          cds.isub = ds.isub;
-          cds.axis = ds.axis;
-          cds.mult = ds.mult;
-          cds.add = ds.add;
-          cds.expr = cloneExpr(ds.expr.get());
-          item.definedSubs.push_back(std::move(cds));
-        }
-        item.hasPos = base.hasPos;
-        item.pos = base.pos;
-        item.area = base.area;
-        item.areaSize = cloneExpr(base.areaSize.get());
-        item.areaStar = base.areaStar;
-        item.sawStatic = base.sawStatic;
+        // Per-name flags
         item.external = base.external;
         item.extName = base.extName;
         item.offset = base.offset;
         item.offsetRef = base.offsetRef;
-        item.aligned = base.aligned;
-        item.unaligned = base.unaligned;
-        item.optional = base.optional;
-        item.entryVariable = base.entryVariable;
-        item.isCondition = base.isCondition;
-        item.entryIsFunction = base.entryIsFunction;
-        item.entryRetTy = base.entryRetTy;
-        item.returnsStructName = base.returnsStructName;
-        item.reducible = base.reducible;
-        item.abnormalLabel = base.abnormalLabel;
-        item.normal = base.normal;
-        item.picture = base.picture;
-        item.reserved = base.reserved;
-        item.unionAttr = base.unionAttr;
-        item.labelAttr = base.labelAttr;
-        item.imaginary = base.imaginary;
-        item.dataAttr = base.dataAttr;
-        item.genericEntries = base.genericEntries;
+        // area and areaSize are per-allocation
+        item.area = base.area;
+        item.areaSize = cloneExpr(base.areaSize.get());
+        item.areaStar = base.areaStar;
         st->decls.push_back(std::move(item));
       }
     } else {
@@ -1956,47 +1926,6 @@ mi.genericEntries = m.genericEntries;
     }
     if (!eat(Tok::Comma))
       break;
-  }
-  // For non-factored structures: if a structure's last member has INITIAL
-  // but the structure base doesn't, this INITIAL is likely a structure-level
-  // INITIAL that appears after members (valid PL/I). Move it from the last
-  // member to the base structure.
-  for (size_t i = 0; i < st->decls.size(); ++i) {
-    DeclItem& item = st->decls[i];
-    if (item.level > 0) {
-      // Find the structure base (nearest preceding item with level < item.level)
-      int baseIdx = -1;
-      for (int k = (int)i - 1; k >= 0; --k) {
-        if (st->decls[k].level > 0 && st->decls[k].level < item.level) {
-          baseIdx = k;
-          break;
-        }
-      }
-      if (baseIdx >= 0) {
-        // This item is a member of a structure. Check if it's the last member.
-        bool isLastMember = true;
-        for (size_t k = i + 1; k < st->decls.size(); ++k) {
-          if (st->decls[k].level > 0 && st->decls[k].level <= item.level) {
-            // Found next item at same or lower level - this member is not the last
-            isLastMember = false;
-            break;
-          }
-        }
-        // More precise check: this is the last member if the next item
-        // at level <= structure's level appears after all members
-        DeclItem& base = st->decls[baseIdx];
-        if (isLastMember && base.initItems.empty() && !item.initItems.empty()) {
-          base.initItems = cloneInitItems(item.initItems);
-          base.init = cloneExpr(item.init.get());
-          base.valueInit = cloneExpr(item.valueInit.get());
-          base.initCall = cloneExpr(item.initCall.get());
-          item.initItems.clear();
-          item.init.reset();
-          item.valueInit.reset();
-          item.initCall.reset();
-        }
-      }
-    }
   }
   expect(Tok::Semi, "(9)");
   return st;
@@ -2376,7 +2305,7 @@ void Parser::parseDeclTail(DeclItem& item) {
             item.initCall = std::move(call);
             expect(Tok::RParen, "(26)"); // close INITIAL( ... )
           } else {
-            item.initItems = parseInitialList();
+            item.initItems = parseInitialList(/*topLevel=*/true);
             // Back-compat: a single plain value is also the M0 scalar item.init.
             // Copy (not move) the pointer: member-INIT gathering reads
             // initItems, and a moved-from unique_ptr would leave a null.
@@ -2454,10 +2383,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
-        // STATIC is the only storage attribute with an effect: a static AREA
-        // keeps its region for the whole program (rule (20)). It still has no
-        // effect on other variables, but the warning waits until the whole
-        // declaration is read so an AREA attribute can suppress it.
+        // STATIC (rule 23): true static storage for all types (not just AREA).
+        // Non-AREA STATIC variables get true static storage (LLVM global).
+        // STATIC AREA (rule (20)) keeps its region for the whole program.
         if (w == "STATIC") {
           bag.staticAttr = true;
           staticLoc = cur().loc;
@@ -2768,6 +2696,24 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (at(Tok::LParen)) skipParen("(39)");
         continue;
       }
+      if (w == "BUFFERED") {
+        // BUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.buffered = true;
+        continue;
+      }
+      if (w == "UNBUFFERED") {
+        // UNBUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.unbuffered = true;
+        continue;
+      }
+      if (w == "EXCLUSIVE") {
+        // EXCLUSIVE (rule 39): implementation-dependent file attribute.
+        advance();
+        item.exclusive = true;
+        continue;
+      }
       if (w == "TASK") {
         // task-attribute (rules (15),(79), QR2.8): a task name for CALL TASK.
         advance();
@@ -2971,6 +2917,12 @@ void Parser::parseDeclTail(DeclItem& item) {
         // NONPRINT (ADR-204): stream writes to this file are discarded.
         advance();
         item.nonprint = true;
+        continue;
+      }
+      if (w == "PRINT") {
+        // PRINT (rule 40): stream file with page/line formatting.
+        advance();
+        item.printAttr = true;
         continue;
       }
       break; // not an attribute: next declaration item or end
@@ -5276,7 +5228,7 @@ StmtP Parser::parseFree() {
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
 // record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
 // (101),(112)). KEYED/DIRECT stay diagnosed; IDENT/LINESIZE/PAGESIZE
-// are accepted no-ops; ENVIRONMENT is diagnosed (rule 101).
+// are accepted no-ops; ENVIRONMENT is accepted as a no-op on OPEN.
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -5398,10 +5350,16 @@ StmtP Parser::parseOpen() {
       continue;
     }
     if (atWord("ENVIRONMENT")) {
-      // ENVIRONMENT is a DECLARE FILE attribute (rule 39), not an OPEN option.
-      d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
+      // ENVIRONMENT (rule 101): implementation-defined file attribute.
+      // Accepted on OPEN as a no-op, like on DECLARE (rule 39).
       advance();
       if (at(Tok::LParen)) skipParen("(101)");
+      continue;
+    }
+    if (atWord("BUFFERED") || atWord("UNBUFFERED") || atWord("EXCLUSIVE")) {
+      // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+      // file attributes; accepted with no runtime effect.
+      advance();
       continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
@@ -5418,6 +5376,7 @@ StmtP Parser::parseOpen() {
              "(101)");
   else if (st->openUpdate && st->openInput)
     d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
+
   expect(Tok::Semi, "(100)");
   return st;
 }
@@ -5449,7 +5408,7 @@ StmtP Parser::parseClose() {
       // accepted as no-op per TR 25.084.
       advance();
       if (eat(Tok::LParen)) {
-        (void)parseExpr(); // parse for syntax validation, then discard
+        st->closeIdent = parseExpr();
         expect(Tok::RParen, "(103)");
       } else {
         d_.error(cur().loc, "CLOSE IDENT requires a parenthesized argument", "(103)");
@@ -5811,15 +5770,16 @@ ExprP Parser::parsePrimary() {
 
 // INITIAL itemlist (rules (28)-(31)): a comma-separated list of INITIAL items
 // terminated by the enclosing ')'. Called with the opening '(' already consumed;
-// consumes the closing ')'.
-std::vector<InitItem> Parser::parseInitialList() {
+// consumes the closing ')'. If `topLevel` is true, a parenthesized constant
+// '(n)' is treated as a Group (single-element itemlist), not a Value.
+std::vector<InitItem> Parser::parseInitialList(bool topLevel) {
   std::vector<InitItem> out;
   for (;;) {
     if (at(Tok::RParen)) {
       advance();
       break;
     }
-    out.push_back(parseInitialItem());
+    out.push_back(parseInitialItem(topLevel));
     if (at(Tok::Comma)) {
       advance();
       continue;
@@ -5831,8 +5791,12 @@ std::vector<InitItem> Parser::parseInitialList() {
 }
 
 // One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
-// '( expr )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
-InitItem Parser::parseInitialItem() {
+// One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
+// '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
+// If `topLevel` is true, a parenthesized constant '(n)' is treated as a Group
+// (single-element itemlist) rather than a Value, to support factored INITIAL
+// per-name itemlists: INITIAL((1), (2)).
+InitItem Parser::parseInitialItem(bool topLevel) {
   auto valueStart = [](Tok k) {
     return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
            k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star ||
@@ -5852,7 +5816,9 @@ InitItem Parser::parseInitialItem() {
         peek().kind == Tok::Number && peek(2).kind == Tok::RParen && peek(3).kind == Tok::HexLit;
     bool iter = iterHex || (valueStart(peek().kind) && peek(2).kind == Tok::RParen &&
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
-    bool parenConst = !iterHex && valueStart(peek().kind) && peek(2).kind == Tok::RParen &&
+    // At top level of INITIAL itemlist, '(n)' is a Group (per-name itemlist),
+    // not a parenthesized constant.
+    bool parenConst = !topLevel && !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {
@@ -5870,9 +5836,9 @@ InitItem Parser::parseInitialItem() {
       }
       if (at(Tok::LParen)) {
         advance(); // (
-        it.items = parseInitialList();
+        it.items = parseInitialList(/*topLevel=*/false);
       } else {
-        it.items.push_back(parseInitialItem());
+        it.items.push_back(parseInitialItem(/*topLevel=*/false));
       }
       return it;
     }
@@ -5887,7 +5853,7 @@ InitItem Parser::parseInitialItem() {
     }
     InitItem g;
     g.kind = InitItem::Group;
-    g.items = parseInitialList(); // consumes the group's ')'
+    g.items = parseInitialList(/*topLevel=*/false); // consumes the group's ')'
     return g;
   }
   InitItem v;

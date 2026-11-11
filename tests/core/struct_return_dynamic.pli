@@ -1,0 +1,45 @@
+ /* Rule 13: RETURNS of structure with dynamic member. */
+ struct_return_dynamic: procedure options(main);
+     call test(5);
+     put skip list('PASS struct_return_dynamic');
+ 
+     test: procedure(n);
+         declare n fixed bin(31);
+         
+         /* Template structure with dynamic member using parameter n */
+         declare 1 tmpl,
+                2 len fixed bin(31),
+                2 data(n) fixed bin(31);
+     
+         make_vec: procedure(x) returns(tmpl);
+             declare x fixed bin(31);
+             declare 1 r,
+                    2 len fixed bin(31),
+                    2 data(n) fixed bin(31);
+             r.len = n;
+             do i = 1 to n;
+                r.data(i) = x * i;
+             end;
+             return(r);
+         end make_vec;
+         
+         /* Explicitly declare result with same structure (no LIKE) */
+         declare 1 result,
+                2 len fixed bin(31),
+                2 data(n) fixed bin(31);
+     
+         /* Call function in expression context (assignment) */
+         result = make_vec(3);
+     
+         if result.len ^= 5 then do;
+            put skip list('FAIL len');
+            stop;
+         end;
+         do i = 1 to 5;
+            if result.data(i) ^= 3 * i then do;
+               put skip list('FAIL data', i, result.data(i));
+               stop;
+            end;
+         end;
+     end test;
+ end struct_return_dynamic;
