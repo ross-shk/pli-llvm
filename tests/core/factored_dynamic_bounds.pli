@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rules (11),(13): factored dynamic bounds — each name gets its own bounds. */
+ factored_dynamic_bounds: procedure options(main);
+     declare n fixed bin(31) init(3);
+     declare m fixed bin(31) init(4);
+     declare (a, b)(n) fixed bin(31);
+     declare (x, y)(m) fixed bin(31) initial((1,2,3), (4,5,6,7));
+     if hbound(a) ¬= n | hbound(b) ¬= n then do;
+        put skip list('FAIL factored_dynamic_bounds hbound', hbound(a), hbound(b));
+        stop;
+     end;
+     if x(2) ¬= 2 | y(3) ¬= 6 then do;
+        put skip list('FAIL factored_dynamic_bounds init', x(2), y(3));
+        stop;
+     end;
+     put skip list('PASS factored_dynamic_bounds');
+ end factored_dynamic_bounds;

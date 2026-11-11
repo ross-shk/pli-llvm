@@ -1,20 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* STATIC declared in a nested BEGIN block (rule 23): program-lifetime
-   storage shared across all activations of that BEGIN block. */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Rule (23): STATIC declared inside nested BEGIN block has program lifetime. */
 static_nested_begin: procedure options(main);
-
-    call activate_begin();
-    call activate_begin();
-    call activate_begin();
-
+    call outer();
+    call outer();
     put skip list('PASS static_nested_begin');
 end static_nested_begin;
 
-activate_begin: proc() options(bypass);
+outer: proc options(bypass);
     begin;
-        dcl counter fixed bin(31) static initial(0);
-        counter = counter + 1;
-        put skip list('activation', counter);
+        dcl x fixed bin(31) static initial(5);  /* STATIC declared INSIDE BEGIN */
+        x = x + 1;
+        put skip list('x=', x);
     end;
     return;
-end activate_begin;
+end outer;

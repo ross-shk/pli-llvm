@@ -1,45 +1,24 @@
 /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* Factored INITIAL with iteration factors, nested groups, CHAR, BIT,
-    structures, and INITIAL CALL (rules 11, 26, 27). */
- FACTORED_INITIAL: PROCEDURE OPTIONS(MAIN);
-
-   /* Factored scalar INITIAL with iteration factor */
-   DECLARE (X, Y, Z) FIXED BIN(31) INITIAL((3)0);
-
-   /* Factored array INITIAL with nested groups and * repeat */
-   DECLARE (A, B)(5) FIXED BIN(31) INITIAL((2)(1, 2), (3)*);
-
-   /* Factored CHAR INITIAL with varying lengths */
-   DECLARE (S1, S2) CHAR(10) INITIAL(('ABCDE'), ('XYZ'));
-
-   /* Factored BIT INITIAL */
-   DECLARE (B1, B2) BIT(8) INITIAL(('1010'B), ('1100'B));
-
-   /* Factored structure INITIAL — each name gets own copy of itemlist */
-   DECLARE 1 (R1, R2),
-             2 A FIXED BIN(31),
-             2 B(3) FIXED BIN(31),
-             2 C CHAR(5)
-             INITIAL((10, (3)20, 'HELLO'));
-
-   /* Factored INITIAL CALL — each name calls function independently */
-   DECLARE (F1, F2) FIXED BIN(31) INITIAL(CALL GEN_VAL());
-
-   PUT LIST('FACTORED_INITIAL: all initializations executed');
-   PUT SKIP LIST(X, Y, Z);
-   PUT SKIP LIST(A(1), A(2), A(3), A(4), A(5));
-   PUT SKIP LIST(B(1), B(2), B(3), B(4), B(5));
-   PUT SKIP LIST(S1, S2);
-   PUT SKIP LIST(B1, B2);
-   PUT SKIP LIST(R1.A, R1.B(1), R1.B(2), R1.B(3), R1.C);
-   PUT SKIP LIST(R2.A, R2.B(1), R2.B(2), R2.B(3), R2.C);
-   PUT SKIP LIST(F1, F2);
-
- GEN_VAL: PROCEDURE RETURNS(FIXED BIN(31));
-   DECLARE COUNTER STATIC FIXED BIN(31) INITIAL(0);
-   COUNTER = COUNTER + 1;
-   RETURN(COUNTER * 100);
- END GEN_VAL;
-
- END FACTORED_INITIAL;
+ /* Rules (11),(26): factored INITIAL — each name gets its own initializer. */
+ factored_initial: procedure options(main);
+     declare (a, b, c) fixed bin(31) initial((1), (2), (3));
+     if a ¬= 1 | b ¬= 2 | c ¬= 3 then do;
+        put skip list('FAIL factored_initial scalars', a, b, c);
+        stop;
+     end;
+     declare (x, y)(5) fixed bin(31) initial((1,2,3,4,5), (5,4,3,2,1));
+     if x(3) ¬= 3 | y(3) ¬= 3 then do;
+        put skip list('FAIL factored_initial arrays', x(3), y(3));
+        stop;
+     end;
+     /* Iteration factor in factored INITIAL — each name gets its own itemlist.
+        Per PL/I, per-name itemlists are parenthesized: ((itemlist1)), ((itemlist2)). */
+     declare (p, q)(6) fixed bin(31) initial(((6)(0)), ((3)(1,2)));
+     /* p = 0,0,0,0,0,0 ; q = 1,2,1,2,1,2 */
+     if p(1) ¬= 0 | q(1) ¬= 1 | q(2) ¬= 2 | q(3) ¬= 1 then do;
+        put skip list('FAIL factored_initial iter', p(1), q(1), q(2), q(3));
+        stop;
+     end;
+     put skip list('PASS factored_initial');
+ end factored_initial;

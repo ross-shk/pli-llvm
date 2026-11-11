@@ -1423,10 +1423,10 @@ std::string Parser::parseCondition(std::string* fileArg) {
     }
     return name;
   }
-  if (w == "ENDFILE" || w == "UNDEFINEDFILE" || w == "ENDPAGE") {
-    // ENDFILE(file), UNDEFINEDFILE(file), ENDPAGE(file) (rule 97) are file conditions:
+  if (w == "ENDFILE" || w == "UNDEFINEDFILE") {
+    // ENDFILE(file) and UNDEFINEDFILE(file) (rule 97) are file conditions:
     // each names its file, and sema keys the handler per file slot
-    // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey / kEndpageBaseCondKey).
+    // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey).
     std::string cond = w;
     advance();
     if (!at(Tok::LParen)) {
@@ -1444,7 +1444,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     expect(Tok::RParen, "(97)");
     return cond;
   }
-  if (w == "KEY" || w == "NAME" ||
+  if (w == "ENDPAGE" || w == "KEY" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))
@@ -1472,7 +1472,7 @@ StmtP Parser::parseOn(Proc* owner) {
     SourceLoc l = cur().loc;
     advance();
     st->snap = true;
-    d_.remark(l, "SNAP prefix accepted (implementation-dependent); no runtime effect", "(91)");
+    d_.warn(l, "SNAP is accepted but has no effect in this stage", "(91)");
   }
   // ON ERROR SYSTEM; establishes the system action (rule 91).
   if (atWord("SYSTEM") && peek().kind == Tok::Semi) {
@@ -1552,6 +1552,17 @@ StmtP Parser::parseDeclare() {
   st->kind = Stmt::Declare;
   st->loc = cur().loc;
   for (;;) {
+    // Check for factored declaration with optional level number: DECLARE [level] (A, B, C) ...
+    // Only consume the level number if followed by '(' (factored declaration).
+    int factoredLevel = 0;
+    if (at(Tok::Number) && !cur().isFloat && peek().kind == Tok::LParen) {
+      factoredLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
+      if (factoredLevel > kMaxStructureLevel) {
+        d_.error(cur().loc, "a level number must not exceed 49", "(11)");
+        factoredLevel = 0;
+      }
+      advance();
+    }
     if (at(Tok::LParen)) {
       // Factored declaration (rule 11): DECLARE (A, B, C) [dim] attrs... — every
       // name in the parenthesised list shares the dimension + attribute tail.
@@ -1575,126 +1586,68 @@ StmtP Parser::parseDeclare() {
         d_.error(floc, "factored declaration has no names", "(11)");
       DeclItem base;
       parseDeclTail(base);
-      if (!base.dynBounds.empty())
-        d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
-                 "(13)");
-      for (auto& [n, nl] : names) {
-        DeclItem item;
+      // Apply the factored level number to all factored items
+      if (factoredLevel > 0) {
+        base.level = factoredLevel;
+      }
+      // Distribute INITIAL itemlists per name in factored declaration.
+      // Per PL/I (TR 25.084 rule 11): INITIAL((itemlist1), (itemlist2), ...)
+      // gives each name its own itemlist. A single INITIAL(itemlist) applies
+      // to all names. We detect the per-name form by checking that the number
+      // of top-level initItems equals the number of names AND each is a Group
+      // (parenthesized itemlist). A flat INITIAL(1, 2) for 2 names is a single
+      // shared itemlist, not per-name.
+      bool distributeInit = false;
+      if (!names.empty() && base.initItems.size() == names.size()) {
+        distributeInit = true;
+        for (const auto& it : base.initItems) {
+          if (it.kind != InitItem::Group) {
+            distributeInit = false;
+            break;
+          }
+        }
+      }
+      for (size_t idx = 0; idx < names.size(); ++idx) {
+        const auto& [n, nl] = names[idx];
+        DeclItem item = cloneDeclItem(base);  // deep clone per name
         item.name = n;
         item.loc = nl;
-        item.level = base.level;
-        item.ty = base.ty;
-        item.isEntry = base.isEntry;
-        item.extName = base.extName;
-        item.entryParams = base.entryParams;
-        item.entryByValue = base.entryByValue;
-        item.controlled = base.controlled;
-        item.like = base.like;
-        item.picture = base.picture;
+        // Distribute initItems if applicable
+        if (distributeInit && idx < base.initItems.size()) {
+          item.initItems.clear();
+          item.initItems.push_back(cloneInitItem(base.initItems[idx]));
+          // For scalar INITIAL: if the distributed item is a single Value,
+          // or a Group containing a single Value, also set the back-compat
+          // `init` field (used by sema for M0 path).
+          const auto& distributed = item.initItems[0];
+          if (distributed.kind == InitItem::Value && distributed.value) {
+            item.init = cloneExpr(distributed.value.get());
+          } else if (distributed.kind == InitItem::Group &&
+                     distributed.items.size() == 1 &&
+                     distributed.items[0].kind == InitItem::Value &&
+                     distributed.items[0].value) {
+            item.init = cloneExpr(distributed.items[0].value.get());
+          }
+        }
+        // Distribute initCall if applicable
+        if (item.initCall && distributeInit) {
+          // Each name gets its own copy of the INITIAL CALL
+          // (already deep-cloned by cloneDeclItem)
+        }
         // FILE (rules (39),(40)) and its NONPRINT modifier (ADR-204) are
         // per-name flags, not part of the type: copy them or every factored
         // name stays a non-file and OPEN/FILE( f ) rejects it (B15).
         item.fileAttr = base.fileAttr;
         item.nonprint = base.nonprint;
-        item.genericEntries = base.genericEntries;
-        item.sawStatic = base.sawStatic;
-
-        // Deep-clone INITIAL itemlist, scalar INITIAL, and INITIAL CALL for each factored name
-        for (const auto& initItem : base.initItems) {
-          item.initItems.push_back(cloneInitItem(initItem));
-        }
-        item.init = base.init ? cloneExpr(base.init.get()) : nullptr;
-        item.initCall = base.initCall ? cloneExpr(base.initCall.get()) : nullptr;
-
         st->decls.push_back(std::move(item));
       }
     } else {
-      // Check for structure factored declaration: level-number (names) ...
-      // e.g., DECLARE 1 (R1, R2), 2 A FIXED, ... INITIAL(...)
-      int factoredLevel = 0;
-      SourceLoc levelLoc;
-      if (at(Tok::Number) && !cur().isFloat) {
-        factoredLevel = boundedNonNeg(cur().text, cur().loc, d_, "level number", "(11)");
-        if (factoredLevel > kMaxStructureLevel) {
-          d_.error(cur().loc, "a level number must not exceed 49", "(11)");
-          factoredLevel = 0;
-        }
-        levelLoc = cur().loc;
-        advance();
-        if (at(Tok::LParen)) {
-          // Structure factored declaration: level (names) ...
-          advance(); // (
-          std::vector<std::pair<std::string, SourceLoc>> names;
-          for (;;) {
-            if (at(Tok::Word)) {
-              names.push_back({cur().text, cur().loc});
-              advance();
-            } else {
-              d_.error(cur().loc, "expected a name in factored declaration", "(11)");
-              break;
-            }
-            if (!eat(Tok::Comma))
-              break;
-          }
-          expect(Tok::RParen, "(11)");
-          if (names.empty())
-            d_.error(levelLoc, "factored declaration has no names", "(11)");
-          DeclItem base;
-          parseDeclTail(base);
-          if (!base.dynBounds.empty())
-            d_.error(levelLoc, "dynamic bounds in a factored declaration are not implemented in this stage",
-                     "(13)");
-          for (auto& [n, nl] : names) {
-            DeclItem item;
-            item.name = n;
-            item.loc = nl;
-            item.level = factoredLevel;
-            item.ty = base.ty;
-            item.isEntry = base.isEntry;
-            item.extName = base.extName;
-            item.entryParams = base.entryParams;
-            item.entryByValue = base.entryByValue;
-            item.controlled = base.controlled;
-            item.like = base.like;
-            item.picture = base.picture;
-            item.fileAttr = base.fileAttr;
-            item.nonprint = base.nonprint;
-            item.genericEntries = base.genericEntries;
-            item.sawStatic = base.sawStatic;
-
-            // Deep-clone INITIAL itemlist, scalar INITIAL, and INITIAL CALL for each factored name
-            for (const auto& initItem : base.initItems) {
-              item.initItems.push_back(cloneInitItem(initItem));
-            }
-            item.init = base.init ? cloneExpr(base.init.get()) : nullptr;
-            item.initCall = base.initCall ? cloneExpr(base.initCall.get()) : nullptr;
-
-            st->decls.push_back(std::move(item));
-          }
-          // After the structure factored names, continue to parse the remaining
-          // members (level 2, 3, etc.) as part of the same structure.
-          // This is handled by the normal parseDeclItem flow below.
-        } else {
-          // Not a factored declaration, put back and parse normally
-          // We need to re-parse this as a normal declaration item
-          // But we already consumed the number, so create a DeclItem manually
-          DeclItem item;
-          item.level = factoredLevel;
-          // Continue to parse the rest of the declaration
-          if (!parseDeclItem(item)) {
-            resync();
-            return st;
-          }
-          st->decls.push_back(std::move(item));
-        }
-      } else {
-        DeclItem item;
-        if (!parseDeclItem(item)) {
-          resync();
-          return st;
-        }
-        st->decls.push_back(std::move(item));
+      DeclItem item;
+      if (!parseDeclItem(item)) {
+        resync();
+        return st;
       }
+      st->decls.push_back(std::move(item));
     }
     if (!eat(Tok::Comma))
       break;
@@ -2077,7 +2030,7 @@ void Parser::parseDeclTail(DeclItem& item) {
             item.initCall = std::move(call);
             expect(Tok::RParen, "(26)"); // close INITIAL( ... )
           } else {
-            item.initItems = parseInitialList();
+            item.initItems = parseInitialList(/*topLevel=*/true);
             // Back-compat: a single plain value is also the M0 scalar item.init.
             // Copy (not move) the pointer: member-INIT gathering reads
             // initItems, and a moved-from unique_ptr would leave a null.
@@ -2155,10 +2108,9 @@ void Parser::parseDeclTail(DeclItem& item) {
         continue;
       }
       if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
-        // STATIC is the only storage attribute with an effect: a static AREA
-        // keeps its region for the whole program (rule (20)). It still has no
-        // effect on other variables, but the warning waits until the whole
-        // declaration is read so an AREA attribute can suppress it.
+        // STATIC (rule 23): true static storage for all types (not just AREA).
+        // Non-AREA STATIC variables get true static storage (LLVM global).
+        // STATIC AREA (rule (20)) keeps its region for the whole program.
         if (w == "STATIC") {
           bag.staticAttr = true;
           staticLoc = cur().loc;
@@ -2469,6 +2421,24 @@ void Parser::parseDeclTail(DeclItem& item) {
         if (at(Tok::LParen)) skipParen("(39)");
         continue;
       }
+      if (w == "BUFFERED") {
+        // BUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.buffered = true;
+        continue;
+      }
+      if (w == "UNBUFFERED") {
+        // UNBUFFERED (rule 39): implementation-dependent file attribute.
+        advance();
+        item.unbuffered = true;
+        continue;
+      }
+      if (w == "EXCLUSIVE") {
+        // EXCLUSIVE (rule 39): implementation-dependent file attribute.
+        advance();
+        item.exclusive = true;
+        continue;
+      }
       if (w == "TASK") {
         // task-attribute (rules (15),(79), QR2.8): a task name for CALL TASK.
         advance();
@@ -2672,6 +2642,12 @@ void Parser::parseDeclTail(DeclItem& item) {
         // NONPRINT (ADR-204): stream writes to this file are discarded.
         advance();
         item.nonprint = true;
+        continue;
+      }
+      if (w == "PRINT") {
+        // PRINT (rule 40): stream file with page/line formatting.
+        advance();
+        item.printAttr = true;
         continue;
       }
       break; // not an attribute: next declaration item or end
@@ -3326,39 +3302,6 @@ ExprP Parser::cloneExpr(const Expr* e) {
   return c;
 }
 
-// Deep-copy a FormatItem (recursive for nested items and subs).
-FormatItem Parser::cloneFormatItem(const FormatItem& f) {
-  FormatItem c;
-  c.kind = f.kind;
-  c.w = cloneExpr(f.w.get());
-  c.d = cloneExpr(f.d.get());
-  c.s = cloneExpr(f.s.get());
-  c.remote = f.remote;
-  c.pic = f.pic;
-  for (const auto& sb : f.subs) {
-    c.subs.push_back(cloneFormatItem(sb));
-  }
-  if (f.kind == FormatItem::Repeat) {
-    c.count = cloneExpr(f.count.get());
-    for (const auto& it : f.items) {
-      c.items.push_back(cloneFormatItem(it));
-    }
-  }
-  return c;
-}
-
-// Deep-clone an InitItem (recursive for nested items).
-InitItem Parser::cloneInitItem(const InitItem& item) {
-  InitItem c;
-  c.kind = item.kind;
-  c.factor = item.factor;
-  c.value = item.value ? cloneExpr(item.value.get()) : nullptr;
-  for (const auto& nested : item.items) {
-    c.items.push_back(cloneInitItem(nested));
-  }
-  return c;
-}
-
 // select-statement (extension, ADR-104): SELECT [( expr )]; WHEN ...; END;
 // desugars in the parser to an IF-chain, so sema and codegen are untouched:
 //   SELECT; WHEN (p) S; OTHERWISE T; END;  ->  IF p THEN S; ELSE T;
@@ -3776,16 +3719,7 @@ StmtP Parser::parsePut() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            DataListElement elem = parseDataListElement();
-            if (!std::holds_alternative<ExprP>(elem) && 
-                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
-                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
-              resync();
-              return nullptr;
-            }
-            if (auto* expr = std::get_if<ExprP>(&elem)) {
-              st->items.push_back(std::move(*expr));
-            }
+            st->items.push_back(parseExpr());
             if (!eat(Tok::Comma))
               break;
           }
@@ -3823,25 +3757,11 @@ StmtP Parser::parsePut() {
       sawData = true;
       if (expect(Tok::LParen, "(106)")) {
         if (!at(Tok::RParen)) {
-          EditGroup group;
-          group.loc = st->loc;
           for (;;) {
-            DataListElement elem = parseDataListElement();
-            if (!std::holds_alternative<ExprP>(elem) && 
-                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
-                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
-              resync();
-              return nullptr;
-            }
-            if (auto* expr = std::get_if<ExprP>(&elem)) {
-              group.items.push_back(std::move(*expr));
-            } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&elem)) {
-              group.items.push_back(std::move(*iter));
-            }
+            st->items.push_back(parseExpr());
             if (!eat(Tok::Comma))
               break;
           }
-          st->dataGroups.push_back(std::move(group));
         }
         expect(Tok::RParen, "(106)");
       }
@@ -3905,16 +3825,7 @@ StmtP Parser::parseGet() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            DataListElement elem = parseDataListElement();
-            if (!std::holds_alternative<ExprP>(elem) && 
-                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
-                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
-              resync();
-              return nullptr;
-            }
-            if (auto* expr = std::get_if<ExprP>(&elem)) {
-              st->items.push_back(std::move(*expr));
-            }
+            st->items.push_back(parseExpr());
             if (!eat(Tok::Comma))
               break;
           }
@@ -3963,25 +3874,11 @@ StmtP Parser::parseGet() {
       st->data = true;
       if (expect(Tok::LParen, "(106)")) {
         if (!at(Tok::RParen)) {
-          EditGroup group;
-          group.loc = st->loc;
           for (;;) {
-            DataListElement elem = parseDataListElement();
-            if (!std::holds_alternative<ExprP>(elem) && 
-                (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
-                 !std::get<std::unique_ptr<IterDatalist>>(elem))) {
-              resync();
-              return nullptr;
-            }
-            if (auto* expr = std::get_if<ExprP>(&elem)) {
-              group.items.push_back(std::move(*expr));
-            } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&elem)) {
-              group.items.push_back(std::move(*iter));
-            }
+            st->items.push_back(parseExpr());
             if (!eat(Tok::Comma))
               break;
           }
-          st->dataGroups.push_back(std::move(group));
         }
         expect(Tok::RParen, "(106)");
       }
@@ -4024,173 +3921,31 @@ bool Parser::parseEditClause(Stmt* st) {
     // ( datalist )   rules (110),(111)
     if (!expect(Tok::LParen, "(110)"))
       return false;
-    
-    // Parse datalist (rule 110): {,• datalist-element•••}
-    // A datalist-element is either:
-    // - an iterative datalist: ( datalist DO do-specification )
-    // - an expression
-    std::vector<DataListElement> datalistItems;
     if (!at(Tok::RParen)) {
       for (;;) {
-        DataListElement elem = parseDataListElement();
-        if (!std::holds_alternative<ExprP>(elem) && 
-            (!std::holds_alternative<std::unique_ptr<IterDatalist>>(elem) || 
-             !std::get<std::unique_ptr<IterDatalist>>(elem))) {
-          return false;
-        }
-        datalistItems.push_back(std::move(elem));
+        st->items.push_back(parseExpr());
         if (!eat(Tok::Comma))
           break;
       }
     }
     expect(Tok::RParen, "(110)");
-    
     // formatlist  ( {,• format•••} )   rules (45)-(54)
     if (!expect(Tok::LParen, "(45)"))
       return false;
-    std::vector<FormatItem> formatlist;
     if (!at(Tok::RParen)) {
       for (;;) {
-        if (!parseFormatItemInto(formatlist))
+        if (!parseFormatItem(st))
           return false;
         if (!eat(Tok::Comma))
           break;
       }
     }
     expect(Tok::RParen, "(45)");
-    
-    // Store as an EditGroup to preserve boundaries
-    EditGroup group;
-    group.loc = st->loc;
-    group.items = std::move(datalistItems);
-    group.formats = std::move(formatlist);
-    st->editGroups.push_back(std::move(group));
-    
-    // Also flatten into items and formats for backward compatibility with existing code paths
-    // (will be removed after all consumers updated)
-    for (auto& g : st->editGroups) {
-      for (auto& item : g.items) {
-        if (auto* expr = std::get_if<ExprP>(&item)) {
-          // Need to clone the expression since ExprP is unique_ptr
-          if (expr->get()) {
-            st->items.push_back(cloneExpr(expr->get()));
-          }
-        }
-      }
-      for (auto& fmt : g.formats) {
-        st->formats.push_back(this->cloneFormatItem(fmt));
-      }
-    }
-    
     // A further ( datalist ) formatlist group, comma-separated.
     if (!eat(Tok::Comma))
       break;
   }
   st->edit = true;
-  return true;
-}
-
-// Parse a single datalist-element (rule 111): ( datalist DO do-specification ) | expression
-DataListElement Parser::parseDataListElement() {
-  if (at(Tok::LParen)) {
-    SourceLoc parenLoc = cur().loc;
-    advance(); // eat '('
-    
-    // Parse nested datalist (recursive)
-    std::vector<DataListElement> nestedItems;
-    while (!at(Tok::RParen) && !at(Tok::Eof)) {
-      nestedItems.push_back(parseDataListElement());
-      if (!eat(Tok::Comma)) break;
-    }
-expect(Tok::RParen, "(110)");
-    
-    if (atWord("DO")) {
-      // Iterative datalist: ( datalist DO do-specification )
-      advance(); // DO
-      auto iter = std::make_unique<IterDatalist>(parenLoc);
-      iter->items = std::move(nestedItems);
-      if (!parseDoSpecification(iter->specs)) {
-        return DataListElement{};
-      }
-      return DataListElement{std::move(iter)};
-    } else {
-      // Parenthesized expression list — flatten into datalist items
-      // Each expression becomes a DataListElement
-      if (nestedItems.size() == 1) {
-        return std::move(nestedItems[0]);
-      }
-      // Multiple expressions in parens without DO - diagnose per spec
-      d_.error(parenLoc, "parenthesized expression list without DO not allowed here", "(111)");
-      return DataListElement{};
-    }
-  } else {
-    // Simple expression
-    ExprP expr = parseExpr();
-    if (!expr) {
-      return DataListElement{};
-    }
-    return DataListElement{std::move(expr)};
-  }
-}
-
-// Parse DO specification (rules 72, 73): reference = {,• specification•••}
-// specification ::= expression ( BY expression [ TO expression ] | TO expression [ BY expression ] ) [ WHILE ( expression ) ]
-bool Parser::parseDoSpecification(std::vector<DoSpec>& specs) {
-  for (;;) {
-    DoSpec spec;
-    spec.loc = cur().loc;
-    
-    // Control variable: reference (lvalue) - parse as reference (not full expression)
-    if (!at(Tok::Word)) {
-      d_.error(cur().loc, "control variable required in DO specification", "(72)");
-      return false;
-    }
-    spec.control = parseReference();
-    if (!spec.control || (spec.control->kind != Expr::VarRef && spec.control->kind != Expr::Subscript)) {
-      d_.error(spec.control->loc, "control variable must be a reference", "(72)");
-      return false;
-    }
-    
-    expect(Tok::Eq, "(72)");
-    
-    // Parse specification (rule 73): expr (BY expr [TO expr] | TO expr [BY expr]) [WHILE expr]
-    spec.from = parseExpr();
-    if (!spec.from) return false;
-    
-    if (atWord("BY")) {
-      advance();
-      spec.by = parseExpr();
-      if (!spec.by) return false;
-      if (atWord("TO")) {
-        advance();
-        spec.to = parseExpr();
-        if (!spec.to) return false;
-      }
-    } else if (atWord("TO")) {
-      advance();
-      spec.to = parseExpr();
-      if (!spec.to) return false;
-      if (atWord("BY")) {
-        advance();
-        spec.by = parseExpr();
-        if (!spec.by) return false;
-      }
-    } else {
-      d_.error(cur().loc, "BY or TO required in DO specification", "(73)");
-      return false;
-    }
-    
-    if (atWord("WHILE")) {
-      advance();
-      expect(Tok::LParen, "(73)");
-      spec.whileCond = parseExpr();
-      expect(Tok::RParen, "(73)");
-    }
-    
-    specs.push_back(std::move(spec));
-    
-    if (!eat(Tok::Comma)) break; // multiple specs = nested loops (left-to-right = outer-to-inner)
-  }
   return true;
 }
 
@@ -4232,6 +3987,22 @@ static ExprP cloneFormatExpr(const Expr* e) {
   return c;
 }
 
+static FormatItem cloneFormatItem(const FormatItem& f) {
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneFormatExpr(f.w.get());
+  c.d = cloneFormatExpr(f.d.get());
+  c.s = cloneFormatExpr(f.s.get());
+  c.remote = f.remote;
+  c.pic = f.pic;
+  for (const auto& sb : f.subs)
+    c.subs.push_back(cloneFormatItem(sb));
+  c.count = cloneFormatExpr(f.count.get());
+  for (const auto& it : f.items)
+    c.items.push_back(cloneFormatItem(it));
+  return c;
+}
+
 bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
   if (cur().kind == Tok::LParen) {
     SourceLoc lparenLoc = cur().loc;
@@ -4262,7 +4033,7 @@ bool Parser::parseFormatItemInto(std::vector<FormatItem>& out) {
       long long n = count->ival;
       for (long long i = 0; i < n; ++i)
         for (const FormatItem& gi : group)
-          out.push_back(this->cloneFormatItem(gi));
+          out.push_back(cloneFormatItem(gi));
     } else {
       FormatItem fi;
       fi.kind = FormatItem::Repeat;
@@ -5114,7 +4885,7 @@ StmtP Parser::parseFree() {
 // INPUT/OUTPUT/STREAM/PRINT file-attributes (rule 40); and the sequential
 // record form with RECORD SEQUENTIAL [INPUT|OUTPUT|UPDATE] (rules
 // (101),(112)). KEYED/DIRECT stay diagnosed; IDENT/LINESIZE/PAGESIZE
-// are accepted no-ops; ENVIRONMENT is diagnosed (rule 101).
+// are accepted no-ops; ENVIRONMENT is accepted as a no-op on OPEN.
 StmtP Parser::parseOpen() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Open;
@@ -5168,15 +4939,8 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("STREAM")) {
+    if (atWord("STREAM") || atWord("PRINT")) {
       sawStream = true;
-      st->openStream = true;
-      advance();
-      continue;
-    }
-    if (atWord("PRINT")) {
-      sawStream = true;
-      st->openPrint = true;
       advance();
       continue;
     }
@@ -5242,31 +5006,17 @@ StmtP Parser::parseOpen() {
       }
       continue;
     }
-    if (atWord("BUFFERED")) {
-      st->openBuffered = true;
-      advance();
-      continue;
-    }
-    if (atWord("UNBUFFERED")) {
-      st->openUnbuffered = true;
-      advance();
-      continue;
-    }
-    if (atWord("EXCLUSIVE")) {
-      st->openExclusive = true;
-      advance();
-      continue;
-    }
-    if (atWord("BACKWARDS")) {
-      st->openBackwards = true;
-      advance();
-      continue;
-    }
     if (atWord("ENVIRONMENT")) {
-      // ENVIRONMENT is a DECLARE FILE attribute (rule 39), not an OPEN option.
-      d_.error(cur().loc, "ENVIRONMENT is not an OPEN option (TR 25.084 rule (101))", "(101)");
+      // ENVIRONMENT (rule 101): implementation-defined file attribute.
+      // Accepted on OPEN as a no-op, like on DECLARE (rule 39).
       advance();
       if (at(Tok::LParen)) skipParen("(101)");
+      continue;
+    }
+    if (atWord("BUFFERED") || atWord("UNBUFFERED") || atWord("EXCLUSIVE")) {
+      // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+      // file attributes; accepted with no runtime effect.
+      advance();
       continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
@@ -5283,6 +5033,7 @@ StmtP Parser::parseOpen() {
              "(101)");
   else if (st->openUpdate && st->openInput)
     d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
+
   expect(Tok::Semi, "(100)");
   return st;
 }
@@ -5312,17 +5063,15 @@ StmtP Parser::parseClose() {
     if (atWord("IDENT")) {
       // CLOSE IDENT(expr) (rule 103): implementation-dependent user label;
       // accepted as no-op per TR 25.084.
-      SourceLoc prevLoc = cur().loc;
       advance();
       if (eat(Tok::LParen)) {
-        (void)parseExpr(); // parse for syntax validation, then discard
+        st->closeIdent = parseExpr();
         expect(Tok::RParen, "(103)");
       } else {
         d_.error(cur().loc, "CLOSE IDENT requires a parenthesized argument", "(103)");
         resync();
         return nullptr;
       }
-      d_.remark(prevLoc, "CLOSE IDENT accepted (implementation-dependent no-op)", "(103)");
       continue;
     }
     d_.error(cur().loc, "unexpected token in CLOSE statement", "(103)");
@@ -5481,56 +5230,6 @@ ExprP Parser::parseTypeDesignator(const char* rule) {
   }
   t->sval = raw;
   return t;
-}
-
-// Parse a simple variable reference (VarRef or Subscript) for use as a control
-// variable or other lvalue context. Does not parse full expressions with operators.
-ExprP Parser::parseReference() {
-  // A reference starts with a word (variable name), possibly followed by
-  // subscripts or member selection. We reuse parsePrimary for the base,
-  // but stop before any binary/unary operators.
-  ExprP base = parsePrimary();
-  if (!base)
-    return nullptr;
-  // Allow subscript and member selection to chain
-  while (at(Tok::LParen) || at(Tok::Dot)) {
-    if (at(Tok::LParen)) {
-      // Subscript: base(expr, ...)
-      SourceLoc loc = cur().loc;
-      advance(); // (
-      std::vector<ExprP> args;
-      if (!at(Tok::RParen)) {
-        for (;;) {
-          args.push_back(parseExpr());
-          if (!eat(Tok::Comma))
-            break;
-        }
-      }
-      expect(Tok::RParen, "(126)");
-      auto sub = std::make_unique<Expr>();
-      sub->kind = Expr::Subscript;
-      sub->loc = base->loc;
-      sub->a = std::move(base);
-      sub->args = std::move(args);
-      base = std::move(sub);
-    } else if (at(Tok::Dot)) {
-      // Member selection: base.member
-      advance(); // .
-      if (!at(Tok::Word)) {
-        d_.error(cur().loc, "expected member name after '.'", "(127)");
-        return nullptr;
-      }
-      std::string member = cur().text;
-      advance();
-      auto mem = std::make_unique<Expr>();
-      mem->kind = Expr::Subscript; // Reuse Subscript for member access (qualified)
-      mem->loc = base->loc;
-      mem->a = std::move(base);
-      mem->path.push_back(member); // Store member name in path field
-      base = std::move(mem);
-    }
-  }
-  return base;
 }
 
 ExprP Parser::parsePrimary() {
@@ -5728,15 +5427,16 @@ ExprP Parser::parsePrimary() {
 
 // INITIAL itemlist (rules (28)-(31)): a comma-separated list of INITIAL items
 // terminated by the enclosing ')'. Called with the opening '(' already consumed;
-// consumes the closing ')'.
-std::vector<InitItem> Parser::parseInitialList() {
+// consumes the closing ')'. If `topLevel` is true, a parenthesized constant
+// '(n)' is treated as a Group (single-element itemlist), not a Value.
+std::vector<InitItem> Parser::parseInitialList(bool topLevel) {
   std::vector<InitItem> out;
   for (;;) {
     if (at(Tok::RParen)) {
       advance();
       break;
     }
-    out.push_back(parseInitialItem());
+    out.push_back(parseInitialItem(topLevel));
     if (at(Tok::Comma)) {
       advance();
       continue;
@@ -5749,7 +5449,10 @@ std::vector<InitItem> Parser::parseInitialList() {
 
 // One INITIAL item (rules (29)-(31)): a constant value, an iteration factor
 // '( n )' over a value or sublist, a '*' repeat-last, or a parenthesised group.
-InitItem Parser::parseInitialItem() {
+// If `topLevel` is true, a parenthesized constant '(n)' is treated as a Group
+// (single-element itemlist) rather than a Value, to support factored INITIAL
+// per-name itemlists: INITIAL((1), (2)).
+InitItem Parser::parseInitialItem(bool topLevel) {
   auto valueStart = [](Tok k) {
     return k == Tok::Number || k == Tok::CharLit || k == Tok::BitLit || k == Tok::HexLit ||
            k == Tok::Word || k == Tok::Minus || k == Tok::Plus || k == Tok::Star ||
@@ -5769,7 +5472,9 @@ InitItem Parser::parseInitialItem() {
         peek().kind == Tok::Number && peek(2).kind == Tok::RParen && peek(3).kind == Tok::HexLit;
     bool iter = iterHex || (peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
-    bool parenConst = !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    // At top level of INITIAL itemlist, '(n)' is a Group (per-name itemlist),
+    // not a parenthesized constant.
+    bool parenConst = !topLevel && !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {
@@ -5781,9 +5486,9 @@ InitItem Parser::parseInitialItem() {
       it.factor = n;
       if (at(Tok::LParen)) {
         advance(); // (
-        it.items = parseInitialList();
+        it.items = parseInitialList(/*topLevel=*/false);
       } else {
-        it.items.push_back(parseInitialItem());
+        it.items.push_back(parseInitialItem(/*topLevel=*/false));
       }
       return it;
     }
@@ -5800,7 +5505,7 @@ InitItem Parser::parseInitialItem() {
     }
     InitItem g;
     g.kind = InitItem::Group;
-    g.items = parseInitialList(); // consumes the group's ')'
+    g.items = parseInitialList(/*topLevel=*/false); // consumes the group's ')'
     return g;
   }
   InitItem v;

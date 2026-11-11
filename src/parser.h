@@ -227,11 +227,15 @@ private:
 
   // --- INITIAL itemlist (rules 26-31) ---------------------------------
   // Parse a comma-separated list of INITIAL items, stopping at the enclosing
-  // ')'. Returns the item tree for sema to expand.
-  std::vector<InitItem> parseInitialList();
+  // ')'. Returns the item tree for sema to expand. If `topLevel` is true,
+  // a parenthesized constant '(n)' is treated as a Group (single-element
+  // itemlist) rather than a Value, to support factored INITIAL per-name
+  // itemlists: INITIAL((1), (2)).
+  std::vector<InitItem> parseInitialList(bool topLevel = false);
   // Parse one INITIAL item: a constant, an iteration factor (n) value/sublist,
-  // a '*' repeat-last, or a parenthesised group.
-  InitItem parseInitialItem();
+  // a '*' repeat-last, or a parenthesised group. If `topLevel` is true,
+  // a parenthesized constant '(n)' is treated as a Group.
+  InitItem parseInitialItem(bool topLevel = false);
 
   std::vector<Token> t_;
   Diags& d_;

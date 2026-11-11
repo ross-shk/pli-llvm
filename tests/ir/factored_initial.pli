@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
- /* IR check: factored scalar STATIC INITIAL produces independent globals
-    (rules 11, 23, 26). */
- FACTORED_IR: PROCEDURE OPTIONS(MAIN);
-   DECLARE (A, B, C)(3) FIXED BIN(31) STATIC INITIAL((2)1, 2);
-   /* A: 1,1,2  B: 1,1,2  C: 1,1,2 — three independent store sequences */
- END FACTORED_IR;
+ /* Rules (11),(26): factored STATIC INITIAL — two distinct globals. */
+ factored_initial_ir: procedure options(main);
+     declare (s1, s2) fixed bin(31) static initial((10), (20));
+     put skip list(s1, s2);
+ end factored_initial_ir;

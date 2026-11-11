@@ -1,0 +1,7 @@
+/* rule (101): IDENT accepted, no runtime effect on stream files. */
+ test_close_ident: proc options(main);
+     dcl f file;
+     open file(f) title('test.dat') output;
+     close file(f) ident('VOL001');
+     put skip list('PASS');
+ end test_close_ident;

@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* STATIC on BASED (rule 23) — must be diagnosed */
+bad_static_based: procedure options(main);
+    dcl p ptr;
+    dcl x fixed bin(31) based(p) static;  /* ERROR (23): STATIC on BASED */
+    put skip list('FAIL - should not reach here');
+end bad_static_based;

@@ -141,7 +141,6 @@ static bool needsWideDecLit(const HExpr* e, const Type& t) {
 
 // Compute the record size in bytes for a given PL/I type (for RECORD I/O).
 // FIXED: 8 bytes, FLOAT: 8 bytes, BIT(1): 1 byte, CHAR(n): n bytes.
-// Structures: sum of member sizes.
 static long long recordSize(const Type& ty) {
   switch (ty.k) {
   case TK::FixedBin:
@@ -152,13 +151,6 @@ static long long recordSize(const Type& ty) {
     return 1; // BIT(1) is 1 byte
   case TK::Char:
     return ty.len;
-  case TK::Struct: {
-    long long total = 0;
-    for (const auto& m : ty.members) {
-      total += recordSize(m->ty);
-    }
-    return total;
-  }
   default:
     return 8; // fallback
   }
@@ -5157,14 +5149,20 @@ void IRGen::allocaLocals(HProc* p) {
     if (!dynUb_.count(s)) {
       std::vector<llvm::Value*> ubs(s->ty.dims.size(), nullptr);
       std::vector<llvm::Value*> lbs(s->ty.dims.size(), nullptr);
-      if (s->dynUb)
-        ubs[0] = toI64(emitExpr(s->dynUb));
-      else if (s->ty.dims[0].adj)
-        ubs[0] = i64(s->ty.dims[0].ub);
-      else if (s->ty.dims[0].dyn)
-        ubs[0] = i64(s->ty.dims[0].ub);
-      if (s->dynLb)
-        lbs[0] = toI64(emitExpr(s->dynLb));
+      // Evaluate bounds for ALL dynamic axes (Wave 2: later axes may be dynamic).
+      for (size_t k = 0; k < s->ty.dims.size(); ++k) {
+        const Dim& d = s->ty.dims[k];
+        HExpr* ue = (k < s->dynUbAxes.size()) ? s->dynUbAxes[k] : (k == 0 ? s->dynUb : nullptr);
+        HExpr* le = (k < s->dynLbAxes.size()) ? s->dynLbAxes[k] : (k == 0 ? s->dynLb : nullptr);
+        if (ue)
+          ubs[k] = toI64(emitExpr(ue));
+        else if (d.dyn || d.adj)
+          ubs[k] = i64(d.ub);
+        if (le)
+          lbs[k] = toI64(emitExpr(le));
+        else if (d.lbDyn)
+          lbs[k] = i64(d.lb);
+      }
       dynUb_[s] = std::move(ubs);
       dynLb_[s] = std::move(lbs);
     }
@@ -5965,6 +5963,9 @@ void IRGen::applyControlAttrs(llvm::Function* f, const HProc* p) {
 void IRGen::declareProc(HProc* p) {
   if (p->isPackage)
     return; // packages emit no function (extension, ADR-109)
+  // Map AST Proc* to HProc* for callee lookup during call emission.
+  if (p->src)
+    procToHProc_[p->src] = p;
   bool sret = p->isFunction && (p->retTy.isStruct() || p->retTy.isChar());
   // A structure-valued (rule 127) or character-valued (rules (34),(37))
   // function returns through a hidden result pointer and returns void: the
@@ -7405,12 +7406,141 @@ void IRGen::emitStmt(HStmt* s) {
       // Structure-valued function (rule 127): copy the returned structure's
       // storage into the caller's result buffer, then return void. In a
       // multi-entry procedure that buffer is the thunk's own result storage.
+      // If the structure has dynamic members (rule 13), perform a deep copy:
+      // save destination buffer pointers, copy static header, restore pointers,
+      // then copy each dynamic member's buffer contents.
       Val v = emitExpr(s->value.get());
       llvm::Value* dst = multiEntry_ ? multiResult_ : structRetPtr_;
-      llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
-      b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
-      emitCtlEpilogue();
-      b_.CreateRetVoid();
+      
+      if (!curProc_->retDynMemberPaths.empty()) {
+        // Deep copy with dynamic members (rule 13).
+        const auto& dynPaths = curProc_->retDynMemberPaths;
+        
+        // Helper: fieldAddr from base through relative path.
+        auto fieldAddr = [&](llvm::Value* base, const Type& root,
+                             const std::vector<unsigned>& rel) {
+          llvm::Value* addr = base;
+          const Type* cur = &root;
+          for (unsigned f : rel) {
+            addr = structMemberGEP(*cur, addr, f, "ret.dcp.f");
+            cur = &cur->members[f]->ty;
+          }
+          return addr;
+        };
+        
+        // Save destination buffer pointers from sret buffer.
+        std::vector<llvm::Value*> savedPtrs;
+        savedPtrs.reserve(dynPaths.size());
+        for (const auto& rel : dynPaths) {
+          llvm::LoadInst* lp = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.sv");
+          if (packedMemberPath(curRetTy_, rel))
+            lp->setAlignment(llvm::Align(1));
+          savedPtrs.push_back(lp);
+        }
+        
+        // Flat copy static header (including pointer fields).
+        llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
+        b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+        
+        // Restore destination buffer pointers.
+        for (size_t i = 0; i < dynPaths.size(); ++i) {
+          llvm::StoreInst* sp = b_.CreateStore(savedPtrs[i], fieldAddr(dst, curRetTy_, dynPaths[i]));
+          if (packedMemberPath(curRetTy_, dynPaths[i]))
+            sp->setAlignment(llvm::Align(1));
+        }
+        
+        // Copy each dynamic member buffer.
+        for (size_t i = 0; i < dynPaths.size(); ++i) {
+          const auto& rel = dynPaths[i];
+          const Type& arr = structPathType(curRetTy_, rel);
+          const Type& el = arr.elementType();
+          
+          // Source: from v.ptr (callee's returned structure)
+          // The source structure's dynamic member bounds are in memberDyn_ keyed
+          // by the source symbol and path. The source is the returned value, which
+          // is a whole structure variable in the callee's frame.
+          // We need to find the source symbol. The returned expression v should be
+          // a VarRef to a local structure variable.
+          HExpr* sv = s->value.get();
+          if (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr) {
+            d_.error(s->loc,
+                     "a whole-structure source with a dynamic member must be a plain variable here",
+                     "(13)");
+            emitCtlEpilogue();
+            b_.CreateRetVoid();
+            return;
+          }
+          
+          std::vector<unsigned> srcFull = sv->memberPath;
+          srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+          
+          auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
+          // For the destination, the caller recorded bounds under a synthetic symbol
+          // that we don't have access to here. Since the caller and callee share the
+          // same template structure bounds (rule 13), we use the source bounds for
+          // both source and destination extent calculation. The extent check will
+          // catch any mismatch.
+          llvm::Value* sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
+          llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+          llvm::Value* dub = sub;
+          llvm::Value* dlb = slb;
+          
+          if (!dub || !sub) {
+            d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
+                     "(13)");
+            emitCtlEpilogue();
+            b_.CreateRetVoid();
+            return;
+          }
+          
+          const Dim& d0 = arr.dims[0];
+          llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
+          llvm::Value* du = dub;
+          llvm::Value* sl = d0.lbDyn && slb ? slb : i64(d0.lb);
+          llvm::Value* su = sub;
+          llvm::Value* dext = b_.CreateAdd(b_.CreateSub(du, dl, "dcp.e1"), i64(1), "dcp.dext");
+          llvm::Value* sext = b_.CreateAdd(b_.CreateSub(su, sl, "dcp.e2"), i64(1), "dcp.sext");
+          long long rest = 1;
+          for (size_t k = 1; k < arr.dims.size(); ++k)
+            rest *= (arr.dims[k].ub - arr.dims[k].lb + 1);
+          if (rest != 1) {
+            dext = b_.CreateMul(dext, i64(rest), "dcp.dall");
+            sext = b_.CreateMul(sext, i64(rest), "dcp.sall");
+          }
+          
+          // Mismatched live extents would overflow the target: trap loudly
+          // through the subscript path rather than silently truncating.
+          std::string id = std::to_string(n_++);
+          llvm::BasicBlock* failL = llvm::BasicBlock::Create(ctx_, "ret.dcp.fail." + id, curFn_);
+          llvm::BasicBlock* okL = llvm::BasicBlock::Create(ctx_, "ret.dcp.ok." + id, curFn_);
+          b_.CreateCondBr(b_.CreateICmpNE(dext, sext, "dcp.mis"), failL, okL);
+          startBlock(failL);
+          llvm::BasicBlock* abL = llvm::BasicBlock::Create(ctx_, "ret.dcp.abort." + id, curFn_);
+          emitCondTrap(Stmt::kSubscriptrangeCondKey, "pli_subscript_oob", abL);
+          b_.SetInsertPoint(abL);
+          b_.CreateUnreachable();
+          startBlock(okL);
+          
+          llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.dp");
+          llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "ret.dcp.sp");
+          if (packedMemberPath(curRetTy_, rel))
+            dbuf->setAlignment(llvm::Align(1));
+          if (packedMemberPath(sv->ty, rel))
+            sbuf->setAlignment(llvm::Align(1));
+          llvm::Value* nbytes =
+              b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "ret.dcp.n");
+          b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
+        }
+        
+        emitCtlEpilogue();
+        b_.CreateRetVoid();
+      } else {
+        // No dynamic members: simple flat copy.
+        llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
+        b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
+        emitCtlEpilogue();
+        b_.CreateRetVoid();
+      }
     } else if (curRetTy_.isChar()) {
       // Character-valued function (rules (34),(37)): copy the value into the
       // caller's hidden buffer, blank-padding or truncating (rule (86)). A
@@ -8338,9 +8468,10 @@ void IRGen::emitAssign(HStmt* s) {
       return;
     }
     HExpr* sv = s->value.get();
-    if (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr) {
+    bool srcIsCall = (sv && sv->kind == HExpr::Call);
+    if (!srcIsCall && (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr)) {
       d_.error(s->loc,
-               "a whole-structure source with a dynamic member must be a plain variable here",
+               "a whole-structure source with a dynamic member must be a plain variable or function call here",
                "(13)");
       return;
     }
@@ -8350,7 +8481,7 @@ void IRGen::emitAssign(HStmt* s) {
       llvm::Value* addr = base;
       const Type* cur = &root;
       for (unsigned f : rel) {
-       addr = structMemberGEP(*cur, addr, f, "dcp.f");
+        addr = structMemberGEP(*cur, addr, f, "dcp.f");
         cur = &cur->members[f]->ty;
       }
       return addr;
@@ -8374,19 +8505,36 @@ void IRGen::emitAssign(HStmt* s) {
       const Type& el = arr.elementType();
       std::vector<unsigned> dstFull = t->memberPath;
       dstFull.insert(dstFull.end(), rel.begin(), rel.end());
-      std::vector<unsigned> srcFull = sv->memberPath;
-      srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+      
+      // Source bounds: for a VarRef source, look up from memberDyn_. For a Call
+      // source, the function call emission recorded bounds under a synthetic
+      // symbol; we use destination bounds as proxy since both share the template.
+      llvm::Value* sub = nullptr;
+      llvm::Value* slb = nullptr;
+      if (!srcIsCall) {
+        std::vector<unsigned> srcFull = sv->memberPath;
+        srcFull.insert(srcFull.end(), rel.begin(), rel.end());
+        auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
+        sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
+        slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+      }
+      
       auto dstIt = memberDyn_.find(MemberDyn{t->sym, dstFull});
-      auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
       llvm::Value* dub = dstIt != memberDyn_.end() ? dstIt->second.ub : nullptr;
       llvm::Value* dlb = dstIt != memberDyn_.end() ? dstIt->second.lb : nullptr;
-      llvm::Value* sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
-      llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
+      
+      // For Call source, use destination bounds as proxy.
+      if (srcIsCall) {
+        sub = dub;
+        slb = dlb;
+      }
+      
       if (!dub || !sub) {
         d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
                  "(13)");
         return;
       }
+      
       const Dim& d0 = arr.dims[0];
       llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
       llvm::Value* du = dub;
@@ -8416,10 +8564,10 @@ void IRGen::emitAssign(HStmt* s) {
       b_.CreateUnreachable();
       startBlock(okL);
       llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
-      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "dcp.sp");
+      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, srcIsCall ? t->ty : sv->ty, rel), "dcp.sp");
       if (packedMemberPath(t->ty, rel))
         dbuf->setAlignment(llvm::Align(1));
-      if (packedMemberPath(sv->ty, rel))
+      if (!srcIsCall && packedMemberPath(sv->ty, rel))
         sbuf->setAlignment(llvm::Align(1));
       llvm::Value* nbytes =
           b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "dcp.n");
@@ -8716,6 +8864,14 @@ void IRGen::emitAllocate(HStmt* s) {
       if (elemSz <= 0)
         elemSz = 1;
       llvm::Value* total = i64(elemSz);
+      // For BASED arrays with dynamic later axes (Wave 2), re-evaluate all
+      // dynamic axis bounds at ALLOCATE time so bounds checks use the current
+      // values (which may have changed since procedure entry due to INIT etc.).
+      std::vector<llvm::Value*> allocUbs, allocLbs;
+      if (bsym->ty.isDynamic()) {
+        allocUbs.resize(bsym->ty.dims.size());
+        allocLbs.resize(bsym->ty.dims.size());
+      }
       for (size_t k = 0; k < bsym->ty.dims.size(); ++k) {
         const Dim& d = bsym->ty.dims[k];
         // A per-ALLOCATE extent overrides the DECLARE bound (rule (89)); sema
@@ -8725,17 +8881,24 @@ void IRGen::emitAllocate(HStmt* s) {
           ub = toI64(emitExpr(bbounds[0].ub.get()), s->loc);
         else if (k == 0 && bsym->dynUb)
           ub = toI64(emitExpr(bsym->dynUb), s->loc);
+        else if (d.dyn && k < bsym->dynUbAxes.size() && bsym->dynUbAxes[k])
+          ub = toI64(emitExpr(bsym->dynUbAxes[k]), s->loc);
         llvm::Value* lb =
             (k == 0 && d.lbDyn && bsym->dynLb) ? toI64(emitExpr(bsym->dynLb), s->loc) : i64(d.lb);
-        if (k == 0) {
-          // Later references check against the ALLOCATE-time extent, which
-          // may differ from the entry-evaluated one when the bound changed.
-          dynUb_[bsym] = {ub};
-          if (d.lbDyn && bsym->dynLb)
-            dynLb_[bsym] = {lb};
+        if (d.lbDyn && k < bsym->dynLbAxes.size() && bsym->dynLbAxes[k])
+          lb = toI64(emitExpr(bsym->dynLbAxes[k]), s->loc);
+        // Update dope vectors for all dynamic axes at ALLOCATE time so that
+        // subsequent references use the ALLOCATE-time bounds.
+        if (d.dyn) {
+          allocUbs[k] = ub;
+          allocLbs[k] = lb;
         }
         llvm::Value* ext = b_.CreateAdd(b_.CreateSub(ub, lb, "bheap.e1"), i64(1), "bheap.ext");
         total = b_.CreateMul(total, ext, "bheap.tot");
+      }
+      if (!allocUbs.empty()) {
+        dynUb_[bsym] = std::move(allocUbs);
+        dynLb_[bsym] = std::move(allocLbs);
       }
       sz = total;
     }
@@ -8975,15 +9138,13 @@ llvm::Value* IRGen::fileSlotValue(Symbol* f) {
   return b_.CreateCall(runtimeFn("pli_file_slot"), {key}, "fslot");
 }
 
-// A10: ON ENDFILE(f)/UNDEFINEDFILE(f)/ENDPAGE(f) key = base - runtime slot.
+// A10: ON ENDFILE(f)/UNDEFINEDFILE(f) key = base - runtime slot.
 llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
   long long base = 0;
   if (s->condName == "UNDEFINEDFILE")
     base = Stmt::kUndefinedfileBaseCondKey;
   else if (s->condName == "ENDFILE")
     base = Stmt::kEndfileBaseCondKey;
-  else if (s->condName == "ENDPAGE")
-    base = Stmt::kEndpageBaseCondKey;
   else
     return i64(s->condKey);
   if (!s->fileSym)
@@ -8992,75 +9153,71 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
 }
 
 // OPEN (rules 100,101): open the FILE variable's slot against the TITLE name.
- // The slot is a compile-time constant on the symbol; mode 0 = INPUT, 1 =
- // OUTPUT, 2 = UPDATE. A RECORD SEQUENTIAL open (rules (101),(112)) uses the
- // binary record runtime.
- void IRGen::emitOpen(HStmt* s) {
-   Symbol* f = s->fileSym;
-   // IDENT(expr) (rule 101): implementation-dependent user label; evaluate
-   // the expression for side effects but discard the result (ADR-373).
-   if (s->openIdent)
-     (void)emitExpr(s->openIdent.get());
-   llvm::Value* name = globalString(s->openTitle);
-   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
-if (s->openKeyed || s->openDirect) {
-      // Keyed/direct organisation: open the data file and load the .kix sidecar.
-      int exclusive = s->openExclusive ? 1 : 0;
-      b_.CreateCall(
-          runtimeFn("pli_file_open_keyed"),
-          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-           i64(f->fileNonprint ? 1 : 0), i64(1), i64(exclusive)});
-     if (s->openLinesize)
-       b_.CreateCall(runtimeFn("pli_file_set_linesize"),
-                     {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
-     if (s->openPagesize)
-       b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
-                     {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
-     // OPEN IDENT: write label on OUTPUT
-     if (s->openIdent) {
-       Val ident_val = emitExpr(s->openIdent.get());
-       // For CHAR expressions, we need to pass the pointer and length
-       // ident_val.ptr is a GlobalVariable* (pointer to array), convert to i8*
-       llvm::Value* ident_ptr = ident_val.ptr;
-       // Bitcast to i8* since runtime expects const char*
-       ident_ptr = b_.CreateBitCast(ident_ptr, b_.getPtrTy(), "ident.ptr");
-       llvm::Value* ident_len = ident_val.len;
-       b_.CreateCall(runtimeFn("pli_file_open_ident"),
-                     {fileSlotValue(f), ident_ptr, ident_len, i32(!s->openInput)});
-     }
-     return;
-   }
-    if (s->openRecord) {
-      int buffering = 0;  // 0 = default, 1 = buffered, -1 = unbuffered
-      if (s->openBuffered) buffering = 1;
-      else if (s->openUnbuffered) buffering = -1;
-      int backwards = s->openBackwards ? 1 : 0;
-      b_.CreateCall(
-          runtimeFn("pli_file_open_record"),
-          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-           i64(f->fileNonprint ? 1 : 0), i64(buffering), i64(backwards)});
-    } else {
-      b_.CreateCall(
-          runtimeFn("pli_file_open"),
-          {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-           i64(f->fileNonprint ? 1 : 0)});
+void IRGen::emitOpen(HStmt* s) {
+  Symbol* f = s->fileSym;
+  llvm::Value* name = globalString(s->openTitle);
+  long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
+  if (s->openKeyed || s->openDirect) {
+    // Keyed/direct organisation: open the data file and load the .kix sidecar.
+    b_.CreateCall(
+        runtimeFn("pli_file_open_keyed"),
+        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+         i64(f->fileNonprint ? 1 : 0), i64(1)});
+    if (s->openLinesize)
+      b_.CreateCall(runtimeFn("pli_file_set_linesize"),
+                    {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+    if (s->openPagesize)
+      b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
+                    {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+    if (s->openIdent) {
+      Val v = emitExpr(s->openIdent.get());
+      if (!v.ty.isChar()) {
+        v = convertToChar(v, s->openIdent->loc);
+      }
+      // Ensure v.ptr and v.len are valid
+      if (!v.ptr || !v.len) {
+        d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
+        Val dst = charTemp(24);
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), dst.ptr, dst.len});
+      } else {
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), v.ptr, v.len});
+      }
     }
-   if (s->openLinesize)
-     b_.CreateCall(runtimeFn("pli_file_set_linesize"),
-                   {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
-   if (s->openPagesize)
-     b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
-                   {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
-   // OPEN IDENT: write label on OUTPUT
-   if (s->openIdent) {
-     Val ident_val = emitExpr(s->openIdent.get());
-     llvm::Value* ident_ptr = ident_val.ptr;
-     ident_ptr = b_.CreateBitCast(ident_ptr, b_.getPtrTy(), "ident.ptr");
-     llvm::Value* ident_len = ident_val.len;
-     b_.CreateCall(runtimeFn("pli_file_open_ident"),
-                   {fileSlotValue(f), ident_ptr, ident_len, i32(!s->openInput)});
-   }
- }
+    // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+    // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
+    return;
+  }
+  b_.CreateCall(
+      runtimeFn(s->openRecord ? "pli_file_open_record" : "pli_file_open"),
+      {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+       i64(f->fileNonprint ? 1 : 0)});
+  if (s->openLinesize)
+    b_.CreateCall(runtimeFn("pli_file_set_linesize"),
+                  {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
+  if (s->openPagesize)
+    b_.CreateCall(runtimeFn("pli_file_set_pagesize"),
+                  {fileSlotValue(f), toI64(emitExpr(s->openPagesize.get()))});
+  if (s->openIdent) {
+    Val v = emitExpr(s->openIdent.get());
+    if (!v.ty.isChar()) {
+      v = convertToChar(v, s->openIdent->loc);
+    }
+    // Ensure v.ptr and v.len are valid
+    if (!v.ptr || !v.len) {
+      d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
+      Val dst = charTemp(24);
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(f), dst.ptr, dst.len});
+} else {
+        b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                      {fileSlotValue(f), v.ptr, v.len});
+      }
+    }
+    // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+    // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
+  }
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
@@ -9068,54 +9225,57 @@ if (s->openKeyed || s->openDirect) {
 void IRGen::emitRecordWrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
-  // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
-
-  // LOCATE(v): write from the BASED variable's current buffer using LOCATE protocol.
+  // LOCATE(v): write from the BASED variable's current buffer.
   if (s->locateVar) {
+    // For a based variable, we need the locator pointer (the buffer address),
+    // not the based variable's value. The locateVar expression is the based
+    // variable reference; its locPtr is the locator pointer expression.
+    HExpr* locExpr = s->locateVar.get();
+    llvm::Value* buf = nullptr;
+    if (locExpr && locExpr->locPtr) {
+      // Emit the locator pointer expression to get the buffer address.
+      Val locVal = emitExpr(locExpr->locPtr.get());
+      buf = locVal.reg; // locator pointer is a scalar pointer value
+    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
+      // Fallback: the based variable's symbol should have its locator.
+      // This case handles when locPtr is not directly on the expression.
+      // For now, try to get the address of the based variable.
+      buf = addressOf(locExpr->sym);
+    }
+    
+    if (!buf) {
+      // Should not happen for valid based variables
+      return;
+    }
+    
+    // EVENT(ev): reset before the operation.
+    llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
     if (eventAddr)
       b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
-    // For now, use the old write functions directly from the based variable's locator
-    // The LOCATE protocol (pli_record_locate_begin/commit) will be integrated later
-    HExpr* locExpr = s->locateVar.get();
-    llvm::Value* srcBuf = nullptr;
-    if (locExpr && locExpr->locPtr) {
-      Val locVal = emitExpr(locExpr->locPtr.get());
-      srcBuf = locVal.reg;
-    } else if (locExpr && locExpr->sym && locExpr->sym->isBased()) {
-      srcBuf = addressOf(locExpr->sym);
-    }
+    // Determine record size from the based variable's type.
+    const Type& ty = s->locateVar->ty;
+    llvm::Value* recSize = i64(recordSize(ty));
     
-    if (srcBuf) {
-      const Type& ty = s->locateVar->ty;
-      llvm::Value* recSize = i64(recordSize(ty));
-      
-      // Write the record from the based variable's buffer.
-      switch (ty.k) {
-      case TK::FixedBin:
-      case TK::FixedDec:
-        b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), srcBuf)});
-        break;
-      case TK::Float:
-        b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), srcBuf)});
-        break;
-      case TK::Bit: {
-        llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), srcBuf), b_.getInt8Ty(), "rbit");
-        b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
-        break;
-      }
-      case TK::Char:
-        b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, srcBuf, recSize});
-        break;
-      case TK::Struct: {
-        // For structures, write the entire buffer
-        b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, srcBuf, recSize});
-        break;
-      }
-      default:
-        break; // other types are diagnosed by sema
-      }
+    // Write the record from the based variable's buffer.
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), buf)});
+      break;
+    case TK::Float:
+      b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), buf)});
+      break;
+    case TK::Bit: {
+      llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), buf), b_.getInt8Ty(), "rbit");
+      b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+      break;
+    }
+    case TK::Char:
+      b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, buf, recSize});
+      break;
+    default:
+      break; // other types are diagnosed by sema
     }
 
     // EVENT(ev): complete after the operation.
@@ -9124,6 +9284,8 @@ void IRGen::emitRecordWrite(HStmt* s) {
     return;
   }
 
+  // EVENT(ev): reset before the operation.
+  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9329,77 +9491,37 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
   } else if (hasKey) {
     // Normal keyed read by key
     Val k = emitExpr(s->keyOpt.get());
-    if (s->setTarget) {
-      Val setVal = emitExpr(s->setTarget.get());
-      switch (ty.k) {
-      case TK::FixedBin:
-      case TK::FixedDec:
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed_set"),
-                              {slot, k.ptr, k.len, setVal.reg});
-        v.ty = Type::fixedBin(63, 0);
-        storeTo(t->sym, v, s->loc);
-        break;
-      case TK::Float:
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float_set"),
-                              {slot, k.ptr, k.len, setVal.reg});
-        v.ty = Type::flt(6);
-        storeTo(t->sym, v, s->loc);
-        break;
-      case TK::Bit: {
-        llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit_set"),
-                                       {slot, k.ptr, k.len, setVal.reg});
-        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-        v.ty = Type::bit();
-        storeTo(t->sym, v, s->loc);
-        break;
-      }
-      case TK::Char: {
-        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-        b_.CreateCall(runtimeFn("pli_record_read_keyed_char_set"),
-                      {slot, k.ptr, k.len, buf, i64(ty.len), setVal.reg});
-        v.ptr = buf;
-        v.len = i64(ty.len);
-        v.ty = ty;
-        storeTo(t->sym, v, s->loc);
-        break;
-      }
-      default:
-        break;
-      }
-    } else {
-      // Normal keyed read without SET
-      switch (ty.k) {
-      case TK::FixedBin:
-      case TK::FixedDec:
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
-        v.ty = Type::fixedBin(63, 0);
-        storeTo(t->sym, v, s->loc);
-        break;
-      case TK::Float:
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
-        v.ty = Type::flt(6);
-        storeTo(t->sym, v, s->loc);
-        break;
-      case TK::Bit: {
-        llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
-        v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-        v.ty = Type::bit();
-        storeTo(t->sym, v, s->loc);
-        break;
-      }
-      case TK::Char: {
-        llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-        b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
-                      {slot, k.ptr, k.len, buf, i64(ty.len)});
-        v.ptr = buf;
-        v.len = i64(ty.len);
-        v.ty = ty;
-        storeTo(t->sym, v, s->loc);
-        break;
-      }
-      default:
-        break;
-      }
+    switch (ty.k) {
+    case TK::FixedBin:
+    case TK::FixedDec:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_fixed"), {slot, k.ptr, k.len});
+      v.ty = Type::fixedBin(63, 0);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Float:
+      v.reg = b_.CreateCall(runtimeFn("pli_record_read_keyed_float"), {slot, k.ptr, k.len});
+      v.ty = Type::flt(6);
+      storeTo(t->sym, v, s->loc);
+      break;
+    case TK::Bit: {
+      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_keyed_bit"), {slot, k.ptr, k.len});
+      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+      v.ty = Type::bit();
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    case TK::Char: {
+      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_char"),
+                    {slot, k.ptr, k.len, buf, i64(ty.len)});
+      v.ptr = buf;
+      v.len = i64(ty.len);
+      v.ty = ty;
+      storeTo(t->sym, v, s->loc);
+      break;
+    }
+    default:
+      break; // other types are diagnosed by sema
     }
     // KEYTO( variable ): copy the search key into the KEYTO target.
     if (s->keyToOpt) {
@@ -9408,10 +9530,6 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
     }
   } else {
     // No KEY, no IGNORE: read next from current position (sequential on keyed)
-    // SET without KEY on keyed is not meaningful; fall through to normal read
-    if (s->setTarget) {
-      d_.warn(s->loc, "SET without KEY on keyed file may not be meaningful");
-    }
     switch (ty.k) {
     case TK::FixedBin:
     case TK::FixedDec:
@@ -9442,11 +9560,14 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
       break;
     }
     default:
-      break;
+      break; // other types are diagnosed by sema
     }
   }
 
-  // SET(p): handled inline in each branch above
+  // SET(p): store the record buffer address into the POINTER sink.
+  if (s->setTarget) {
+    // Placeholder for future implementation
+  }
 
   // EVENT(ev): complete after the operation.
   if (eventAddr)
@@ -9544,81 +9665,44 @@ void IRGen::emitRecordRead(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
   Val v;
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+    v.ty = Type::fixedBin(63, 0);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Float:
+    v.reg = b_.CreateCall(runtimeFn("pli_record_read_float"), {slot});
+    v.ty = Type::flt(6);
+    storeTo(t->sym, v, s->loc);
+    break;
+  case TK::Bit: {
+    llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit"), {slot});
+    v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
+    v.ty = Type::bit();
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  case TK::Char: {
+    // Fill a reusable entry buffer, then assign into the target.
+    llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
+    b_.CreateCall(runtimeFn("pli_record_read_char"), {slot, buf, i64(ty.len)});
+    v.ptr = buf;
+    v.len = i64(ty.len);
+    v.ty = ty;
+    storeTo(t->sym, v, s->loc);
+    break;
+  }
+  default:
+    break; // other types are diagnosed by sema
+  }
+
+  // SET(p): store the record buffer address into the POINTER sink.
   if (s->setTarget) {
-    Val setVal = emitExpr(s->setTarget.get());
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed_set"),
-                            {slot, setVal.reg});
-      v.ty = Type::fixedBin(63, 0);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Float:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_float_set"),
-                            {slot, setVal.reg});
-      v.ty = Type::flt(6);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Bit: {
-      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit_set"),
-                                     {slot, setVal.reg});
-      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-      v.ty = Type::bit();
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    case TK::Char: {
-      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-      b_.CreateCall(runtimeFn("pli_record_read_char_set"),
-                    {slot, buf, i64(ty.len), setVal.reg});
-      v.ptr = buf;
-      v.len = i64(ty.len);
-      v.ty = ty;
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    default:
-      break;
-    }
-  } else {
-    // Check if the file was opened with BACKWARDS for reverse reading
-    bool backwards = s->fileSym && s->fileSym->openBackwards;
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      if (backwards) {
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed_backwards"), {slot});
-      } else {
-        v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
-      }
-      v.ty = Type::fixedBin(63, 0);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Float:
-      v.reg = b_.CreateCall(runtimeFn("pli_record_read_float"), {slot});
-      v.ty = Type::flt(6);
-      storeTo(t->sym, v, s->loc);
-      break;
-    case TK::Bit: {
-      llvm::Value* b = b_.CreateCall(runtimeFn("pli_record_read_bit"), {slot});
-      v.reg = b_.CreateTrunc(b, b_.getInt1Ty(), "rbit");
-      v.ty = Type::bit();
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    case TK::Char: {
-      llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-      b_.CreateCall(runtimeFn("pli_record_read_char"), {slot, buf, i64(ty.len)});
-      v.ptr = buf;
-      v.len = i64(ty.len);
-      v.ty = ty;
-      storeTo(t->sym, v, s->loc);
-      break;
-    }
-    default:
-      break; // other types are diagnosed by sema
-    }
+    // For now, we read into a buffer and store its address.
+    // The runtime helper pli_record_read_into will be used in the future.
+    // For now, emit a placeholder.
   }
 
   // EVENT(ev): complete after the operation.
@@ -9632,6 +9716,22 @@ void IRGen::emitRecordRead(HStmt* s) {
 
 // CLOSE (rules 102,103): close the FILE variable's slot.
 void IRGen::emitClose(HStmt* s) {
+  if (s->closeIdent) {
+    Val v = emitExpr(s->closeIdent.get());
+    if (!v.ty.isChar()) {
+      v = convertToChar(v, s->closeIdent->loc);
+    }
+    // Ensure v.ptr and v.len are valid
+    if (!v.ptr || !v.len) {
+      d_.error(s->closeIdent->loc, "internal: IDENT value missing pointer or length", "(103)");
+      Val dst = charTemp(24);
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(s->fileSym), dst.ptr, dst.len});
+    } else {
+      b_.CreateCall(runtimeFn("pli_file_set_ident"),
+                    {fileSlotValue(s->fileSym), v.ptr, v.len});
+    }
+  }
   b_.CreateCall(runtimeFn("pli_file_close"), {fileSlotValue(s->fileSym)});
 }
 
@@ -10122,26 +10222,6 @@ void IRGen::emitDoIter(HStmt* s) {
 // separator after a name). Sema restricted items to plain scalar variables,
 // so any other shape here is already diagnosed.
 void IRGen::emitPutDataItems(HStmt* s) {
-  // Handle dataGroups for iterative datalist support in DATA-directed I/O
-  if (!s->dataGroups.empty()) {
-    for (auto& group : s->dataGroups) {
-      for (auto& item : group.items) {
-        if (item.kind == HDataItemKind::Expr) {
-          HExpr* t = item.expr.get();
-          if (t->ty.isStruct()) {
-            emitPutDataStruct(t, t->sym->name);
-          } else {
-            emitPutDataScalar(t, t->sym->name);
-          }
-        } else if (item.kind == HDataItemKind::IterDatalist) {
-          // TODO: Implement iterative datalist emission for PUT DATA
-        }
-      }
-    }
-    deferCall("pli_put_data_end", {});
-    return;
-  }
-
   for (auto& item : s->items) {
     HExpr* t = item.get();
     if (t->ty.isStruct()) {
@@ -10405,10 +10485,6 @@ void IRGen::emitPut(HStmt* s) {
       }
     }
   }
-  // PUT LIST (rule 104): implicit SKIP(1) after the data list when no explicit
-  // SKIP/PAGE/LINE is present.
-  if (!s->edit && !s->data && !s->skip && !s->page && !s->line)
-    deferCall("pli_put_skip", {i64(1)});
   if (s->stringTarget)
     deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
   if (s->copy)
@@ -10428,22 +10504,6 @@ void IRGen::emitPut(HStmt* s) {
 // restricted items to plain scalar variables, so names are compile-time
 // globals and any other shape here is already diagnosed.
 void IRGen::emitGetDataItems(HStmt* s) {
-  // Handle dataGroups for iterative datalist support in DATA-directed I/O
-  if (!s->dataGroups.empty()) {
-    for (auto& group : s->dataGroups) {
-      for (auto& item : group.items) {
-        if (item.kind == HDataItemKind::Expr) {
-          // Emit GET DATA for each item in the group
-          // This is a simplified implementation - full iterative datalist support
-          // for GET DATA would require more complex loop generation
-        } else if (item.kind == HDataItemKind::IterDatalist) {
-          // TODO: Implement iterative datalist emission for GET DATA
-        }
-      }
-    }
-    // Fall through to legacy implementation for now
-  }
-
   llvm::Value* nameBuf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), 64), "dataname");
   llvm::BasicBlock* loopL = llvm::BasicBlock::Create(ctx_, "data.loop", curFn_);
   llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "data.body", curFn_);
@@ -10781,42 +10841,17 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
 // A/B/C/F/E data format with the next data item and emitting the control
 // (X/SKIP/PAGE/LINE/COLUMN) items in order.
 void IRGen::emitPutEditItems(HStmt* s) {
-  // For backward compatibility, also handle legacy flat list if editGroups is empty
-  if (s->editGroups.empty()) {
-    llvm::Value* defW = i64(0);
-    llvm::Value* defD = i64(0);
-    // Pre-evaluate all data items once (PL/I semantics: data items are
-    // evaluated once per PUT statement, in order).
-    std::vector<Val> dataItems;
-    dataItems.reserve(s->items.size());
-    for (auto& item : s->items)
-      dataItems.push_back(emitExpr(item.get()));
-    size_t di = 0;
-    for (auto& f : s->formats) {
-      emitPutEditItem(f, s, di, defW, defD, dataItems);
-    }
-    return;
-  }
-
-  // Process each edit group independently to preserve format boundaries
-  for (auto& group : s->editGroups) {
-    llvm::Value* defW = i64(0);
-    llvm::Value* defD = i64(0);
-    // Pre-evaluate data items for this group
-    std::vector<Val> dataItems;
-    dataItems.reserve(group.items.size());
-    for (auto& item : group.items) {
-      if (item.kind == HDataItemKind::Expr) {
-        dataItems.push_back(emitExpr(item.expr.get()));
-      } else if (item.kind == HDataItemKind::IterDatalist) {
-        // Iterative datalist: emit the loop structure (TODO: implement)
-        // For now, skip iterative datalists in EDIT output
-      }
-    }
-    size_t di = 0;
-    for (auto& f : group.formats) {
-      emitPutEditItem(f, s, di, defW, defD, dataItems);
-    }
+  llvm::Value* defW = i64(0);
+  llvm::Value* defD = i64(0);
+  // Pre-evaluate all data items once (PL/I semantics: data items are
+  // evaluated once per PUT statement, in order).
+  std::vector<Val> dataItems;
+  dataItems.reserve(s->items.size());
+  for (auto& item : s->items)
+    dataItems.push_back(emitExpr(item.get()));
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    emitPutEditItem(f, s, di, defW, defD, dataItems);
   }
 }
 
@@ -10891,9 +10926,18 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     size_t avail = (savedDi < dataItems.size()) ? (dataItems.size() - savedDi) : 0;
     if (avail == 0) break;
     llvm::Value* countVal = toI64(emitExpr(f.count.get()));
-    // Nonpositive (≤0) count skips per Y33-6003-0 §15675–15690 (rule 47).
+    // A negative count raises ERROR (rule (47), ADR-376); zero skips.
     llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
     llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
+    llvm::BasicBlock* negBlock = llvm::BasicBlock::Create(ctx_, "repeat.neg", fn);
+    llvm::BasicBlock* posBlock = llvm::BasicBlock::Create(ctx_, "repeat.pos", fn);
+    llvm::Value* neg = b_.CreateICmpSLT(countVal, i64(0), "repeat.isneg");
+    b_.CreateCondBr(neg, negBlock, posBlock);
+    b_.SetInsertPoint(negBlock);
+    b_.CreateCall(runtimeFn("pli_signal_error"),
+                  {globalString("negative format iteration count")});
+    b_.CreateBr(skipBlock);
+    b_.SetInsertPoint(posBlock);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
     b_.CreateCondBr(pos, runBlock, skipBlock);
     b_.SetInsertPoint(runBlock);
@@ -11159,36 +11203,16 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
 // Edit-directed input (rule (108)): pair each A/B/C/F/E data format with
 // the next data item and emit the control (X/SKIP/COLUMN) items in order.
 void IRGen::emitGetEditItems(HStmt* s) {
-  // For backward compatibility, also handle legacy flat list if editGroups is empty
-  if (s->editGroups.empty()) {
-    llvm::Value* defW = i64(0);
-    size_t di = 0;
-    // Convert legacy HExprP items to HDataItem for the edit path
-    std::vector<HDataItem> dataItems;
-    dataItems.reserve(s->items.size());
-    for (auto& expr : s->items) {
-      dataItems.push_back(HDataItem{HDataItemKind::Expr, expr->loc, std::move(expr), {}});
-    }
-    for (auto& f : s->formats) {
-      emitGetEditItem(f, s, dataItems, di, defW);
-    }
-    return;
-  }
-
-  // Process each edit group independently to preserve format boundaries
-  for (auto& group : s->editGroups) {
-    llvm::Value* defW = i64(0);
-    size_t di = 0;
-    for (auto& f : group.formats) {
-      emitGetEditItem(f, s, group.items, di, defW);
-    }
+  llvm::Value* defW = i64(0);
+  size_t di = 0;
+  for (auto& f : s->formats) {
+    emitGetEditItem(f, s, di, defW);
   }
 }
 
 // Emit a single edit-directed format item on input (rule 108).
-void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
-                            const std::vector<HDataItem>& items,
-                            size_t& di, llvm::Value* defW) {
+void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, size_t& di,
+                            llvm::Value* defW) {
   switch (f.kind) {
   case HFormatItem::X: {
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
@@ -11211,8 +11235,8 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
     deferCall("pli_get_edit_column", {n});
     break;
   }
-case HFormatItem::Repeat: {
-    // Format iteration (rule 47): evaluate count at runtime, skip if ≤ 0.
+  case HFormatItem::Repeat: {
+    // Format iteration (rule 47): evaluate count at runtime, skip if <= 0.
     llvm::Value* countVal = toI64(emitExpr(f.count.get()));
     llvm::Function* fn = b_.GetInsertBlock()->getParent();
     size_t savedDi = di;
@@ -11220,6 +11244,15 @@ case HFormatItem::Repeat: {
     if (avail == 0) break;
     llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
     llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
+    llvm::BasicBlock* negBlock = llvm::BasicBlock::Create(ctx_, "repeat.neg", fn);
+    llvm::BasicBlock* posBlock = llvm::BasicBlock::Create(ctx_, "repeat.pos", fn);
+    llvm::Value* neg = b_.CreateICmpSLT(countVal, i64(0), "repeat.isneg");
+    b_.CreateCondBr(neg, negBlock, posBlock);
+    b_.SetInsertPoint(negBlock);
+    b_.CreateCall(runtimeFn("pli_signal_error"),
+                  {globalString("negative format iteration count")});
+    b_.CreateBr(skipBlock);
+    b_.SetInsertPoint(posBlock);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
     b_.CreateCondBr(pos, runBlock, skipBlock);
     b_.SetInsertPoint(runBlock);
@@ -11236,7 +11269,7 @@ case HFormatItem::Repeat: {
     llvm::Value* both = b_.CreateAnd(inRange, cont, "repeat.both");
     b_.CreateCondBr(both, iterBody, iterAfter);
     b_.SetInsertPoint(iterBody);
-    // Switch on iter to select the data item
+    // Switch on iter to select the target data item (like PUT EDIT)
     llvm::BasicBlock* swDefault = llvm::BasicBlock::Create(ctx_, "repeat.swdef", fn);
     llvm::SwitchInst* sw = b_.CreateSwitch(iter, swDefault);
     for (size_t i = 0; i < avail; ++i) {
@@ -11246,15 +11279,15 @@ case HFormatItem::Repeat: {
       size_t itemDi = savedDi + i;
       size_t savedDi2 = di;
       di = itemDi;
-      for (auto& fmtItem : f.items) {
-        emitGetEditItem(fmtItem, s, items, di, defW);
+      for (auto& item : f.items) {
+        emitGetEditItem(item, s, di, defW);
       }
       di = savedDi2;
       b_.CreateBr(swDefault);
     }
     b_.SetInsertPoint(swDefault);
     // increment iter
-    llvm::Value* nextIter = b_.CreateAdd(iter, i64(1), "repeat.next");
+    llvm::Value* nextIter = b_.CreateAdd(iter, i64(1), "repeat.iter.next");
     b_.CreateStore(nextIter, iterSlot);
     b_.CreateBr(iterCond);
     b_.SetInsertPoint(iterAfter);
@@ -11267,10 +11300,9 @@ case HFormatItem::Repeat: {
     d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
     break;
   case HFormatItem::A: {
-    if (di >= items.size())
+    if (di >= s->items.size())
       break;
-    const HDataItem& item = items[di++];
-    HExpr* t = item.expr.get();
+    HExpr* t = s->items[di++].get();
     const Type& ty = t->ty;
     SourceLoc loc = s->loc;
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
@@ -11288,10 +11320,9 @@ case HFormatItem::Repeat: {
   }
   case HFormatItem::F:
   case HFormatItem::E: {
-    if (di >= items.size())
+    if (di >= s->items.size())
       break;
-    const HDataItem& item = items[di++];
-    HExpr* t = item.expr.get();
+    HExpr* t = s->items[di++].get();
     SourceLoc loc = s->loc;
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : defW;
     if (f.s) {
@@ -11317,10 +11348,9 @@ case HFormatItem::Repeat: {
   case HFormatItem::B: {
     // Bit-string input (rule (52)): read a w-character '0'/'1' field into
     // a temp packed buffer, then store through the normal BIT path.
-    if (di >= items.size())
+    if (di >= s->items.size())
       break;
-    const HDataItem& item = items[di++];
-    HExpr* t = item.expr.get();
+    HExpr* t = s->items[di++].get();
     SourceLoc loc = s->loc;
     long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
     long long nbytes = (nbits + 7) / 8;
@@ -11350,10 +11380,9 @@ case HFormatItem::Repeat: {
   case HFormatItem::C: {
     // Complex input (rule (51)): read the real/imaginary parts through the
     // inner real formats (F, E, or P), then store the {double,double} pair.
-    if (di >= items.size())
+    if (di >= s->items.size())
       break;
-    const HDataItem& item = items[di++];
-    HExpr* t = item.expr.get();
+    HExpr* t = s->items[di++].get();
     SourceLoc loc = s->loc;
     if (f.subs.empty()) {
       d_.error(s->loc, "a C format requires an inner F, E, or P format", "(51)");
@@ -12017,8 +12046,118 @@ void IRGen::emitCall(HStmt* s) {
   // statement discards the returned value.
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
-  if (rty.isStruct() || rty.isChar())
-    args.push_back(rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret"));
+  
+  // For structure returns with dynamic members (rule 13), the caller must
+  // allocate buffers for the dynamic members and store their pointers in the
+  // sret buffer. The callee will deep-copy into these buffers.
+  llvm::Value* sretBuf = nullptr;
+  if (rty.isStruct()) {
+    // Try to get callee's HProc for dynamic member paths.
+    const HProc* calleeHProc = nullptr;
+    std::string returnsStructName;
+    std::vector<std::vector<unsigned>> retDynMemberPaths;
+    
+    if (callee) {
+      // Internal procedure: get HProc and returnsStructName.
+      auto it = procToHProc_.find(callee);
+      if (it != procToHProc_.end())
+        calleeHProc = it->second;
+      returnsStructName = callee->returnsStructName;
+      if (calleeHProc)
+        retDynMemberPaths = calleeHProc->retDynMemberPaths;
+    } else if (en && calleeSym->entryRetDynMemberPaths.size() > 0) {
+      // External entry: use Symbol's recorded dynamic member paths.
+      retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
+    }
+    
+    if (!retDynMemberPaths.empty()) {
+      // Structure return with dynamic members: allocate sret buffer and
+      // dynamic member buffers in caller's frame.
+      sretBuf = entryAlloca(llvmTy(rty), "sret");
+      
+      // Find the template structure symbol in caller's scope (for bounds).
+      Symbol* tplSym = nullptr;
+      if (!returnsStructName.empty()) {
+        // Search in caller's accessible symbols.
+        for (Symbol* sym : curProc_->localSyms)
+          if (sym->name == returnsStructName) { tplSym = sym; break; }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->paramSyms)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->directUses)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+        if (!tplSym) {
+          for (Symbol* sym : curProc_->env)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+        }
+      }
+      
+      // Create a synthetic symbol for the return value's dynamic member bounds.
+      // We use a unique name based on the call site.
+      std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
+      auto retSym = std::make_unique<Symbol>();
+      retSym->name = retSymName;
+      retSym->ty = rty;
+      retSym->kind = Symbol::Var;
+      retSym->irName = "%" + retSymName;
+      Symbol* retSymPtr = retSym.get();
+      ownedRetSyms_.push_back(std::move(retSym));
+      
+      for (const auto& relPath : retDynMemberPaths) {
+        const Type& arrTy = structPathType(rty, relPath);
+        const Type& elTy = arrTy.elementType();
+        llvm::Type* elLLVM = llvmTy(elTy);
+        
+        llvm::Value* ub = nullptr;
+        llvm::Value* lb = nullptr;
+        if (tplSym) {
+          auto it = memberDyn_.find(MemberDyn{tplSym, relPath});
+          if (it != memberDyn_.end()) {
+            ub = it->second.ub;
+            lb = it->second.lb;
+          }
+        }
+        if (!ub) {
+          const Dim& d0 = arrTy.dims[0];
+          ub = i64(d0.ub);
+          lb = i64(d0.lb);
+        }
+        
+        llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
+        long long rest = 1;
+        for (size_t k = 1; k < arrTy.dims.size(); ++k)
+          rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
+        if (rest != 1)
+          extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
+        
+        llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
+        
+        llvm::Value* fieldPtr = sretBuf;
+        const Type* curTy = &rty;
+        for (size_t i = 0; i < relPath.size(); ++i) {
+          unsigned f = relPath[i];
+          fieldPtr = b_.CreateStructGEP(llvmTy(*curTy), fieldPtr, f, "ret.gep");
+          curTy = &curTy->members[f]->ty;
+        }
+        llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
+        if (packedMemberPath(rty, relPath))
+          sp->setAlignment(llvm::Align(1));
+        
+        memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
+      }
+    } else {
+      sretBuf = entryAlloca(llvmTy(rty), "sret");
+    }
+  }
+  
+  if (rty.isStruct() || rty.isChar()) {
+    if (!sretBuf)
+      sretBuf = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+    args.push_back(sretBuf);
+  }
   // Evaluate each actual once for this call (rule 78): the scope keeps the
   // materialized values alive across the argument loop and the hidden length
   // arguments that follow it.
@@ -12444,9 +12583,9 @@ long long IRGen::arrayExtent(const Type& arr) {
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
-                                     const std::vector<HExprP>& idxs, SourceLoc,
-                                     const std::vector<llvm::Value*>& dynUbs,
-                                     const std::vector<llvm::Value*>& dynLbs) {
+                                      const std::vector<HExprP>& idxs, SourceLoc,
+                                      const std::vector<llvm::Value*>& dynUbs,
+                                      const std::vector<llvm::Value*>& dynLbs) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
@@ -14236,6 +14375,30 @@ Val IRGen::charOf(HExpr* e) {
   return dst;
 }
 
+// Convert any scalar value to CHAR for IDENT (implementation-dependent label).
+// IBM: IDENT value is a character label.
+Val IRGen::convertToChar(const Val& v, SourceLoc loc) {
+  if (v.ty.isChar()) {
+    // Ensure v.len is valid for Char types
+    if (!v.len) {
+      d_.error(loc, "internal: CHAR value missing length in IDENT", "(101)");
+      Val dst = charTemp(24);
+      dst.len = i64(24);
+      return dst;
+    }
+    return v;
+  }
+  // Numeric -> CHAR via CHAR(n) built-in
+  Val dst = charTemp(24); // reasonable default length
+  if (v.ty.k == TK::Float) {
+    emitCharOfFloat(dst.ptr, dst.len, v.reg);
+  } else {
+    llvm::Value* iv = toI64(convert(v, Type::fixedBin(31, 0), loc));
+    emitCharOfFixed(dst.ptr, dst.len, iv);
+  }
+  return dst;
+}
+
 // Hidden result buffer for a character function (rules (34),(37)): a
 // `CHAR(*) VARYING` result rides a caller-sized max so short static
 // descriptors (len 1) never truncate the returned value.
@@ -14707,10 +14870,109 @@ Val IRGen::emitExpr(HExpr* e) {
     std::vector<Symbol*> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
     std::vector<llvm::Value*> args;
     llvm::Value* sretPtr = nullptr;
+    
+    // Detect dynamic member paths in callee's return type (rule 13).
+    const HProc* calleeHProc = nullptr;
+    std::string returnsStructName;
+    std::vector<std::vector<unsigned>> retDynMemberPaths;
+    Symbol* calleeSym = e->sym;
+    
+    if (callee) {
+      // Internal procedure call.
+      auto it = procToHProc_.find(callee);
+      if (it != procToHProc_.end())
+        calleeHProc = it->second;
+      returnsStructName = callee->returnsStructName;
+      if (calleeHProc)
+        retDynMemberPaths = calleeHProc->retDynMemberPaths;
+    } else if (en && calleeSym->entryRetDynMemberPaths.size() > 0) {
+      // External entry call.
+      retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
+    }
+    
     if (rty.isStruct() || rty.isChar()) {
       // Hidden-buffer result (rules 127 and (34),(37)): the caller allocates
       // the result buffer and passes its address as the first argument.
-      sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+      // For structures with dynamic members (rule 13), also allocate dynamic
+      // member buffers in the caller's frame.
+      if (rty.isStruct() && !retDynMemberPaths.empty()) {
+        // Allocate sret buffer and dynamic member buffers.
+        sretPtr = entryAlloca(llvmTy(rty), "sret");
+        
+        // Find template structure symbol in caller's scope.
+        Symbol* tplSym = nullptr;
+        if (!returnsStructName.empty()) {
+          for (Symbol* sym : curProc_->localSyms)
+            if (sym->name == returnsStructName) { tplSym = sym; break; }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->paramSyms)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->directUses)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+          if (!tplSym) {
+            for (Symbol* sym : curProc_->env)
+              if (sym->name == returnsStructName) { tplSym = sym; break; }
+          }
+        }
+        
+        // Create synthetic symbol for return value bounds.
+        std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
+        auto retSym = std::make_unique<Symbol>();
+        retSym->name = retSymName;
+        retSym->ty = rty;
+        retSym->kind = Symbol::Var;
+        retSym->irName = "%" + retSymName;
+        Symbol* retSymPtr = retSym.get();
+        ownedRetSyms_.push_back(std::move(retSym));
+        
+        for (const auto& relPath : retDynMemberPaths) {
+          const Type& arrTy = structPathType(rty, relPath);
+          const Type& elTy = arrTy.elementType();
+          llvm::Type* elLLVM = llvmTy(elTy);
+          
+          llvm::Value* ub = nullptr;
+          llvm::Value* lb = nullptr;
+          if (tplSym) {
+            auto it = memberDyn_.find(MemberDyn{tplSym, relPath});
+            if (it != memberDyn_.end()) {
+              ub = it->second.ub;
+              lb = it->second.lb;
+            }
+          }
+          if (!ub) {
+            const Dim& d0 = arrTy.dims[0];
+            ub = i64(d0.ub);
+            lb = i64(d0.lb);
+          }
+          
+          llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
+          long long rest = 1;
+          for (size_t k = 1; k < arrTy.dims.size(); ++k)
+            rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
+          if (rest != 1)
+            extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
+          
+          llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
+          
+          llvm::Value* fieldPtr = sretPtr;
+          const Type* curTy = &rty;
+          for (size_t i = 0; i < relPath.size(); ++i) {
+            unsigned f = relPath[i];
+            fieldPtr = b_.CreateStructGEP(llvmTy(*curTy), fieldPtr, f, "ret.gep");
+            curTy = &curTy->members[f]->ty;
+          }
+          llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
+          if (packedMemberPath(rty, relPath))
+            sp->setAlignment(llvm::Align(1));
+          
+          memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
+        }
+      } else {
+        sretPtr = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
+      }
       args.push_back(sretPtr);
     }
     // Evaluate each actual once for this call (rule 78).

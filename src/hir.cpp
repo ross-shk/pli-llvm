@@ -124,55 +124,6 @@ HExprP lowerValueConst(const Expr* e) {
   return h;
 }
 
-// Forward declaration for mutual recursion
-HDataItem lowerIterDatalist(const IterDatalist* iter);
-
-// Helper to lower a single datalist element (variant)
-HDataItem lowerDataListElement(const DataListElement& elem) {
-  HDataItem item;
-  if (auto* expr = std::get_if<ExprP>(&elem)) {
-    item.kind = HDataItemKind::Expr;
-    item.expr = lowerExpr(expr->get());
-  } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&elem)) {
-    item = lowerIterDatalist(iter->get());
-  }
-  return item;
-}
-
-// Overload for lowering a raw expression pointer (used by lowerIterDatalist)
-HDataItem lowerDataListElement(Expr* expr) {
-  HDataItem item;
-  item.kind = HDataItemKind::Expr;
-  item.expr = lowerExpr(expr);
-  return item;
-}
-
-// Lower an iterative datalist (rule 111) to HIR.
-HDataItem lowerIterDatalist(const IterDatalist* iter) {
-  HDataItem item;
-  item.kind = HDataItemKind::IterDatalist;
-  item.loc = iter->loc;
-  for (const auto& nested : iter->items) {
-    if (auto* expr = std::get_if<ExprP>(&nested)) {
-      item.iterDatalist.items.push_back(lowerDataListElement(expr->get()));
-    } else if (auto* iterDatalist = std::get_if<std::unique_ptr<IterDatalist>>(&nested)) {
-      item.iterDatalist.items.push_back(lowerIterDatalist(iterDatalist->get()));
-    }
-  }
-  // Lower DO specifications
-  for (const auto& spec : iter->specs) {
-    HDoSpec hspec;
-    hspec.control = lowerExpr(spec.control.get());
-    hspec.from = lowerExpr(spec.from.get());
-    hspec.to = lowerExpr(spec.to.get());
-    hspec.by = spec.by ? lowerExpr(spec.by.get()) : nullptr;
-    hspec.whileCond = spec.whileCond ? lowerExpr(spec.whileCond.get()) : nullptr;
-    hspec.loc = spec.loc;
-    item.iterDatalist.specs.push_back(std::move(hspec));
-  }
-  return item;
-}
-
 // Mirror an expression node without re-dispatching the Call case (Call is
 // handled by lowerCallExpr, which builds on this).
 HExprP lowerExprBase(const Expr* e, bool substValue) {
@@ -308,6 +259,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->params = s->params;
   h->entryIsFunction = s->entryIsFunction;
   h->entryRetTy = s->entryRetTy;
+  h->entryRetDynMemberPaths = s->entryRetDynMemberPaths;
   h->entryParamSyms = s->entryParamSyms;
   h->skip = s->skip;
   h->page = s->page;
@@ -431,7 +383,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->from = lowerExpr(s->from.get());
   h->to = lowerExpr(s->to.get());
   h->by = lowerExpr(s->by.get());
-h->thenS = lowerStmt(s->thenS.get(), owner);
+  h->thenS = lowerStmt(s->thenS.get(), owner);
   h->elseS = lowerStmt(s->elseS.get(), owner);
   for (const auto& b : s->body)
     h->body.push_back(lowerStmt(b.get(), owner));
@@ -440,24 +392,12 @@ h->thenS = lowerStmt(s->thenS.get(), owner);
   h->stringTarget = lowerExpr(s->stringTarget.get());
   // GO TO (expr) via LABEL variable (rule (77), rule (21)): lower the target.
   h->gotoTarget = lowerExpr(s->gotoTarget.get());
-  // Lower data items for LIST/DATA directed I/O (legacy flat list + new variant list)
-  for (const auto& it : s->items) {
+  for (const auto& it : s->items)
     h->items.push_back(lowerExpr(it.get()));
-    h->dataItems.push_back(HDataItem{HDataItemKind::Expr, it->loc, lowerExpr(it.get())});
-  }
-  // Lower data groups for DATA-directed I/O (rule 106) with iterative datalist support
-  for (const auto& group : s->dataGroups) {
-    HEditGroup hgroup;
-    hgroup.loc = group.loc;
-    for (const auto& item : group.items) {
-      if (auto* expr = std::get_if<ExprP>(&item)) {
-        hgroup.items.push_back(HDataItem{HDataItemKind::Expr, expr->get()->loc, lowerExpr(expr->get())});
-      } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&item)) {
-        hgroup.items.push_back(lowerIterDatalist(iter->get()));
-      }
-    }
-    h->dataGroups.push_back(std::move(hgroup));
-  }
+  // Edit-directed format list (rule (108)): lower each item's width/decimals.
+  h->edit = s->edit;
+  // Data-directed transmission (rule (106)): carry the mode flag.
+  h->data = s->data;
 
   // Helper to recursively lower a FormatItem to HFormatItem.
   std::function<HFormatItem(const FormatItem&)> lowerFormatItem = [&](const FormatItem& f) -> HFormatItem {
@@ -496,31 +436,6 @@ h->thenS = lowerStmt(s->thenS.get(), owner);
     return hf;
   };
 
-  // Lower edit groups for EDIT-directed I/O (rule 108)
-  for (const auto& group : s->editGroups) {
-    HEditGroup hgroup;
-    hgroup.loc = group.loc;
-    for (const auto& item : group.items) {
-      if (auto* expr = std::get_if<ExprP>(&item)) {
-        if (expr && expr->get()) {
-          hgroup.items.push_back(HDataItem{HDataItemKind::Expr, expr->get()->loc, lowerExpr(expr->get())});
-        }
-      } else if (auto* iter = std::get_if<std::unique_ptr<IterDatalist>>(&item)) {
-        if (iter && iter->get()) {
-          hgroup.items.push_back(lowerIterDatalist(iter->get()));
-        }
-      }
-    }
-    for (const auto& fmt : group.formats) {
-      hgroup.formats.push_back(lowerFormatItem(fmt));
-    }
-    h->editGroups.push_back(std::move(hgroup));
-  }
-  // Edit-directed format list (rule (108)): lower each item's width/decimals.
-  h->edit = s->edit;
-  // Data-directed transmission (rule (106)): carry the mode flag.
-  h->data = s->data;
-
   for (const auto& f : s->formats)
     h->formats.push_back(lowerFormatItem(f));
 
@@ -533,15 +448,14 @@ h->thenS = lowerStmt(s->thenS.get(), owner);
   h->openRecord = s->openRecord;
   h->openKeyed = s->openKeyed;
   h->openDirect = s->openDirect;
-  h->openStream = s->openStream;
-  h->openPrint = s->openPrint;
   h->openIdent = lowerExpr(s->openIdent.get());
   h->openLinesize = lowerExpr(s->openLinesize.get());
   h->openPagesize = lowerExpr(s->openPagesize.get());
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
   h->openBuffered = s->openBuffered;
   h->openUnbuffered = s->openUnbuffered;
   h->openExclusive = s->openExclusive;
-  h->openBackwards = s->openBackwards;
+  h->closeIdent = lowerExpr(s->closeIdent.get());
   h->keyOpt = lowerExpr(s->keyOpt.get());
   h->keyToOpt = lowerExpr(s->keyToOpt.get());
   h->keyFromOpt = lowerExpr(s->keyFromOpt.get());
@@ -667,6 +581,7 @@ HProgram lower(const Program& prog) {
     hp->isRecursive = prog.procs[i]->isRecursive;
     hp->isFunction = prog.procs[i]->isFunction;
     hp->retTy = prog.procs[i]->retTy;
+    hp->retDynMemberPaths = prog.procs[i]->retDynMemberPaths;
     hp->params = prog.procs[i]->params;
     hp->entryNames = prog.procs[i]->entryNames;
     hp->paramSyms = prog.procs[i]->paramSyms;

@@ -13,38 +13,12 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <variant>
 
 struct Symbol;
 struct Proc;
 
 struct Expr;
 using ExprP = std::unique_ptr<Expr>;
-
-// DO specification for iterative datalist (rules 72, 73)
-struct DoSpec {
-  ExprP control;           // control variable reference (lvalue)
-  ExprP from;              // initial value (evaluated once)
-  ExprP to;                // TO bound (mandatory, evaluated once)
-  ExprP by;                // BY step (optional, default 1, evaluated once)
-  ExprP whileCond;         // WHILE condition (optional, pre-test each iteration)
-  SourceLoc loc;
-};
-
-// Forward declaration for IterDatalist
-struct IterDatalist;
-
-// Data list element: either an expression or an iterative datalist (rule 111)
-using DataListElement = std::variant<ExprP, std::unique_ptr<IterDatalist>>;
-
-// New AST node for iterative datalist element (rule 111)
-struct IterDatalist {
-  std::vector<DataListElement> items;  // nested datalist (recursive)
-  std::vector<DoSpec> specs;           // control specifications
-  SourceLoc loc;
-  
-  IterDatalist(SourceLoc l) : loc(l) {}
-};
 
 struct Expr {
   enum Kind {
@@ -142,13 +116,6 @@ struct FormatItem {
   std::vector<FormatItem> items; // nested format group
 };
 
-// EDIT-directed I/O: preserve (datalist) formatlist group boundaries (rule 108)
-struct EditGroup {
-  std::vector<DataListElement> items;
-  std::vector<FormatItem> formats;
-  SourceLoc loc;
-};
-
 struct DeclItem {
   std::string name;
   Type ty{};
@@ -201,6 +168,8 @@ struct DeclItem {
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
    bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
    Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+   // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+   std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
    std::string returnsStructName; // rule 127: a bare structure name naming the
                                   // structure whose shape this entry returns;
                                   // resolved to a deep copy in sema
@@ -216,15 +185,26 @@ struct DeclItem {
    bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
    std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
    bool reserved = false;         // RESERVED (ADR-203): no init
-   bool unionAttr = false;        // UNION (ADR-202): overlay with next member
-   bool labelAttr = false;        // LABEL (rule (21)): label variable
-   bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
-   bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
-   bool dataAttr = false;         // a computational/string data attribute was given
-                                  // on this item (used to validate GENERIC)
-   // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
-   std::vector<std::pair<std::string, Type>> genericEntries;
- };
+    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
+    bool labelAttr = false;        // LABEL (rule (21)): label variable
+    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+    bool printAttr = false;        // PRINT (rule 40): stream file with page/line formatting
+    bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
+    // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+    bool buffered = false;         // BUFFERED
+    bool unbuffered = false;       // UNBUFFERED
+    bool exclusive = false;        // EXCLUSIVE
+    bool dataAttr = false;         // a computational/string data attribute was given
+                                   // on this item (used to validate GENERIC)
+    // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
+    std::vector<std::pair<std::string, Type>> genericEntries;
+  };
+
+  // Deep-clone helpers for factored declarations (rule 11): each name gets its
+  // own copy of INITIAL expressions, dynamic bounds, and initItems.
+  ExprP cloneExpr(const Expr& e);
+  inline InitItem cloneInitItem(const InitItem& it);
+  inline DeclItem cloneDeclItem(const DeclItem& base);
 
 // Rule (65) initial-label: an element of a label array named by a statement
 // prefix (AR(1): ...). The subscripts are optionally signed integer constants;
@@ -286,79 +266,6 @@ struct Stmt {
 
   std::vector<DeclItem> decls;
 
-  std::vector<ExprP> items;
-  // Edit-directed transmission (rule (108)): per (datalist) formatlist group,
-  // preserving format list boundaries for iterative datalist support.
-  std::vector<EditGroup> editGroups;
-  // Data-directed transmission (rule (106)): per (datalist) group for iterative
-  // datalist support in PUT DATA/GET DATA.
-  std::vector<EditGroup> dataGroups;
-  // Edit-directed transmission (rule (108)): when true, the data items are
-  // written/read through the paired format list instead of list-directed.
-  bool edit = false;
-  // Data-directed transmission (rule (106)): when true, PUT writes each item
-  // as NAME=value (GET DATA stays diagnosed in this stage).
-  bool data = false;
-  std::vector<FormatItem> formats; // one per data item or control action (legacy, used when not editGroups)
-  // PUT/GET stream statement options (rules (104),(105))
-  bool skip = false, page = false;
-  bool copy = false;              // COPY stream option (rule 105)
-  bool line = false;              // LINE(n) stream option (rule 105)
-  ExprP skipCount;
-  ExprP lineCount;                // LINE(n) expression
-  // STRING ( reference ) option (rule 105): the character variable that the
-  // list-directed output is written into (PUT) or input is read from (GET);
-  // null when the stream is SYSIN/SYSPRINT.
-  ExprP stringTarget;
-  // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the name of the
-  // FILE variable being named; resolved to `fileSym` by sema. For OPEN, the
-  // TITLE ('name') string and the INPUT/OUTPUT mode are also carried.
-  std::string fileIdent;
-  Symbol* fileSym = nullptr;
-  std::string openTitle;
-  bool openInput = false;
-  bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
-                           // read and write in place (REWRITE/DELETE)
-bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
-                            // file; READ/WRITE transfer fixed-size binary records
-  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
-                            // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
-                            // KEYTO/KEYFROM to address records by key
-  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
-                            // direct organisation; same keyed access as KEYED
-  bool openStream = false; // OPEN ... STREAM (rule (101)): stream transmission
-  bool openPrint = false;  // OPEN ... PRINT (rule (101)): print file attribute
-  // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
-  ExprP openIdent = nullptr;    // IDENT ( expression )
-  ExprP openLinesize = nullptr; // LINESIZE ( expression )
-  ExprP openPagesize = nullptr; // PAGESIZE ( expression )
-  // OPEN options (rule (101)): BUFFERED/UNBUFFERED/EXCLUSIVE/BACKWARDS flags.
-  bool openBuffered = false;
-  bool openUnbuffered = false;
-  bool openExclusive = false;
-  bool openBackwards = false;
-// Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
-// record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
-// KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
-  ExprP keyOpt = nullptr;    // KEY( expression )
-  ExprP keyToOpt = nullptr;  // KEYTO( variable )
-  ExprP keyFromOpt = nullptr;// KEYFROM( expression )
-  // Rule (113) record options (keyed/direct + sequential):
-  bool keyNoLock = false;    // NOLOCK                READ/REWRITE/DELETE
-  ExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
-  ExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
-  ExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
-  bool unlockOpt = false;    // UNLOCK                READ/REWRITE (release lock)
-  ExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
-
-  // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
-  // the reply input.
-  ExprP replyTarget;
-
-   std::vector<ExprP> args; // CALL arguments
-   ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
-
-  // DO / DO WHILE / DO ITER fields
   ExprP target, value, cond, from, to, by;
   bool until = false;              // DO UNTIL (extension, ADR-106): test cond after the body
   bool forever = false;            // DO FOREVER (extension, ADR-370): infinite loop, no condition
@@ -395,7 +302,74 @@ bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a re
   std::vector<std::string> params; // ENTRY parameter names
   bool entryIsFunction = false;
   Type entryRetTy{};
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   std::vector<Symbol*> entryParamSyms; // resolved by sema
+
+  // PUT/GET stream statement options (rules (104),(105))
+  bool skip = false, page = false;
+  bool copy = false;              // COPY stream option (rule 105)
+  bool line = false;              // LINE(n) stream option (rule 105)
+  ExprP skipCount;
+  ExprP lineCount;                // LINE(n) expression
+  std::vector<ExprP> items;
+  // Edit-directed transmission (rule (108)): when true, the data items are
+  // written/read through the paired format list instead of list-directed.
+  bool edit = false;
+  // Data-directed transmission (rule (106)): when true, PUT writes each item
+  // as NAME=value (GET DATA stays diagnosed in this stage).
+  bool data = false;
+  std::vector<FormatItem> formats; // one per data item or control action
+  // STRING ( reference ) option (rule 105): the character variable that the
+  // list-directed output is written into (PUT) or input is read from (GET);
+  // null when the stream is SYSIN/SYSPRINT.
+  ExprP stringTarget;
+  // FILE ( f ) option (rule 105) and OPEN/CLOSE FILE ( f ): the name of the
+  // FILE variable being named; resolved to `fileSym` by sema. For OPEN, the
+  // TITLE ('name') string and the INPUT/OUTPUT mode are also carried.
+  std::string fileIdent;
+  Symbol* fileSym = nullptr;
+  std::string openTitle;
+  bool openInput = false;
+  bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
+                           // read and write in place (REWRITE/DELETE)
+  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
+                           // file; READ/WRITE transfer fixed-size binary records
+  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
+                           // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
+                           // KEYTO/KEYFROM to address records by key
+  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
+                           // direct organisation; same keyed access as KEYED
+  // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
+  ExprP openIdent = nullptr;    // IDENT ( expression )
+  ExprP openLinesize = nullptr; // LINESIZE ( expression )
+  ExprP openPagesize = nullptr; // PAGESIZE ( expression )
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  bool openBuffered = false;    // BUFFERED
+  bool openUnbuffered = false;  // UNBUFFERED
+  bool openExclusive = false;   // EXCLUSIVE
+  // CLOSE options (rule (103))
+  ExprP closeIdent = nullptr;   // IDENT ( expression )
+// Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
+// record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
+// KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
+  ExprP keyOpt = nullptr;    // KEY( expression )
+  ExprP keyToOpt = nullptr;  // KEYTO( variable )
+  ExprP keyFromOpt = nullptr;// KEYFROM( expression )
+  // Rule (113) record options (keyed/direct + sequential):
+  bool keyNoLock = false;    // NOLOCK                READ/REWRITE/DELETE
+  ExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
+  ExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
+  ExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;    // UNLOCK                READ/REWRITE (release lock)
+  ExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
+
+  // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
+  // the reply input.
+  ExprP replyTarget;
+
+   std::vector<ExprP> args; // CALL arguments
+   ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
 
   // CALL task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT
@@ -433,9 +407,6 @@ bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a re
   // RT_UNDEFINEDFILE_KEY_BASE).
   static constexpr int kEndfileBaseCondKey = -1000;
   static constexpr int kUndefinedfileBaseCondKey = -2000;
-  // ENDPAGE(f) (rule 97): raised when a STREAM PRINT file exceeds PAGESIZE.
-  // Keyed by file slot like ENDFILE/UNDEFINEDFILE.
-  static constexpr int kEndpageBaseCondKey = -3000;
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1
@@ -496,6 +467,10 @@ struct Proc {
   // enclosing structure variable whose shape the function returns. The parser
   // records the name; sema resolves it to a deep copy of that type into retTy.
   std::string returnsStructName;
+  // Field paths of dynamic members in the RETURNS structure (rule 13), relative
+  // to the structure root; nested structures recurse. Collected by sema for
+  // HIR lowering so the caller can allocate buffers and the callee can deep-copy.
+  std::vector<std::vector<unsigned>> retDynMemberPaths;
   std::vector<std::string> params;     // rule (4) parameterlist
   bool isPackage = false;              // extension (ADR-109): a PACKAGE block —
                                        // scope and linkage only, never emitted
@@ -520,5 +495,108 @@ struct Program {
   // is NOT the index into this list: the key is a hash of the name (see
   // Sema::resolveCondKey), so it stays the same across separately compiled
   // objects. Key 0 means ERROR, negative keys are the fixed conditions above.
-  std::vector<std::string> condNames;
-};
+std::vector<std::string> condNames;
+  };
+
+// Deep-clone implementation for factored declarations (rule 11).
+// All Expr::Kind variants share the same struct layout; we copy all fields
+// and recursively clone child expressions (a, b, args).
+inline ExprP cloneExpr(const Expr& e) {
+  auto r = std::make_unique<Expr>();
+  r->kind = e.kind;
+  r->loc = e.loc;
+  r->ty = e.ty;
+  r->ival = e.ival;
+  r->wideIval = e.wideIval;
+  r->fval = e.fval;
+  r->decScale = e.decScale;
+  r->decPrec = e.decPrec;
+  r->sval = e.sval;
+  r->name = e.name;
+  r->path = e.path;
+  r->memberPath = e.memberPath;
+  // sym, locPtr, allocBaseRef, isLabel, folded — NOT cloned (sema/runtime fills)
+  r->op = e.op;
+  if (e.a) r->a = cloneExpr(*e.a);
+  if (e.b) r->b = cloneExpr(*e.b);
+  for (const auto& arg : e.args)
+    if (arg) r->args.push_back(cloneExpr(*arg));
+  return r;
+}
+
+inline InitItem cloneInitItem(const InitItem& it) {
+  InitItem r;
+  r.kind = it.kind;
+  r.factor = it.factor;
+  if (it.value) r.value = cloneExpr(*it.value);
+  for (const auto& child : it.items) r.items.push_back(cloneInitItem(child));
+  return r;
+}
+
+inline DeclItem cloneDeclItem(const DeclItem& base) {
+  DeclItem r;
+  // Trivial copies
+  r.ty = base.ty;
+  r.level = base.level;
+  r.isEntry = base.isEntry;
+  r.extName = base.extName;
+  r.entryParams = base.entryParams;
+  r.entryByValue = base.entryByValue;
+  r.controlled = base.controlled;
+  r.like = base.like;
+  r.picture = base.picture;
+  r.fileAttr = base.fileAttr;
+  r.nonprint = base.nonprint;
+  r.genericEntries = base.genericEntries;
+  r.typeRef = base.typeRef;
+  r.definedBase = base.definedBase;
+  // DefinedSub has ExprP expr — deep clone each
+  for (const auto& ds : base.definedSubs) {
+    DefinedSub nds;
+    nds.isub = ds.isub;
+    nds.axis = ds.axis;
+    nds.mult = ds.mult;
+    nds.add = ds.add;
+    if (ds.expr) nds.expr = cloneExpr(*ds.expr);
+    r.definedSubs.push_back(std::move(nds));
+  }
+  r.hasPos = base.hasPos;
+  r.pos = base.pos;
+  r.basedBase = base.basedBase;
+  r.basedNoPtr = base.basedNoPtr;
+  r.area = base.area;
+  r.areaStar = base.areaStar;
+  r.sawStatic = base.sawStatic;
+  r.offset = base.offset;
+  r.offsetRef = base.offsetRef;
+  r.aligned = base.aligned;
+  r.unaligned = base.unaligned;
+  r.optional = base.optional;
+  r.isCondition = base.isCondition;
+  r.entryVariable = base.entryVariable;
+  r.entryIsFunction = base.entryIsFunction;
+  r.entryRetTy = base.entryRetTy;
+  r.returnsStructName = base.returnsStructName;
+  r.uses = base.uses;
+  r.sets = base.sets;
+  r.reducible = base.reducible;
+  r.abnormalLabel = base.abnormalLabel;
+  r.normal = base.normal;
+  r.reserved = base.reserved;
+  r.unionAttr = base.unionAttr;
+  r.labelAttr = base.labelAttr;
+  r.imaginary = base.imaginary;
+  r.dataAttr = base.dataAttr;
+  // Deep clones
+  if (base.init) r.init = cloneExpr(*base.init);
+  if (base.slenExpr) r.slenExpr = cloneExpr(*base.slenExpr);
+  if (base.valueInit) r.valueInit = cloneExpr(*base.valueInit);
+  if (base.initCall) r.initCall = cloneExpr(*base.initCall);
+  for (const auto& e : base.dynBounds) if (e) r.dynBounds.push_back(cloneExpr(*e));
+  for (const auto& e : base.dynLbBounds) if (e) r.dynLbBounds.push_back(cloneExpr(*e));
+  for (const auto& it : base.initItems) r.initItems.push_back(cloneInitItem(it));
+  // Non-owning / runtime-filled — leave null/empty
+  r.sym = nullptr;
+  r.dynMembers.clear();
+  return r;
+}

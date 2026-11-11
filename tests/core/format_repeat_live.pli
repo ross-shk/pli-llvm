@@ -1,8 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
-/* Format iteration (rule 47): runtime-evaluated repetition counts with
-   nonpositive skip semantics. */
-format_repeat_live: procedure options(main);
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Format iteration (rule 47): runtime-evaluated repetition counts with
+    nonpositive skip semantics. */
+ format_repeat_live: procedure options(main);
     declare buf char(40);
     declare a fixed bin(31);
     declare b fixed bin(31);
@@ -10,8 +10,9 @@ format_repeat_live: procedure options(main);
     declare d fixed bin(31);
     declare n fixed bin(31);
     declare i fixed bin(31);
-    declare f entry(fixed bin(31)) returns(fixed bin(31));
-    declare counter fixed bin(31) static initial(0);
+    declare counter fixed bin(31) initial(0);
+    call get_counter(d);
+    put skip list('DEBUG initial counter=', d);
 
     /* Variable count: (n)(F(4)) with n=2 -> two fields. */
     n = 2;
@@ -27,6 +28,8 @@ format_repeat_live: procedure options(main);
        put skip list('FAIL var count d', d);
        stop;
     end;
+    call get_counter(d);
+    put skip list('DEBUG after test 1 counter=', d);
 
     /* Zero count: (0)(F(4)) -> skipped, data item pairs with next format. */
     a = 2;
@@ -36,6 +39,8 @@ format_repeat_live: procedure options(main);
        put skip list('FAIL zero count', c);
        stop;
     end;
+    call get_counter(d);
+    put skip list('DEBUG after test 2 counter=', d);
 
     /* Nested: (2)((2)(F(4))) -> 4 fields. */
     a = 1; b = 2; c = 3; d = 4;
@@ -45,6 +50,8 @@ format_repeat_live: procedure options(main);
     if b ^= 2 then do; put skip list('FAIL nested 2'); stop; end;
     if c ^= 3 then do; put skip list('FAIL nested 3'); stop; end;
     if d ^= 4 then do; put skip list('FAIL nested 4'); stop; end;
+    call get_counter(d);
+    put skip list('DEBUG after test 3 counter=', d);
 
     /* Function-call count: (f(2))(F(4)) evaluates once. */
     a = 5;
@@ -54,31 +61,43 @@ format_repeat_live: procedure options(main);
        put skip list('FAIL func count', c);
        stop;
     end;
+    call get_counter(d);
+    put skip list('DEBUG after test 4 counter=', d);
 
-    /* Count expression with side effect: counter increments once. */
-    counter = 0;
+    /* Count expression with side effect: call counter increments once. */
+    call reset_counter();
     a = 6;
-    put string(buf) edit(a) ((inc_counter())(f(4)));
+    put string(buf) edit(a) ((call_counter())(f(4)));
     get string(buf) edit(c) (f(4));
     if c ^= 6 then do;
        put skip list('FAIL side effect count', c);
        stop;
     end;
-    if counter ^= 1 then do;
-       put skip list('FAIL count evaluated once', counter);
+    call get_counter(d);
+    put skip list('DEBUG after reset and call_counter counter=', d);
+    if d ^= 1 then do;
+       put skip list('FAIL count evaluated once', d);
        stop;
     end;
 
-    put skip list('PASS format_repeat_live');
- end format_repeat_live;
+put skip list('PASS format_repeat_live');
 
- f: proc(k) returns(fixed bin(31));
-     declare k fixed bin(31);
-     return(k);
- end f;
+    f: proc(k) returns(fixed bin(31));
+        declare k fixed bin(31);
+        return(k);
+    end f;
 
- inc_counter: procedure returns(fixed bin(31)) options(external);
-     declare counter fixed bin(31) external;
-     counter = counter + 1;
-     return(2);
- end inc_counter;
+    reset_counter: procedure;
+        counter = 0;
+    end reset_counter;
+
+    call_counter: procedure returns(fixed bin(31));
+        counter = counter + 1;
+        return(2);
+    end call_counter;
+
+    get_counter: procedure(out_val);
+        declare out_val fixed bin(31);
+        out_val = counter;
+    end get_counter;
+end format_repeat_live;

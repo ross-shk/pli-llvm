@@ -111,6 +111,26 @@ struct HDeclItem {
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
 
+// Runtime array descriptor value (HIR-level).
+// Used for: passing to callees, LBOUND/HBOUND/DIM builtins, runtime checks.
+struct HArrayDesc {
+  std::vector<HExprP> lowerBounds;  // one per axis
+  std::vector<HExprP> upperBounds;
+  std::vector<HExprP> strides;      // element strides
+  HExprP baseAddr;                  // void* (i8*)
+  Type elementTy;
+  // Metadata flags
+  std::vector<AxisDesc::Provenance> provenances;
+  std::vector<AxisDesc::Lifetime> lifetimes;
+  std::vector<bool> isDynamic;
+  std::vector<bool> isAdjustable;
+  std::vector<bool> isSubscriptRange;
+  ArrayDesc::Owner owner = ArrayDesc::Owner::Automatic;
+  int ctlSlot = -1;
+  Symbol* basedLocator = nullptr;
+  Symbol* areaSymbol = nullptr;
+};
+
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {
@@ -124,37 +144,6 @@ struct HFormatItem {
   // Repeat (rule 47):
   HExprP count;
   std::vector<HFormatItem> items;
-};
-
-// DO specification for iterative datalist (rules 72, 73)
-struct HDoSpec {
-  HExprP control;           // control variable reference
-  HExprP from;              // initial value
-  HExprP to;                // TO bound
-  HExprP by;                // BY step (optional)
-  HExprP whileCond;         // WHILE condition (optional)
-  SourceLoc loc;
-};
-
-// Data list element kind for iterative datalist (rule 111)
-enum class HDataItemKind { Expr, IterDatalist };
-
-// Data list element: either an expression or an iterative datalist (rule 111)
-struct HDataItem {
-  HDataItemKind kind = HDataItemKind::Expr;
-  SourceLoc loc;
-  HExprP expr;                              // for Expr kind
-  struct IterDatalist {
-    std::vector<HDataItem> items;           // nested datalist
-    std::vector<HDoSpec> specs;             // control specifications
-  } iterDatalist;                           // for IterDatalist kind
-};
-
-// EDIT-directed I/O: per (datalist) formatlist group (rule 108)
-struct HEditGroup {
-  std::vector<HDataItem> items;
-  std::vector<HFormatItem> formats;
-  SourceLoc loc;
 };
 
 struct HStmt {
@@ -232,6 +221,8 @@ struct HStmt {
   std::vector<std::string> params; // ENTRY parameter names
   bool entryIsFunction = false;
   Type entryRetTy{};
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
   std::vector<Symbol*> entryParamSyms; // resolved by sema
 
   // GET/PUT stream statement options (rules (104),(105))
@@ -240,14 +231,7 @@ struct HStmt {
   bool line = false;              // LINE(n) stream option (rule 105)
   HExprP skipCount;
   HExprP lineCount;               // LINE(n) expression
-  std::vector<HExprP> items;      // legacy: flat list of expressions (for backward compat)
-  std::vector<HDataItem> dataItems; // new: variant list supporting iterative datalists (rule 111)
-  // Edit-directed transmission (rule (108)); per (datalist) formatlist group,
-  // preserving format list boundaries for iterative datalist support.
-  std::vector<HEditGroup> editGroups;
-  // Data-directed transmission (rule (106)); per (datalist) group for iterative
-  // datalist support in PUT DATA/GET DATA.
-  std::vector<HEditGroup> dataGroups;
+  std::vector<HExprP> items;
   // Edit-directed transmission (rule (108)); mirrors the AST flag and format
   // list, with lowered width/decimals expressions.
   bool edit = false;
@@ -273,17 +257,16 @@ struct HStmt {
 
   bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
-  bool openStream = false; // OPEN ... STREAM (rule (101)): stream transmission
-  bool openPrint = false;  // OPEN ... PRINT (rule (101)): print file attribute
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
   HExprP openIdent = nullptr;
   HExprP openLinesize = nullptr;
   HExprP openPagesize = nullptr;
-  // OPEN options (rule (101)): BUFFERED/UNBUFFERED/EXCLUSIVE/BACKWARDS flags.
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
   bool openBuffered = false;
   bool openUnbuffered = false;
   bool openExclusive = false;
-  bool openBackwards = false;
+  // CLOSE options (rule (103))
+  HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
   HExprP keyOpt = nullptr;    // KEY( expression )
   HExprP keyToOpt = nullptr;  // KEYTO( variable )
@@ -364,6 +347,9 @@ struct HProc {
   bool isRecursive = false;            // RECURSIVE option (rule (5))
   bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
   Type retTy{};                        // function return type (RETURNS)
+  // Field paths of dynamic members in the RETURNS structure (rule 13),
+  // relative to the structure root. Mirrors Proc::retDynMemberPaths.
+  std::vector<std::vector<unsigned>> retDynMemberPaths;
   bool isPackage = false;              // extension (ADR-109): skipped in codegen
   std::vector<std::string> params;     // rule (4) parameterlist
   std::vector<std::string> entryNames; // rule (3) entry-namelist extra names
