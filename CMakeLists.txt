@@ -515,6 +515,87 @@ if(LLD_LIBRARIES AND NOT "${LLD_LIBRARIES}" STREQUAL "lldELF lldMachO lldCOFF ll
   set(llvm_libs_lld ${LLD_LIBRARIES})
 endif()
 
+# Static-prefix CRT audit (Windows). The hermetic stash is built MultiThreaded
+# (CMAKE_MSVC_RUNTIME_LIBRARY=/MT in build_llvm_static.sh); the Windows flow
+# requires it (CMakeLists MSVC_RUNTIME_LIBRARY, lines ~550). A single /MD
+# archive dropped into the prefix (installed e.g. by a hand-rolled LLVM build
+# with CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL over the same prefix) makes
+# the link fail with ~30 unresolved __std_* vectorized-algorithm symbols plus
+# __imp_* dynamic-CRT thunks — hours to diagnose the first time. Refusing at
+# configure time costs seconds; fail with the offending files and the remedy.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND PLI_LLVM_STATIC_PREFIX)
+  set(_pli_crt_bad "")
+  foreach(_pli_lib ${llvm_libs_core} ${llvm_libs_mc} ${llvm_libs_lld}
+      clangFrontend clangParse clangLex clangBasic clangAST)
+    set(_pli_crt_path "")
+    if(TARGET "${_pli_lib}")
+      get_target_property(_pli_crt_path "${_pli_lib}" IMPORTED_LOCATION)
+      if(_pli_crt_path MATCHES ".*-NOTFOUND$")
+        set(_pli_crt_path "")
+      endif()
+    endif()
+    if(NOT _pli_crt_path AND EXISTS "${_pli_lib}")
+      set(_pli_crt_path "${_pli_lib}")
+    endif()
+    if(NOT _pli_crt_path)
+      set(_pli_crt_candidate "${PLI_LLVM_STATIC_PREFIX}/lib/${_pli_lib}.lib")
+      if(EXISTS "${_pli_crt_candidate}")
+        set(_pli_crt_path "${_pli_crt_candidate}")
+      endif()
+    endif()
+    if(NOT _pli_crt_path)
+      continue() # external extras (z, compiler-rt builtins) carry a different contract
+    endif()
+    # Archive directives live in later member headers behind NUL bytes, where
+    # file(READ) truncates (it stops at the first NUL). file(STRINGS) ignores
+    # the binary payload and extracts the directive strings reliably.
+    file(STRINGS "${_pli_crt_path}" _pli_crt_directives REGEX "/DEFAULTLIB:")
+    # cl emits /DEFAULTLIB:"LIBCMT" (quoted, mixed case: libcpmt survives as
+    # /DEFAULTLIB:"libcpmt"), while clang-cl+lld archives carry the .lib
+    # spelled form (/DEFAULTLIB:msvcrt.lib). Normalize case, then scan both
+    # spellings for the static (LIBCMT/LIBCPMT) and dynamic (MSVCRT/MSVCPRT)
+    # CRT names.
+    string(TOUPPER "${_pli_crt_directives}" _pli_crt_directives)
+    set(_pli_crt_static FALSE)
+    set(_pli_crt_dynamic FALSE)
+    foreach(_pli_needle
+        "/DEFAULTLIB:\"LIBCMT\"" "/DEFAULTLIB:\"LIBCPMT\""
+        "/DEFAULTLIB:LIBCMT.LIB" "/DEFAULTLIB:LIBCPMT.LIB")
+      string(FIND "${_pli_crt_directives}" "${_pli_needle}" _pli_idx)
+      if(NOT _pli_idx EQUAL -1)
+        set(_pli_crt_static TRUE)
+        break()
+      endif()
+    endforeach()
+    foreach(_pli_needle
+        "/DEFAULTLIB:\"MSVCRT\"" "/DEFAULTLIB:\"MSVCPRT\""
+        "/DEFAULTLIB:MSVCRT.LIB" "/DEFAULTLIB:MSVCPRT.LIB")
+      string(FIND "${_pli_crt_directives}" "${_pli_needle}" _pli_idx)
+      if(NOT _pli_idx EQUAL -1)
+        set(_pli_crt_dynamic TRUE)
+        break()
+      endif()
+    endforeach()
+    unset(_pli_crt_directives)
+    if(_pli_crt_dynamic AND NOT _pli_crt_static)
+      list(APPEND _pli_crt_bad "${_pli_crt_path}")
+    endif()
+  endforeach()
+  if(_pli_crt_bad)
+    list(JOIN _pli_crt_bad "\n    " _pli_crt_bad_txt)
+    message(FATAL_ERROR
+      "Mixed-CRT libraries inside the static LLVM prefix:\n"
+      "    ${_pli_crt_bad_txt}\n"
+      "The Windows link needs every library MultiThreaded (LIBCMT/libcpmt); "
+      "these only reference the dynamic CRT (MSVCRT/msvcprt). The link will "
+      "fail with unresolved __std_* vectorized-<algorithm> symbols and __imp_* "
+      "CRT thunks.\n"
+      "Remedy: re-extract the pinned toolchain "
+      "(scripts/fetch_llvm_static.ps1 -Prefix <prefix>); if you rebuild LLVM "
+      "by hand, pass -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded.")
+  endif()
+endif()
+
 # Use Clang imported targets directly
 target_link_libraries(pli PRIVATE pli_rules
   ${llvm_libs_lld} ${llvm_libs_mc} ${llvm_libs_core}
