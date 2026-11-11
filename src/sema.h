@@ -142,6 +142,17 @@ struct Symbol {
     Expr* lb = nullptr;
   };
   std::vector<SemaDynMemberInfo> semaDynMembers;
+
+  // Fully constructed array descriptor for this symbol (if array).
+  // Built at declaration after bounds are known; for parameters, built
+  // at call site from hidden args.
+  std::unique_ptr<ArrayDesc> arrayDesc;
+
+  // For parameters: the expected descriptor shape from the ENTRY declaration.
+  std::vector<AxisDesc> paramAxes; // mirrors Type::paramAxes
+
+  // For adjustable CHAR(*): the hidden length parameter index.
+  int charStarLenParamIdx = -1;
 };
 
 struct Scope {

@@ -111,6 +111,26 @@ struct HDeclItem {
   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
 };
 
+// Runtime array descriptor value (HIR-level).
+// Used for: passing to callees, LBOUND/HBOUND/DIM builtins, runtime checks.
+struct HArrayDesc {
+  std::vector<HExprP> lowerBounds;  // one per axis
+  std::vector<HExprP> upperBounds;
+  std::vector<HExprP> strides;      // element strides
+  HExprP baseAddr;                  // void* (i8*)
+  Type elementTy;
+  // Metadata flags
+  std::vector<AxisDesc::Provenance> provenances;
+  std::vector<AxisDesc::Lifetime> lifetimes;
+  std::vector<bool> isDynamic;
+  std::vector<bool> isAdjustable;
+  std::vector<bool> isSubscriptRange;
+  ArrayDesc::Owner owner = ArrayDesc::Owner::Automatic;
+  int ctlSlot = -1;
+  Symbol* basedLocator = nullptr;
+  Symbol* areaSymbol = nullptr;
+};
+
 // One FORMAT item for edit-directed I/O (rules (48)-(54)); mirrors the AST
 // FormatItem with lowered width/decimals expressions.
 struct HFormatItem {

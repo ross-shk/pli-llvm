@@ -13,6 +13,9 @@
 #include <utility>
 #include <vector>
 
+struct HExpr;
+struct Symbol;
+
 // IBM's base-conversion factor is 3.32 = 83/25. These keep the FIXEDBIN/
 // FIXEDDEC precision tables (rule (123)) and mixed-base arithmetic exact.
 inline int ceilMulDiv(int n, int mul, int div) { return (n * mul + div - 1) / div; }
@@ -47,9 +50,9 @@ enum class TK {
   Offset,   // OFFSET: a locator into an AREA (rule (22))
   Complex,  // COMPLEX: a pair of FLOAT real/imaginary parts (QR2.2/CM5)
   Task,     // TASK: a task name for async CALL (rules (15),(79), QR2.8)
-   Event,        // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
-   Label,       // LABEL: a label variable (rule (21)) — holds a block address
-   Void,
+  Event,    // EVENT: an event name for CALL/WAIT sync (rules (15),(79),(82), QR2.8)
+  Label,    // LABEL: a label variable (rule (21)) — holds a block address
+  Void,
 };
 
 // One level-numbered structure member (rule 11). Defined after Type: a member's
@@ -72,6 +75,75 @@ struct Dim {
   bool adj = false;   // '*' adjustable extent: the bound comes from the caller (rule (13))
   bool operator==(const Dim& o) const {
     return lb == o.lb && ub == o.ub && dyn == o.dyn && lbDyn == o.lbDyn && adj == o.adj;
+  }
+};
+
+// Checked arithmetic for extent/stride/byte calculations.
+struct CheckedMath {
+  // Returns {result, overflowed}
+  static std::pair<int64_t, bool> mul(int64_t a, int64_t b);
+  static std::pair<int64_t, bool> add(int64_t a, int64_t b);
+  static std::pair<int64_t, bool> sub(int64_t a, int64_t b);
+};
+
+// One axis descriptor — fully self-describing at runtime.
+// Mirrors the information needed for: address calc, bounds checks, LBOUND/HBOUND/DIM,
+// cross-section slicing, and callee-side reconstruction.
+struct AxisDesc {
+  // Provenance: where did this bound come from?
+  enum class Provenance {
+    DeclConstant,    // compile-time constant from declaration
+    CallerExtent,    // '*' adjustable extent — bound passed by caller
+    AllocExtent,     // ALLOCATE/FREE or CONTROLLED — bound from allocation
+    BasedExtent,     // BASED variable — bound from locator target
+    DefinedExtent,   // DEFINED overlay — bound from base
+    ParamExtent      // parameter array — bound from actual argument
+  } provenance = Provenance::DeclConstant;
+
+  // Lifetime scope of this axis descriptor.
+  enum class Lifetime {
+    Static,          // program lifetime (STATIC storage)
+    Automatic,       // procedure/block activation lifetime
+    ControlledGen,   // CONTROLLED generation lifetime
+    BasedAlloc,      // BASED allocation lifetime (explicit ALLOCATE/FREE)
+    AreaAlloc        // AREA allocation lifetime
+  } lifetime = Lifetime::Automatic;
+
+  // Lower bound (1-origin in PL/I semantics). For dynamic lower bounds,
+  // this holds the evaluated value at the provenance point.
+  int64_t lower = 1;
+
+  // Upper bound (inclusive). For dynamic extents, this holds the evaluated
+  // value at the provenance point. extent = upper - lower + 1.
+  int64_t upper = 1;
+
+  // Row-major stride in **elements** (not bytes). Computed as product of
+  // extents of all later axes. For the last axis, stride = 1.
+  // For dynamic later axes, stride is computed at the provenance point
+  // using the live extents of later axes.
+  int64_t stride = 1;
+
+  // Byte stride = stride * element_byte_size. Cached for codegen.
+  // Element byte size comes from the element type (Type::elementByteSize()).
+  int64_t byteStride = 0;
+
+  // Flags
+  bool isDynamic = false;     // true if upper/lower/stride evaluated at runtime
+  bool isAdjustable = false;  // '*' adjustable extent (rule 13)
+  bool isSubscriptRange = true; // false under (NOSUBSCRIPTRANGE)
+
+  // For debugging / diagnostics
+  SourceLoc declLoc{};
+
+  // Convenience
+  int64_t extent() const { return upper - lower + 1; }
+  bool isValid() const { return extent() > 0; }
+
+  bool operator==(const AxisDesc& o) const {
+    return provenance == o.provenance && lifetime == o.lifetime &&
+           lower == o.lower && upper == o.upper && stride == o.stride &&
+           byteStride == o.byteStride && isDynamic == o.isDynamic &&
+           isAdjustable == o.isAdjustable && isSubscriptRange == o.isSubscriptRange;
   }
 };
 
@@ -122,6 +194,10 @@ struct Type {
   // Structure members (rule 11), in declaration order. Only meaningful when
   // k == TK::Struct.
   std::vector<std::unique_ptr<Member>> members;
+
+  // For parameter arrays: descriptor ABI shape.
+  // If non-empty, describes the expected ArrayDesc layout at call sites.
+  std::vector<AxisDesc> paramAxes;
 
   // Copy/move/destroy are custom (deep-copy members) and defined below Member.
   Type() = default;
@@ -230,17 +306,17 @@ struct Type {
     return t;
   }
   // An event name (QR2.8): a completion flag (0 incomplete, 1 complete).
-   static Type eventTy() {
-     Type t;
-     t.k = TK::Event;
-     return t;
-   }
-   // A label variable (rule (21)): holds a block address for indirect GO TO.
-   static Type labelTy() {
-     Type t;
-     t.k = TK::Label;
-     return t;
-   }
+  static Type eventTy() {
+    Type t;
+    t.k = TK::Event;
+    return t;
+  }
+  // A label variable (rule (21)): holds a block address for indirect GO TO.
+  static Type labelTy() {
+    Type t;
+    t.k = TK::Label;
+    return t;
+  }
   // Build a structure type from its level-numbered members (rule 11).
   static Type structTy(std::vector<Member> m);
 
@@ -261,6 +337,9 @@ struct Type {
   bool isTask() const { return k == TK::Task; }
   bool isEvent() const { return k == TK::Event; }
   bool isLabel() const { return k == TK::Label; }
+
+  // Element byte size (target-independent, for stride/byteStride calc).
+  int64_t elementByteSize() const;
 
   // Integer width chosen for FIXED values (M0 keeps FIXED scale 0 only).
   // FixedDec: <=9 digits fit an i32, <=18 fit an i64; a genuinely wide
@@ -311,15 +390,56 @@ struct Type {
       return "COMPLEX";
     case TK::Task:
       return "TASK";
-   case TK::Event:
+    case TK::Event:
       return "EVENT";
-     case TK::Label:
+    case TK::Label:
       return "LABEL";
-     case TK::Void:
+    case TK::Void:
       return "VOID";
     }
     return "?";
   }
+};
+
+// Complete array descriptor passed to callees and used for runtime ops.
+// One per array variable/parameter. Owned by the activation/generation that
+// allocates the array storage.
+struct ArrayDesc {
+  // Per-axis descriptors (rank = axes.size())
+  std::vector<AxisDesc> axes;
+
+  // Total element count (product of extents). Cached.
+  int64_t totalElements = 0;
+
+  // Total byte size = totalElements * elementByteSize.
+  int64_t totalBytes = 0;
+
+  // Element type (without dimensions) — for byte-size calc and type checks.
+  Type elementTy;
+
+  // Base address of the array data (set at allocation/entry).
+  // For automatic arrays: stack address from alloca.
+  // For CONTROLLED: current generation buffer.
+  // For BASED: locator address.
+  // For parameters: caller's base address (by reference).
+  void* baseAddr = nullptr;
+
+  // Ownership: who frees this descriptor's storage?
+  enum class Owner { Caller, Callee, Automatic, Controlled, Based, Area } owner = Owner::Automatic;
+
+  // For CONTROLLED: generation stack index (ctlSlot).
+  int ctlSlot = -1;
+
+  // For BASED: the locator Symbol (POINTER/OFFSET) that addresses it.
+  Symbol* basedLocator = nullptr;
+
+  // For AREA: the AREA Symbol this allocation lives in.
+  Symbol* areaSymbol = nullptr;
+
+  // Constructor from Type + runtime bounds (used at declaration site).
+  static ArrayDesc fromType(const Type& ty, const std::vector<HExpr*>& dynBounds,
+                            const std::vector<HExpr*>& dynLbBounds,
+                            Symbol* sym);
 };
 
 // One level-numbered structure member (rule 11). Structures may nest: a
@@ -348,6 +468,7 @@ inline Type& Type::operator=(const Type& o) {
   isUnion = o.isUnion; // Union overlay layout (ADR-202)
   picture = o.picture;
   dims = o.dims;
+  paramAxes = o.paramAxes;
   members.clear();
   members.reserve(o.members.size());
   for (const auto& m : o.members)
@@ -361,7 +482,7 @@ inline Type& Type::operator=(Type&& o) noexcept = default;
 inline bool Type::operator==(const Type& o) const {
   if (k != o.k || prec != o.prec || scale != o.scale || len != o.len || varying != o.varying ||
       starLen != o.starLen || unaligned != o.unaligned || isUnion != o.isUnion ||
-      wideDec != o.wideDec || dims != o.dims)
+      wideDec != o.wideDec || dims != o.dims || paramAxes != o.paramAxes)
     return false;
   if (members.size() != o.members.size())
     return false;
