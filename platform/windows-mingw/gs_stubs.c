@@ -7,6 +7,10 @@
  * which would duplicate __guard_dispatch_icall_fptr from libmingwex.a.
  * Embedded as gs_stubs.o into the Windows link sysroot (ADR-227), so every
  * user program linked by pli.exe gets them.
+ *
+ * Compile with clang-cl /Zl (see CMakeLists.txt): clang-cl otherwise injects
+ * /DEFAULTLIB:libcmt /DEFAULTLIB:oldnames directives into the object, which
+ * the mingw link would resolve as liblibcmt.a / liboldnames.a and break.
  */
 #include <stdint.h>
 

@@ -12,11 +12,14 @@ blobs to a temp dir (src/hostcrt.cpp).
 
 Usage:
   gen_sysroot_embed.py <srcdir> <outdir> <array_prefix> <manifest.inc>
-      <set_name> [<relpath> ...]
+      <set_name> [<relpath>[=<source>] ...]
   Each <srcdir>/<relpath> becomes <outdir>/<sanitized>.cpp holding one
   `extern "C"` byte array; <manifest.inc> declares them and defines the
   kEmbeddedSysrootFiles table {(path, data, len)} plus kEmbeddedSysrootName
   (<set_name>: "musl", "mingw", or "sdk" — which link path the set feeds).
+  An entry may carry an explicit `<source>` (absolute, or relative to
+  <srcdir>) to embed a build-generated file while keeping <relpath> as the
+  logical path the driver looks up (e.g. gs_stubs.o=<build>/gs_stubs.o).
   With no <relpath>s the manifest holds an empty table (arch mismatch /
   missing sources at build time: user links fail with a clear error).
   Sanitized: every non-alphanumeric run becomes '_' (so
@@ -31,6 +34,16 @@ import sys
 
 def sanitize(relpath: str) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "_", relpath).strip("_")
+
+
+def split_entry(entry: str):
+    """Split an optional `<logical>=<source>` mapping.
+
+    Sysroot names never contain '=' and Windows drive paths contain ':' not
+    '=', so the first '=' is an unambiguous separator.
+    """
+    logical, sep, source = entry.partition("=")
+    return logical, source if sep else None
 
 
 def emit_array(f, array_name: str, data: bytes) -> None:
@@ -50,8 +63,12 @@ def main(srcdir: str, outdir: str, prefix: str, manifest: str,
          set_name: str, relpaths) -> None:
     os.makedirs(outdir, exist_ok=True)
     entries = []
-    for rel in relpaths:
-        with open(os.path.join(srcdir, rel), "rb") as f:
+    for entry in relpaths:
+        rel, source = split_entry(entry)
+        path = source or rel
+        if not os.path.isabs(path):
+            path = os.path.join(srcdir, path)
+        with open(path, "rb") as f:
             data = f.read()
         stem = sanitize(rel)
         array_name = f"{prefix}{stem}"

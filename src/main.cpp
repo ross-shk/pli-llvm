@@ -1132,9 +1132,10 @@ int main(int argc, char** argv) {
         std::string crtbegin = sysrootPath("crtbegin.o");
         std::string fltused = sysrootPath("fltused.o");
         std::string chkstk = sysrootPath("chkstk.o");
+        std::string gsStubs = sysrootPath("gs_stubs.o");
         std::string crtend = sysrootPath("crtend.o");
         if (crt2.empty() || crtbegin.empty() || fltused.empty() || chkstk.empty() ||
-            crtend.empty()) {
+            gsStubs.empty() || crtend.empty()) {
           std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
           removeTempObjects();
           if (!useMemSysroot)
@@ -1147,7 +1148,7 @@ int main(int argc, char** argv) {
           argStore.push_back(o);
         argStore.push_back(fltused);
         argStore.push_back(chkstk);
-        argStore.push_back(sysrootPath("gs_stubs.o"));
+        argStore.push_back(gsStubs);
         // Import libs + GCC helpers: pass as explicit file paths.
         for (const char* lib : {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
                                 "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
