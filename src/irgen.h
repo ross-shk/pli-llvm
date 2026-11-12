@@ -492,8 +492,17 @@ private:
   // adjustable-length `CHAR(*)` (rule (18)); such a parameter carries a hidden
   // i64 extent/length argument from the caller.
   bool isAdjustable(Symbol* s) {
-    return (s->ty.isArray() && !s->ty.dims.empty() && s->ty.dims[0].adj) ||
-           (s->ty.isChar() && s->ty.starLen);
+    if (s->ty.isChar() && s->ty.starLen)
+      return true;
+    if (!s->ty.isArray() || s->ty.dims.empty())
+      return false;
+    // A `*`-extent parameter is adjustable if ANY axis is adjustable/dynamic.
+    // Each such axis gets a hidden extent argument.
+    for (const auto& d : s->ty.dims) {
+      if (d.adj || d.dyn || d.lbDyn)
+        return true;
+    }
+    return false;
   }
   // True when a parameter is an adjustable-length `CHAR(*)` (rule (18)); its
   // hidden argument is a character length, not an array extent.
@@ -526,7 +535,8 @@ private:
   }
   // Element count of a call argument passed to a `*`-extent parameter: constant
   // for a fixed array, the recorded live bound for a dynamic-bound array.
-  llvm::Value* argExtent(HExpr* a);
+  // axis: which axis extent to compute (0-based).
+  llvm::Value* argExtent(HExpr* a, size_t axis);
   // Buffer capacity of a call argument passed to an adjustable-length `CHAR(*)`
   // parameter (rule (18)): a fixed char variable's declared length, a forwarded
   // `CHAR(*)` parameter's live length, or the emitted value's length.
@@ -548,7 +558,8 @@ private:
   // (13),(15),(18)): the actual's slot key for a CONTROLLED `CHAR(*)` dummy,
   // zero for an omitted `*`/trailing OPTIONAL, else the actual's array extent
   // or character buffer length. `a` is null for an omitted argument.
-  llvm::Value* hiddenAdjustArg(HExpr* a, const Type& ty, bool ctl);
+  // axis: which axis extent to compute (0-based), or SIZE_MAX for CHAR(*) length.
+  llvm::Value* hiddenAdjustArg(HExpr* a, const Type& ty, bool ctl, size_t axis);
 
   Val emitExpr(HExpr* e);
   // Number of elements across all axes: the product of (ub - lb + 1) (rule (12)).

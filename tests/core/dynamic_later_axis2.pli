@@ -1,0 +1,60 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Dynamic LATER axis (axis 2+): both axes dynamic */
+dynamic_later_axis2: procedure options(main);
+    declare n fixed bin(31) init(3);
+    declare m fixed bin(31) init(4);
+
+    /* 2D array with BOTH axes dynamic */
+    declare a(n, m) fixed bin(31);
+
+    call init_array2(a, n, m);
+    call check_bounds2(a, n, m);
+
+    put skip list('PASS dynamic_later_axis2');
+end dynamic_later_axis2;
+
+/* Parameter with BOTH axes dynamic - should use (*,*) or similar */
+init_array2: proc(arr, k1, k2) options(bypass);
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare arr(*,*) fixed bin(31);  /* both axes dynamic */
+    declare i fixed bin(31), j fixed bin(31);
+    do i = lbound(arr,1) to hbound(arr,1);
+        do j = lbound(arr,2) to hbound(arr,2);
+            arr(i,j) = i * 100 + j;
+        end;
+    end;
+end init_array2;
+
+check_bounds2: proc(arr, k1, k2) options(bypass);
+    declare k1 fixed bin(31);
+    declare k2 fixed bin(31);
+    declare arr(*,*) fixed bin(31);  /* both axes dynamic */
+    declare lb1 fixed bin(31), ub1 fixed bin(31);
+    declare lb2 fixed bin(31), ub2 fixed bin(31);
+    declare dim1 fixed bin(31), dim2 fixed bin(31);
+
+    lb1 = lbound(arr,1); ub1 = hbound(arr,1);
+    lb2 = lbound(arr,2); ub2 = hbound(arr,2);
+    dim1 = dim(arr,1); dim2 = dim(arr,2);
+
+    if lb1 ^= 1 | ub1 ^= k1 | dim1 ^= k1 then do;
+        put skip list('FAIL bounds axis 1:', lb1, ub1, dim1);
+        stop;
+    end;
+    if lb2 ^= 1 | ub2 ^= k2 | dim2 ^= k2 then do;
+        put skip list('FAIL bounds axis 2:', lb2, ub2, dim2);
+        stop;
+    end;
+
+    declare i fixed bin(31), j fixed bin(31);
+    do i = 1 to k1;
+        do j = 1 to k2;
+            if arr(i,j) ^= i * 100 + j then do;
+                put skip list('FAIL value at', i, j, ':', arr(i,j));
+                stop;
+            end;
+        end;
+    end;
+end check_bounds2;

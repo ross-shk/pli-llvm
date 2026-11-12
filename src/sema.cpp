@@ -2623,20 +2623,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               d_.error(item.loc, "a BASED '*' extent needs a leading '*' with constant later axes",
                        "(13)");
             if (hasStar && isParam) {
-              // A multi-axis '*' parameter is served when only the first axis
-              // is adjustable and later axes are constant (rules (13),(36)):
-              // one hidden extent rides the call and static strides address
-              // the rest. Any other '*' placement stays diagnosed.
-              bool multiStar = false;
-              for (size_t k = 1; k < item.ty.dims.size(); ++k)
-                if (item.ty.dims[k].adj || item.ty.dims[k].dyn || item.ty.dims[k].lbDyn)
-                  multiStar = true;
-              if (!item.ty.dims.empty() && !item.ty.dims[0].adj)
-                multiStar = true;
-              if (multiStar)
+              // A multi-axis '*' parameter is served when any axis is adjustable.
+              // Each dynamic axis gets a hidden extent argument at the call site.
+              // The leading '*' must be on the first axis for the call ABI.
+              if (!item.ty.dims.empty() && !item.ty.dims[0].adj) {
                 d_.error(item.loc,
-                         "a '*' extent parameter needs a leading '*' with constant later axes",
+                         "a '*' extent parameter requires a leading '*' on the first axis",
                          "(13)");
+              }
             }
             for (auto& b : item.dynBounds)
               if (b)
@@ -3193,13 +3187,24 @@ void Sema::checkStarLaterAxes(const Type& pty, const Type& aty, SourceLoc loc) {
   for (size_t k = 1; k < pty.dims.size(); ++k) {
     const Dim& pd = pty.dims[k];
     const Dim& ad = aty.dims[k];
-    // The callee addresses with the parameter's lower bounds, so each later
-    // axis must match exactly — not just in extent — to stay in bounds.
-    if (ad.dyn || ad.lbDyn || ad.adj || ad.lb != pd.lb || ad.ub != pd.ub) {
-      d_.error(loc, "an argument to a multi-axis '*' parameter must match its fixed later axes",
+    // Later axes must have the same lower bound and extent.
+    // They may be dynamic (dyn/lbDyn) as long as the actual matches the parameter's
+    // dynamic bounds at runtime. The callee will reconstruct live bounds from hidden args.
+    if (ad.lb != pd.lb) {
+      d_.error(loc, "an argument to a multi-axis '*' parameter must match its lower bounds on later axes",
                "(13)");
       return;
     }
+    // If the parameter's axis is not adjustable, the actual's extent must match exactly.
+    if (!pd.adj && !pd.dyn && !pd.lbDyn) {
+      if (ad.ub != pd.ub) {
+        d_.error(loc, "an argument to a multi-axis '*' parameter must match its fixed later axes",
+                 "(13)");
+        return;
+      }
+    }
+    // If the parameter's axis IS adjustable/dynamic, the actual can have dynamic bounds too.
+    // The hidden extent args will carry the live bounds at call time.
   }
 }
 
