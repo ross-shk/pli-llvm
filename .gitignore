@@ -46,3 +46,5 @@ buf.dat
 excl.dat
 test.dat
 unbuf.dat
+*.dat
+*.dat.kix
