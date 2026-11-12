@@ -1163,6 +1163,22 @@ int main(int argc, char** argv) {
         }
         argStore.push_back(crtend);
         argStore.push_back("--subsystem=" + subsystem);
+
+        // clang_rt.builtins-x86_64.lib (compiler-rt, pulled in for __udivti3
+        // on i128 arithmetic) was compiled with /GS and references
+        // __security_check_cookie, provided by MSVC's libcmt.lib. lld-link
+        // does not read the LIB env var, so locate libcmt.lib via
+        // VCToolsInstallDir (set by ilammy/msvc-dev-cmd in CI) and append it
+        // after the MinGW import libs so it resolves symbols compiler-rt
+        // introduces. (CMakeLists.txt uses /DEFAULTLIB:libcmt.lib for the same
+        // reason when linking pli.exe itself.)
+        if (const char* vctools = std::getenv("VCToolsInstallDir")) {
+          std::string libcmt = vctools;
+          libcmt += "/lib/x64/libcmt.lib";
+          std::error_code ec;
+          if (std::filesystem::exists(libcmt, ec))
+            argStore.push_back(libcmt);
+        }
       } else {
         std::cerr << "pli: unsupported object format for link\n";
         removeTempObjects();
