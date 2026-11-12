@@ -11151,14 +11151,22 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     size_t savedDi = di;
     size_t avail = (savedDi < dataItems.size()) ? (dataItems.size() - savedDi) : 0;
     if (avail == 0) break;
+
+    // NEW: Dedicated pre-count block to ensure count expression is evaluated exactly once
+    llvm::BasicBlock* preCountBlock = llvm::BasicBlock::Create(ctx_, "repeat.precount", fn);
+    llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
+    llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
+
+    b_.CreateBr(preCountBlock);
+    b_.SetInsertPoint(preCountBlock);
+
     llvm::Value* countVal = toI64(emitExpr(f.count.get()));
     // A nonpositive count skips the group (Y33-6003-0 §4.7 lines
     // 15675-15690: "if the value is zero or negative, the format item is
     // skipped"), so a negative count skips like a zero one.
-    llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
-    llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
     b_.CreateCondBr(pos, runBlock, skipBlock);
+
     b_.SetInsertPoint(runBlock);
     llvm::AllocaInst* iterSlot = entryAlloca(b_.getInt64Ty(), "repeat.iter");
     b_.CreateStore(i64(0), iterSlot);
@@ -11457,24 +11465,34 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
   }
   case HFormatItem::Repeat: {
     // Format iteration (rule 47): evaluate count at runtime, skip if <= 0.
-    llvm::Value* countVal = toI64(emitExpr(f.count.get()));
     llvm::Function* fn = b_.GetInsertBlock()->getParent();
     size_t savedDi = di;
     size_t avail = (savedDi < s->items.size()) ? (s->items.size() - savedDi) : 0;
     if (avail == 0) break;
+
+    // NEW: Dedicated pre-count block to ensure count expression is evaluated exactly once
+    llvm::BasicBlock* preCountBlock = llvm::BasicBlock::Create(ctx_, "repeat.precount", fn);
     llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
     llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
     llvm::BasicBlock* negBlock = llvm::BasicBlock::Create(ctx_, "repeat.neg", fn);
     llvm::BasicBlock* posBlock = llvm::BasicBlock::Create(ctx_, "repeat.pos", fn);
+
+    b_.CreateBr(preCountBlock);
+    b_.SetInsertPoint(preCountBlock);
+
+    llvm::Value* countVal = toI64(emitExpr(f.count.get()));
     llvm::Value* neg = b_.CreateICmpSLT(countVal, i64(0), "repeat.isneg");
     b_.CreateCondBr(neg, negBlock, posBlock);
+
     b_.SetInsertPoint(negBlock);
     b_.CreateCall(runtimeFn("pli_signal_error"),
                   {globalString("negative format iteration count")});
     b_.CreateBr(skipBlock);
+
     b_.SetInsertPoint(posBlock);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
     b_.CreateCondBr(pos, runBlock, skipBlock);
+
     b_.SetInsertPoint(runBlock);
     llvm::AllocaInst* iterSlot = entryAlloca(b_.getInt64Ty(), "repeat.iter");
     b_.CreateStore(i64(0), iterSlot);
