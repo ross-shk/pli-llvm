@@ -1007,6 +1007,22 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a
         libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a
         libws2_32.a)
+    # GS cookie stubs: compiler-rt builtins (/GS-compiled) reference
+    # __security_cookie / __security_check_cookie from MSVC's CRT.
+    # Pulling libcmt.lib duplicates __guard_dispatch_icall_fptr with
+    # libmingwex.a, so provide minimal stubs instead. Compiled during the
+    # build (CI has a working Windows toolchain) and embedded into the
+    # sysroot so every user program linked by pli.exe gets them.
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/gs_stubs.o
+      COMMAND ${CMAKE_C_COMPILER} -c ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
+              -o ${CMAKE_BINARY_DIR}/gs_stubs.o
+      DEPENDS ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
+      COMMENT "Compiling GS cookie stubs")
+    add_custom_target(gs_stubs_target DEPENDS ${CMAKE_BINARY_DIR}/gs_stubs.o)
+    add_dependencies(pli gs_stubs_target)
+    list(APPEND PLI_SYSROOT_FILES gs_stubs.o)
+    list(APPEND PLI_SYSROOT_ABS "${CMAKE_BINARY_DIR}/gs_stubs.o")
   endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   # .tbd stubs are text symbol lists (arch-independent), so no arch gate.
