@@ -15,8 +15,10 @@
  *                             scaled integers multiply directly, so the
  *                             product's scale is 0+4 = 4 and the raw is
  *                             i * 19999.
- *   qty = i / 10 + 1;        an integer (both operands scale 0, so the
- *                             division truncates); the assignment to a
+ *   qty = i / 10 + 1;        PL/I's FIXED/FIXED division is the exact
+ *                             RULES(IBM) quotient (ADR-361), not an integer
+ *                             division: i/10 keeps the fraction, so i/10 + 1
+ *                             is (i+10)/10 exactly, and the assignment to a
  *                             scale-4 target rescales it by 10^4.
  *   total = price * qty;     scale 4 * scale 4 = scale 8; the assignment
  *                             rounds that back to scale 4.
@@ -79,7 +81,7 @@ int main(void) {
 
     for (int i = 1; i <= n; i++) {
         i128 price = (i128)i * 19999;              /* i * 1.9999 */
-        i128 qty = (i128)(i / 10 + 1) * 10000;     /* (i / 10 + 1) at scale 4 */
+        i128 qty = (i128)(i + 10) * 1000;          /* (i/10 + 1) at scale 4 */
         i128 total = rescale4(price * qty);       /* the product's scale 8 -> 4 */
         i128 tax = rescale4(total * rate);         /* the same */
         grand = grand + total + tax;

@@ -1,13 +1,14 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
  /* Narrow FIXED BINARY arithmetic (E5/D3): tight loop doing + - * on
-    FIXED BINARY(15) values, accumulating into a FIXED BINARY(31) sum.
+    FIXED BINARY(15) values, accumulating into a FIXED BINARY(63) sum.
     Measures whether narrow arithmetic stays at i32 or is widened to
-    i64. */
+    i64. The accumulator is BIN(63): the sum reaches about 1.05e12,
+    which is outside BIN(31). */
  narrow_int: procedure options(main);
    declare a(1000) fixed bin(15);
    declare (x, y) fixed bin(15);
-   declare s fixed bin(31);
+   declare s fixed bin(63);
    declare i fixed bin(31);
 
    do i = 1 to 1000;

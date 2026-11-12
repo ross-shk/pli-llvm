@@ -1,0 +1,5 @@
+ /* Rule (111): unsupported mixed iterative EDIT must be diagnosed. */
+ bad_datalist_edit_mixed: procedure options(main);
+   declare i fixed bin(31);
+   put edit((i do i = 1 to 3), 9) (f(4), f(4));
+ end bad_datalist_edit_mixed;

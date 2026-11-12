@@ -13,7 +13,6 @@ int main(void) {
     int l, k, e, base, i, tok, topic = 0, sw, hot, cold, nres = 0;
     int64_t seed = 2026, u, hits = 0, cpu_miss = 0, pcie_miss = 0;
     int64_t swaps = 0, chk = 0;
-
     for (l = 0; l <= 47; l++)
         for (e = 1; e <= 512; e++) {
             cnt[l * 512 + e] = 0;
@@ -37,7 +36,11 @@ int main(void) {
             for (l = 0; l <= 47; l++) {
                 base = l * 512;
                 for (e = 1; e <= 512; e++)
-                    cnt[base + e] = cnt[base + e] - cnt[base + e] / 8;
+                    /* PL/I's FIXED/FIXED division is the exact RULES(IBM)
+                       quotient (ADR-361), not an integer division: cnt/8 keeps
+                       the fraction, so cnt - cnt/8 is cnt*7/8 exactly and the
+                       assignment back to a FIXED BINARY(31) truncates it. */
+                    cnt[base + e] = (int)((long long)cnt[base + e] * 7 / 8);
                 for (sw = 1; sw <= 4; sw++) {
                     hot = 0;
                     cold = 0;

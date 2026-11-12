@@ -9141,6 +9141,8 @@ llvm::Value* IRGen::fileCondKeyValue(HStmt* s) {
   long long base = 0;
   if (s->condName == "UNDEFINEDFILE")
     base = Stmt::kUndefinedfileBaseCondKey;
+  else if (s->condName == "ENDPAGE")
+    base = Stmt::kEndpageBaseCondKey;
   else if (s->condName == "ENDFILE")
     base = Stmt::kEndfileBaseCondKey;
   else
@@ -9193,7 +9195,7 @@ void IRGen::emitOpen(HStmt* s) {
         {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
          i64(f->fileNonprint ? 1 : 0),
          i64(s->openBuffered ? 1 : (s->openUnbuffered ? -1 : 0)),
-         i64(0) /* backwards - not yet supported */});
+         i64(s->openBackwards ? 1 : 0)});
   } else {
     b_.CreateCall(
         runtimeFn("pli_file_open"),
@@ -9229,6 +9231,61 @@ void IRGen::emitOpen(HStmt* s) {
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
 // Options: LOCATE(v), EVENT(ev), NOLOCK.
+// WRITE ... LOCATE(v): write one value's record image from the buffer at
+// `addr` (rule (113)). The runtime's per-type writers each append one
+// record's worth of bytes, so a value is written with the writer matching
+// its type.
+void IRGen::writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr,
+                              SourceLoc loc) {
+  switch (ty.k) {
+  case TK::FixedBin:
+  case TK::FixedDec: {
+    // The record image of a FIXED is 8 bytes (the runtime writes a long
+    // long), but the variable's own storage can be narrower - a FIXED
+    // BINARY(31) lives in an i32. Load at the storage's width and sign
+    // extend, so the high half of the record holds the sign, not the bytes
+    // that follow the variable in memory.
+    llvm::Type* storage = llvmTy(ty);
+    llvm::Value* raw = b_.CreateLoad(storage, addr);
+    llvm::Value* v = storage->getIntegerBitWidth() == 64
+                          ? raw
+                          : b_.CreateSExt(raw, b_.getInt64Ty(), "locfix");
+    b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, v});
+    break;
+  }
+  case TK::Float:
+    b_.CreateCall(runtimeFn("pli_record_write_float"),
+                  {slot, b_.CreateLoad(b_.getDoubleTy(), addr)});
+    break;
+  case TK::Bit: {
+    llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), addr), b_.getInt8Ty(), "rbit");
+    b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
+    break;
+  }
+  case TK::Char:
+    b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, addr, i64(ty.len)});
+    break;
+  default:
+    break; // other types are diagnosed by sema
+  }
+  (void)loc;
+}
+
+// WRITE ... LOCATE(v) where v is a structure: the record holds the members'
+// images in declaration order, so each member is written from its own
+// address within the structure's buffer.
+void IRGen::writeLocateMembers(llvm::Value* slot, const Type& ty, llvm::Value* addr,
+                               SourceLoc loc) {
+  for (unsigned i = 0; i < ty.members.size(); ++i) {
+    const Type& mt = ty.members[i]->ty;
+    llvm::Value* mAddr = structMemberGEP(ty, addr, i, "locmem");
+    if (mt.k == TK::Struct)
+      writeLocateMembers(slot, mt, mAddr, loc);
+    else
+      writeLocateValue(slot, mt, mAddr, loc);
+  }
+}
+
 void IRGen::emitRecordWrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
@@ -9263,26 +9320,14 @@ void IRGen::emitRecordWrite(HStmt* s) {
     // Determine record size from the based variable's type.
     const Type& ty = s->locateVar->ty;
     llvm::Value* recSize = i64(recordSize(ty));
-    
-    // Write the record from the based variable's buffer.
-    switch (ty.k) {
-    case TK::FixedBin:
-    case TK::FixedDec:
-      b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, b_.CreateLoad(b_.getInt64Ty(), buf)});
-      break;
-    case TK::Float:
-      b_.CreateCall(runtimeFn("pli_record_write_float"), {slot, b_.CreateLoad(b_.getDoubleTy(), buf)});
-      break;
-    case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(b_.CreateLoad(b_.getInt8Ty(), buf), b_.getInt8Ty(), "rbit");
-      b_.CreateCall(runtimeFn("pli_record_write_bit"), {slot, bit});
-      break;
-    }
-    case TK::Char:
-      b_.CreateCall(runtimeFn("pli_record_write_char"), {slot, buf, recSize});
-      break;
-    default:
-      break; // other types are diagnosed by sema
+
+    // Write the record from the based variable's buffer. A structure's
+    // record image is the concatenation of its members' images (rule (113)),
+    // so each member is written in declaration order.
+    if (ty.k == TK::Struct) {
+      writeLocateMembers(slot, ty, buf, s->loc);
+    } else {
+      writeLocateValue(slot, ty, buf, s->loc);
     }
 
     // EVENT(ev): complete after the operation.
@@ -9672,10 +9717,15 @@ void IRGen::emitRecordRead(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
   Val v;
+  // A sequential record file opened with BACKWARDS (rule (101)) reads from
+  // the last record first, so each value type has a matching reverse path.
+  const bool backwards = s->fileSym && s->fileSym->openBackwards;
   switch (ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
-    v.reg = b_.CreateCall(runtimeFn("pli_record_read_fixed"), {slot});
+    v.reg = b_.CreateCall(runtimeFn(backwards ? "pli_record_read_fixed_backwards"
+                                              : "pli_record_read_fixed"),
+                          {slot});
     v.ty = Type::fixedBin(63, 0);
     storeTo(t->sym, v, s->loc);
     break;
@@ -10231,6 +10281,10 @@ void IRGen::emitDoIter(HStmt* s) {
 void IRGen::emitPutDataItems(HStmt* s) {
   for (auto& item : s->items) {
     HExpr* t = item.get();
+    if (t->kind == HExpr::PutIter) {
+      emitPutIter(t, [this](HExpr* value) { emitPutDataReference(value); });
+      continue;
+    }
     if (t->ty.isStruct()) {
       emitPutDataStruct(t, t->sym->name);
     } else {
@@ -10238,6 +10292,54 @@ void IRGen::emitPutDataItems(HStmt* s) {
     }
   }
   deferCall("pli_put_data_end", {});
+}
+
+// DATA element names carry the evaluated subscripts, not the control variable's
+// spelling. Cache the indices while loading the value so side effects run once.
+void IRGen::emitPutDataReference(HExpr* e) {
+  auto saved = std::move(dataIndexValues_);
+  dataIndexValues_.clear();
+  std::vector<Val> indices;
+  for (const auto& index : e->args) {
+    Val value = emitExpr(index.get());
+    indices.push_back(value);
+    dataIndexValues_[index.get()] = value;
+  }
+  Val value = emitExpr(e);
+  dataIndexValues_ = std::move(saved);
+
+  std::string name = e->sym->name;
+  for (const auto& member : e->path)
+    name += "." + member;
+  if (indices.empty()) {
+    deferCall("pli_put_data_name", {globalString(name), i64((long long)name.size())});
+  } else {
+    Val text = charTemp((int)name.size() + 2 + 25 * (int)indices.size());
+    b_.CreateMemCpy(text.ptr, llvm::MaybeAlign(), globalString(name), llvm::MaybeAlign(),
+                   (uint64_t)name.size());
+    llvm::Value* length = i64((long long)name.size());
+    for (size_t k = 0; k < indices.size(); ++k) {
+      b_.CreateStore(b_.getInt8(k == 0 ? '(' : ','),
+                     b_.CreateGEP(b_.getInt8Ty(), text.ptr, length));
+      length = b_.CreateAdd(length, i64(1));
+      llvm::Value* index = toI64(indices[k]);
+      llvm::Value* negative = b_.CreateICmpSLT(index, i64(0));
+      llvm::Value* magnitude = b_.CreateSelect(negative, b_.CreateNeg(index), index);
+      llvm::Value* digits = i64(1);
+      uint64_t threshold = 10;
+      for (int n = 2; n <= 19; ++n, threshold *= 10)
+        digits = b_.CreateSelect(b_.CreateICmpUGE(magnitude,
+                                    llvm::ConstantInt::get(b_.getInt64Ty(), threshold)),
+                                i64(n), digits);
+      digits = b_.CreateAdd(digits, b_.CreateZExt(negative, b_.getInt64Ty()));
+      emitCharOfFixed(b_.CreateGEP(b_.getInt8Ty(), text.ptr, length), i64(24), index);
+      length = b_.CreateAdd(length, digits);
+    }
+    b_.CreateStore(b_.getInt8(')'), b_.CreateGEP(b_.getInt8Ty(), text.ptr, length));
+    length = b_.CreateAdd(length, i64(1));
+    deferCall("pli_put_data_name", {text.ptr, length});
+  }
+  emitPutListValue(value);
 }
 
 void IRGen::emitPutDataStruct(HExpr* t, const std::string& prefix) {
@@ -10426,8 +10528,36 @@ void IRGen::emitPut(HStmt* s) {
     emitPutDataItems(s);
   } else {
     for (auto& item : s->items) {
+      if (item->kind == HExpr::PutIter) {
+        // An iterative datalist (rules (72),(73),(111)) transmits one
+        // value per iteration of its DO specification.
+        emitPutIter(item.get(),
+                    [this](HExpr* value) { emitPutListValue(emitExpr(value)); });
+        continue;
+      }
       Val v = emitExpr(item.get());
-      switch (v.ty.k) {
+      emitPutListValue(v);
+    }
+  }
+  if (s->stringTarget)
+    deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
+  if (s->copy)
+    deferCall("pli_copy", {});
+  if (s->fileSym)
+    deferCall("pli_put_unselect", {});
+  // Write the record: under the output lock when the program has a task.
+  llvm::Value* written = flushCalls("pli_out_begin", "pli_out_end");
+  if (s->stringTarget && isVarying) {
+    // Store the actual length written into the varying string's length prefix
+    b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
+  }
+}
+
+// One list-directed value (rules (104),(105)): the value is written in its
+// list-directed image. The call is deferred with the statement's other items,
+// so the whole record reaches the stream under one lock (ADR-233).
+void IRGen::emitPutListValue(const Val& v) {
+  switch (v.ty.k) {
       case TK::Char:
         deferCall("pli_put_list_char", {v.ptr, v.len});
         break;
@@ -10481,7 +10611,7 @@ void IRGen::emitPut(HStmt* s) {
       case TK::Offset:
       case TK::Area:
       case TK::Entry:
-        d_.error(s->loc,
+        d_.error(curLoc_,
                  "a POINTER/OFFSET/AREA/ENTRY value cannot be written with PUT LIST in this stage",
                  "(110)");
         break;
@@ -10492,27 +10622,97 @@ void IRGen::emitPut(HStmt* s) {
         break;
       case TK::Task:
       case TK::Event:
-        d_.error(s->loc, "a TASK/EVENT value cannot be written with PUT LIST in this stage",
+        d_.error(curLoc_, "a TASK/EVENT value cannot be written with PUT LIST in this stage",
                  "(110)");
         break;
       case TK::Label:
-        d_.error(s->loc, "a LABEL value cannot be written with PUT LIST in this stage", "(110)");
+        d_.error(curLoc_, "a LABEL value cannot be written with PUT LIST in this stage", "(110)");
         break;
-      }
-    }
   }
-  if (s->stringTarget)
-    deferCall("pli_string_put_close", {sdata, slen}, /*capture=*/true);
-  if (s->copy)
-    deferCall("pli_copy", {});
-  if (s->fileSym)
-    deferCall("pli_put_unselect", {});
-  // Write the record: under the output lock when the program has a task.
-  llvm::Value* written = flushCalls("pli_out_begin", "pli_out_end");
-  if (s->stringTarget && isVarying) {
-    // Store the actual length written into the varying string's length prefix
-    b_.CreateStore(b_.CreateTrunc(written, b_.getInt32Ty(), "vlen32"), slenPrefix);
+}
+
+// A PUT LIST iterative datalist (rules (72),(73),(111)):
+//   ( expression DO control = from TO to [BY by] )
+// Each iteration of the DO specification evaluates the expression and
+// transmits one value list-directed, so the item writes a run of values
+// where an ordinary item writes one.
+void IRGen::emitPutIter(HExpr* e, std::function<void(HExpr*)> emitOne) {
+  Symbol* ctl = e->sym;
+  if (!ctl)
+    return;
+  const Type& ct = ctl->ty;
+  const std::string id = std::to_string(n_++);
+
+  // The control variable starts at FROM (rules (72),(73)).
+  Val from = emitExpr(e->putIterFrom.get());
+  storeTo(ctl, from, e->loc);
+
+  Val tv = convert(emitExpr(e->putIterTo.get()), ct, e->loc);
+  Val by;
+  if (e->putIterBy) {
+    by = convert(emitExpr(e->putIterBy.get()), ct, e->loc);
+  } else {
+    by.ty = ct;
+    by.reg = ct.k == TK::Float ? flt(1.0) : llvm::ConstantInt::get(llvmTy(ct), 1, true);
   }
+
+  // A runtime zero step cannot make progress. Raise ERROR and leave the
+  // iterative item if an ON-unit resumes, instead of hanging forever.
+  llvm::Value* stepZero = ct.k == TK::Float
+                             ? b_.CreateFCmpOEQ(by.reg, flt(0.0), "putiter.zero")
+                             : b_.CreateICmpEQ(by.reg, llvm::Constant::getNullValue(llvmTy(ct)),
+                                              "putiter.zero");
+  llvm::BasicBlock* badStep = llvm::BasicBlock::Create(ctx_, "putiter.badstep", curFn_);
+  llvm::BasicBlock* validStep = llvm::BasicBlock::Create(ctx_, "putiter.validstep", curFn_);
+  llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "putiter.cond." + id, curFn_);
+  llvm::BasicBlock* bodyL = llvm::BasicBlock::Create(ctx_, "putiter.body." + id, curFn_);
+  llvm::BasicBlock* stepL = llvm::BasicBlock::Create(ctx_, "putiter.step." + id, curFn_);
+  llvm::BasicBlock* endL = llvm::BasicBlock::Create(ctx_, "putiter.end." + id, curFn_);
+
+  b_.CreateCondBr(stepZero, badStep, validStep);
+  startBlock(badStep);
+  b_.CreateCall(runtimeFn("pli_signal_error"),
+                {globalString("an iterative datalist step must not be zero")});
+  branch(endL);
+  startBlock(validStep);
+  branch(condL);
+  startBlock(condL);
+
+  // The loop runs while the control variable has not passed TO. The step's
+  // sign decides the direction, exactly as in a DO group (rule (72)).
+  Val cv = loadSym(ctl, ct);
+  llvm::Value* zero = ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
+  llvm::Value* negStep =
+      ct.k == TK::Float ? b_.CreateFCmpOLT(by.reg, zero, "negstep")
+                        : b_.CreateICmpSLT(by.reg, zero, "negstep");
+  llvm::Value* stillGoing =
+      ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
+                        : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
+  llvm::Value* stillGoingDown =
+      ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdown")
+                        : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdown");
+  // A negative step counts down, so the test flips; a zero step never
+  // terminates, which sema diagnoses (rule (72)).
+  llvm::Value* keep = b_.CreateSelect(negStep, stillGoingDown, stillGoing, "keep");
+  b_.CreateCondBr(keep, bodyL, endL);
+
+  startBlock(bodyL);
+  // The iterated expression is evaluated afresh each iteration, so it sees
+  // the current value of the control variable.
+  emitOne(e->putIterExpr.get());
+  branch(stepL);
+
+  startBlock(stepL);
+  Val cv2 = loadSym(ctl, ct);
+  llvm::Value* nx = ct.k == TK::Float ? b_.CreateFAdd(cv2.reg, by.reg, "next")
+                                      : b_.CreateAdd(cv2.reg, by.reg, "next");
+  Val nv;
+  nv.ty = ct;
+  nv.reg = nx;
+  storeTo(ctl, nv, e->loc);
+  b_.CreateBr(condL);
+
+  startBlock(endL);
 }
 
 // GET DATA (rule (106), QR1.5): read NAME=value pairs in any order, storing
@@ -10859,6 +11059,16 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
 void IRGen::emitPutEditItems(HStmt* s) {
   llvm::Value* defW = i64(0);
   llvm::Value* defD = i64(0);
+  if (s->items.size() == 1 && s->items[0]->kind == HExpr::PutIter) {
+    HExpr* iter = s->items[0].get();
+    emitPutIter(iter, [this, s, defW, defD](HExpr* value) {
+      std::vector<Val> one{emitExpr(value)};
+      size_t index = 0;
+      for (const auto& format : s->formats)
+        emitPutEditItem(format, s, index, defW, defD, one);
+    });
+    return;
+  }
   // Pre-evaluate all data items once (PL/I semantics: data items are
   // evaluated once per PUT statement, in order).
   std::vector<Val> dataItems;
@@ -10942,18 +11152,11 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     size_t avail = (savedDi < dataItems.size()) ? (dataItems.size() - savedDi) : 0;
     if (avail == 0) break;
     llvm::Value* countVal = toI64(emitExpr(f.count.get()));
-    // A negative count raises ERROR (rule (47), ADR-376); zero skips.
+    // A nonpositive count skips the group (Y33-6003-0 §4.7 lines
+    // 15675-15690: "if the value is zero or negative, the format item is
+    // skipped"), so a negative count skips like a zero one.
     llvm::BasicBlock* skipBlock = llvm::BasicBlock::Create(ctx_, "repeat.skip", fn);
     llvm::BasicBlock* runBlock = llvm::BasicBlock::Create(ctx_, "repeat.run", fn);
-    llvm::BasicBlock* negBlock = llvm::BasicBlock::Create(ctx_, "repeat.neg", fn);
-    llvm::BasicBlock* posBlock = llvm::BasicBlock::Create(ctx_, "repeat.pos", fn);
-    llvm::Value* neg = b_.CreateICmpSLT(countVal, i64(0), "repeat.isneg");
-    b_.CreateCondBr(neg, negBlock, posBlock);
-    b_.SetInsertPoint(negBlock);
-    b_.CreateCall(runtimeFn("pli_signal_error"),
-                  {globalString("negative format iteration count")});
-    b_.CreateBr(skipBlock);
-    b_.SetInsertPoint(posBlock);
     llvm::Value* pos = b_.CreateICmpSGT(countVal, i64(0), "repeat.pos");
     b_.CreateCondBr(pos, runBlock, skipBlock);
     b_.SetInsertPoint(runBlock);
@@ -14447,6 +14650,11 @@ Val IRGen::emitExpr(HExpr* e) {
   Val v;
   if (!e)
     return v;
+  if (!dataIndexValues_.empty()) {
+    auto cached = dataIndexValues_.find(e);
+    if (cached != dataIndexValues_.end())
+      return cached->second;
+  }
   switch (e->kind) {
   case HExpr::Convert: {
     HExpr* src = e->a.get();
@@ -15120,6 +15328,13 @@ Val IRGen::emitExpr(HExpr* e) {
   }
   case HExpr::Binary:
     break;
+  case HExpr::PutIter:
+    // An iterative datalist is a PUT item, not a value: the statement
+    // lowers it with emitPutIter. Reaching it here would fall into the
+    // binary-operator path below and dereference a null operand.
+    d_.error(e->loc, "an iterative datalist is only valid as a PUT item", "(111)");
+    v.ty = Type::voidTy();
+    return v;
   }
 
   // ---- binary operators ----

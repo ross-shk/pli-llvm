@@ -1,0 +1,5 @@
+ /* Rule (73): a zero iterative datalist step cannot terminate. */
+ bad_datalist_zero_step: procedure options(main);
+   declare i fixed bin(31);
+   put list((i do i = 1 to 3 by 0));
+ end bad_datalist_zero_step;

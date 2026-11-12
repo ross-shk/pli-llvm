@@ -11,7 +11,7 @@ int main(void) {
 
     for (int i = 0; i < 1000; i++)
         a[i] = (int16_t)((i + 1) * 7 - 3); /* PL/I indexes from 1 */
-    for (int i = 1; i <= 100000000; i++) {
+    for (int i = 1; i <= 50000000; i++) {
         int j = i % 1000;
         int16_t x = a[j];
         int16_t y = (int16_t)(x * 3 + 1);

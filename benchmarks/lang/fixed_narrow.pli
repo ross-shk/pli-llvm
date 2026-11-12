@@ -5,10 +5,12 @@
     precision, so with the SIZE checks on the declared range is an
     invariant of each load. The pair (--size-checks vs
     --size-checks --no-range-facts) prices the range fact itself; the
-    check-free pair is the D1 ratio for a narrow p. */
+    check-free pair is the D1 ratio for a narrow p. The loop counter is
+    FIXED BINARY(31): it reaches 50,000,000, which is outside BIN(15). */
  fixed_narrow: procedure options(main);
    declare a(1000) fixed bin(15);
-   declare (i, j, x, y) fixed bin(15);
+   declare (j, x, y) fixed bin(15);
+   declare i fixed bin(31);
    declare s fixed bin(63);
 
    do i = 1 to 1000;

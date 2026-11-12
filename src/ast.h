@@ -347,10 +347,20 @@ struct Stmt {
                            // KEYTO/KEYFROM to address records by key
   bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
                            // direct organisation; same keyed access as KEYED
+  bool openStream = false; // OPEN ... STREAM: an unformatted stream file
+  bool openPrint = false;  // OPEN ... PRINT: a stream file with page/line
+                           // formatting
+  bool openBackwards = false; // OPEN ... BACKWARDS (rule (101)): a sequential
+                              // record file is read from the last record first
+  bool openEnvironment = false; // OPEN ... ENVIRONMENT: not an OPEN option
+                                 // (rule (101)); diagnosed on OPEN
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
   ExprP openPagesize = nullptr; // PAGESIZE ( expression )
+  // RECSIZE/BLKSIZE (rule (101)): implementation-defined record block sizing,
+  // parsed for side effects with no runtime effect.
+  std::vector<ExprP> openRecordSizeNoops;
   // File modifiers (rules 39,40): implementation-dependent, no runtime effect
   bool openBuffered = false;    // BUFFERED
   bool openUnbuffered = false;  // UNBUFFERED
@@ -414,6 +424,9 @@ struct Stmt {
   // RT_UNDEFINEDFILE_KEY_BASE).
   static constexpr int kEndfileBaseCondKey = -1000;
   static constexpr int kUndefinedfileBaseCondKey = -2000;
+  // ENDPAGE(f) (rule 97): raised when a STREAM PRINT file exceeds PAGESIZE.
+  // Keyed by file slot like ENDFILE/UNDEFINEDFILE. Mirrored in rt_stream.c.
+  static constexpr int kEndpageBaseCondKey = -3000;
   std::string condName; // e.g. "ERROR", "SIZE", "SUBSCRIPTRANGE", "ZERODIVIDE",
                         // or a rule (99) condition name
   int condKey = 0;      // 0 = ERROR, negative = fixed key above, else condNames index + 1

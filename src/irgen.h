@@ -305,7 +305,20 @@ private:
   void emitDoIter(HStmt* s);
   void emitPut(HStmt* s);
   void emitPutListValue(const Val& v);
-  void emitPutIter(HExpr* e);
+  // A PUT iterative datalist (rule (111)): run its DO specification, calling
+  // `emitOne` with the expression to evaluate. Same loop for LIST (writes each value
+  // list-directed), EDIT (feeds the format pairer), and DATA (writes NAME=value).
+  void emitPutIter(HExpr* e, std::function<void(HExpr*)> emitOne);
+  // DATA names and element values must share one evaluation of each index.
+  std::unordered_map<HExpr*, Val> dataIndexValues_;
+  void emitPutDataReference(HExpr* e);
+  // WRITE ... LOCATE(v) (rule (113)): the record holds the based variable's
+  // current contents - one value's image, or a structure's members' images
+  // in declaration order.
+  void writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr,
+                         SourceLoc loc);
+  void writeLocateMembers(llvm::Value* slot, const Type& ty, llvm::Value* addr,
+                          SourceLoc loc);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
   // ADR-233: the stream calls of one statement, deferred so the whole record
   // is written or read under the matching lock. A program without a task

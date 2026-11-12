@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
 /* rule (101): OPEN PAGESIZE option — raises ENDPAGE on page overflow. */
+/* Each PUT LIST statement on a PRINT file is a record (one line), so five
+ * statements with PAGESIZE(3) overflow on the fourth. */
 open_pagesize_endpage: procedure options(main);
     declare f file;
     declare endpage_hit fixed bin(31) init(0);
@@ -8,11 +10,11 @@ open_pagesize_endpage: procedure options(main);
         endpage_hit = 1;
     end;
     open file(f) title('open_pagesize_endpage.dat') output stream print pagesize(3);
-    put file(f) list('line1');
-    put file(f) list('line2');
-    put file(f) list('line3');
-    put file(f) list('line4'); /* This should trigger ENDPAGE */
-    put file(f) list('line5');
+    put file(f) list('line1') skip;
+    put file(f) list('line2') skip;
+    put file(f) list('line3') skip;
+    put file(f) list('line4') skip; /* This should trigger ENDPAGE */
+    put file(f) list('line5') skip;
     close file(f);
     if endpage_hit = 1 then put skip list('PASS open_pagesize_endpage');
     else put skip list('FAIL open_pagesize_endpage');

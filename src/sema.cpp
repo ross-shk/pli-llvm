@@ -388,7 +388,13 @@ Type divResultType(const Type& a, const Type& b) {
       q2 = std::min(62, decToBinScale(b.scale));
   }
   int q = maxP - p1 + q1 - q2;
-  // Y33-6003-0 §4.5: result scale may be negative; do not clamp.
+  // A negative result scale is clamped to 0 (ADR-361): the lowering scales the
+  // raw quotient up into the scale-0 result, so a negative scale here would
+  // rescale that value a second time. The quotient's value is unchanged - the
+  // scale-0 raw is the quotient - but a negative-scale result type would
+  // carry a raw too small to represent it (1 / 2**-62 needs 124 raw bits).
+  if (q < 0)
+    q = 0;
   return bothDec ? Type::fixedDec(31, q)
                  : Type::fixedBin(63, q);
 }
@@ -432,6 +438,7 @@ Scope* Sema::scopeFor(Proc* p) {
   auto sc = std::make_unique<Scope>();
   sc->parent = p->parent ? scopeFor(p->parent) : rootScope_;
   Scope* raw = sc.get();
+  raw->procScope = raw; // an implicit declaration lands in the procedure's scope
   scopes_.push_back(std::move(sc));
   procScopes_[p] = raw;
   return raw;
@@ -485,7 +492,16 @@ Symbol* Sema::declare(Scope* sc, const std::string& n, Type t, SourceLoc l, Symb
 Symbol* Sema::implicitDeclare(Scope* sc, const std::string& n, SourceLoc l, bool isStatic) {
   char c = n.empty() ? 'X' : n[0];
   Type t = (c >= 'I' && c <= 'N') ? Type::fixedBin(15, 0) : Type::flt(6);
-  Symbol* s = declare(sc, n, t, l, Symbol::Var, isStatic);
+  // An implicit declaration (rule (130)) is established in the procedure's
+  // scope, not in the block that first used the name: a BEGIN block opens a
+  // child scope (rule (68)), but the implicitly declared variable belongs to
+  // the procedure and stays visible after the block ends. Declaring it in the
+  // procedure's scope also keeps one name to one variable, so a later use
+  // outside the block reaches the same storage.
+  Scope* target = sc->procScope ? sc->procScope : sc;
+  if (Symbol* existing = lookup(target, n))
+    return existing;
+  Symbol* s = declare(target, n, t, l, Symbol::Var, isStatic);
   s->implicit = true;
   d_.warn(l, "'" + n + "' is not declared; implicitly " + t.desc(), "(130)");
   return s;
@@ -641,6 +657,33 @@ bool Sema::run(Program& prog, bool compileOnly) {
   for (auto& p : prog.procs)
     if (!p->parent)
       computeEnv(p.get());
+
+  // Iterative output emits runtime control flow. The task-safe stream path
+  // currently queues a static call list, which cannot represent that loop.
+  bool asynchronous = false;
+  std::vector<Expr*> iterativeOutput;
+  std::function<void(Stmt*)> inspectOutput = [&](Stmt* s) {
+    if (!s)
+      return;
+    if (s->kind == Stmt::CallS && (s->hasTaskOpt || s->eventRef))
+      asynchronous = true;
+    if (s->kind == Stmt::Put)
+      for (auto& item : s->items)
+        if (item && item->kind == Expr::PutIter)
+          iterativeOutput.push_back(item.get());
+    for (auto& child : s->body)
+      inspectOutput(child.get());
+    inspectOutput(s->thenS.get());
+    inspectOutput(s->elseS.get());
+    inspectOutput(s->unit.get());
+  };
+  for (auto& proc : prog.procs)
+    for (auto& stmt : proc->body)
+      inspectOutput(stmt.get());
+  if (asynchronous)
+    for (Expr* item : iterativeOutput)
+      d_.error(item->loc, "iterative PUT datalists in a program with tasks are not implemented",
+               "(111)");
 
   if (!prog.mainProc) {
     // A package block is scope and linkage only, never an entry point.
@@ -2871,6 +2914,13 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         if (initExpr) {
           // M0 accepts a literal (optionally signed) as INITIAL value.
           if (Expr* folded = foldInitialConstant(initExpr, item.ty, item.loc)) {
+            // Rule (26)/(31): the value of an INITIAL is an initial-constant,
+            // so it must name a constant. A value that is still not a constant
+            // after folding is a reference to another variable, which rule
+            // (26) does not allow. A STATIC INITIAL is diagnosed by
+            // checkStaticConstants below with its own message.
+            if (!item.sym->isStatic && !isInitialConstant(folded))
+              d_.error(initExpr->loc, "INITIAL requires a constant expression", "(26)");
             item.sym->initExpr = folded; // consumed by code generation
             // STATIC INITIAL requires constant expressions (rules (23),(26)).
             if (item.sym->isStatic)
@@ -2929,6 +2979,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       auto child = std::make_unique<Scope>();
       child->parent = sc;
       Scope* raw = child.get();
+      raw->procScope = sc->procScope ? sc->procScope : sc;
       scopes_.push_back(std::move(child));
       beginScopes_[s.get()] = raw;
       collectDecls(s->body, raw, p, isStatic);
@@ -2942,6 +2993,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         auto child = std::make_unique<Scope>();
         child->parent = sc;
         Scope* raw = child.get();
+        raw->procScope = sc->procScope ? sc->procScope : sc;
         scopes_.push_back(std::move(child));
         beginScopes_[s->unit.get()] = raw;
         collectDecls(s->unit->body, raw, p, isStatic);
@@ -2960,6 +3012,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         auto child = std::make_unique<Scope>();
         child->parent = sc;
         Scope* raw = child.get();
+        raw->procScope = sc->procScope ? sc->procScope : sc;
         scopes_.push_back(std::move(child));
         beginScopes_[s->thenS.get()] = raw;
         collectDecls(s->thenS->body, raw, p, isStatic);
@@ -2973,6 +3026,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         auto child = std::make_unique<Scope>();
         child->parent = sc;
         Scope* raw = child.get();
+        raw->procScope = sc->procScope ? sc->procScope : sc;
         scopes_.push_back(std::move(child));
         beginScopes_[s->elseS.get()] = raw;
         collectDecls(s->elseS->body, raw, p, isStatic);
@@ -3251,6 +3305,29 @@ Expr* Sema::foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc) {
     return nullptr;
   }
   return lit;
+}
+
+// True when the expression names a compile-time constant: a literal, a
+// constant expression already folded to one (ADR-240), or a named constant
+// (a VALUE constant, rule (23)). Rule (31) makes an identifier naming a
+// named constant an initial-constant, so such a name is accepted where an
+// INITIAL value is required.
+bool Sema::isInitialConstant(const Expr* e) const {
+  if (!e)
+    return false;
+  switch (e->kind) {
+  case Expr::IntLit:
+  case Expr::DecLit:
+  case Expr::FltLit:
+  case Expr::CharLit:
+  case Expr::BitLit:
+    return true;
+  case Expr::VarRef:
+    // A named constant (VALUE constant, rule (23)) is an initial-constant.
+    return e->sym && e->sym->isValue;
+  default:
+    return false;
+  }
 }
 
 // Check if an expression is a constant literal (for STATIC INITIAL validation).
@@ -3631,12 +3708,12 @@ int Sema::resolveCondKey(Stmt* s, Scope* sc) {
 
 // Rule (97): the conditions the runtime raises against one named file.
 static bool isFileCondName(const std::string& n) {
-  return n == "ENDFILE" || n == "UNDEFINEDFILE";
+  return n == "ENDFILE" || n == "UNDEFINEDFILE" || n == "ENDPAGE";
 }
 
-// Rule (97): ENDFILE and UNDEFINEDFILE are file conditions, so their handlers
-// are keyed by the file: base - slot keeps each file's unit separate on the
-// shared ON stack.
+// Rule (97): ENDFILE, UNDEFINEDFILE, and ENDPAGE are file conditions, so their
+// handlers are keyed by the file: base - slot keeps each file's unit separate
+// on the shared ON stack.
 int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
   if (s->fileIdent.empty()) {
     d_.error(s->loc, s->condName + " requires a FILE ( f ) reference", "(97)");
@@ -3648,8 +3725,13 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
     return 0;
   }
   s->fileSym = f;
-  int base = s->condName == "UNDEFINEDFILE" ? Stmt::kUndefinedfileBaseCondKey
-                                            : Stmt::kEndfileBaseCondKey;
+  int base;
+  if (s->condName == "UNDEFINEDFILE")
+    base = Stmt::kUndefinedfileBaseCondKey;
+  else if (s->condName == "ENDPAGE")
+    base = Stmt::kEndpageBaseCondKey;
+  else
+    base = Stmt::kEndfileBaseCondKey;
   return base - f->fileSlot;
 }
 
@@ -4594,6 +4676,24 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // scalar COMPLEX prints through the list-directed re+imI image.
       for (auto& it : s->items) {
         typeExpr(it.get(), sc, p);
+        if (it->kind == Expr::PutIter) {
+          Expr* value = it->putIterExpr.get();
+          if (!value || (value->kind != Expr::VarRef && value->kind != Expr::Subscript) ||
+              !value->sym || value->sym->kind == Symbol::ProcName) {
+            d_.error(it->loc, "a PUT DATA iterative item must iterate a variable reference", "(110)");
+            continue;
+          }
+          if (value->ty.isVoid() || value->ty.isPointer() || value->ty.isArray() || value->ty.isStruct())
+            d_.error(value->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
+          if (value->locPtr || (value->sym->ty.isArray() && !value->memberPath.empty()))
+            d_.error(value->loc, "this qualified iterative PUT DATA reference is not implemented",
+                     "(110)");
+          for (auto& index : value->args)
+            if (!index->ty.isFixed() || index->ty.scale != 0 || index->ty.intBits() > 64)
+              d_.error(index->loc, "iterative PUT DATA subscripts must be unscaled FIXED values",
+                       "(126)");
+          continue;
+        }
         if (it->kind != Expr::VarRef || !it->sym || it->sym->kind == Symbol::ProcName) {
           d_.error(it->loc, "a PUT DATA item must be a variable reference", "(110)");
           continue;
@@ -5508,6 +5608,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       s->fileSym->openRecord = s->openRecord;
       s->fileSym->openKeyed = s->openKeyed;
       s->fileSym->openDirect = s->openDirect;
+      s->fileSym->openBackwards = s->openBackwards;
     }
     if (s->kind == Stmt::Open) {
       // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE take expressions.
@@ -5523,6 +5624,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         if (!s->openPagesize->ty.isFixed())
           d_.error(s->openPagesize->loc, "PAGESIZE expression must be numeric", "(101)");
       }
+      // RECSIZE/BLKSIZE (rule (101)): implementation-defined record block
+      // sizing, parsed for side effects with no runtime effect.
+      for (auto& rs : s->openRecordSizeNoops)
+        typeExpr(rs.get(), sc, p);
 
       // Validate combinations (rule 101)
       // LINESIZE: only for STREAM/PRINT output files
@@ -5532,7 +5637,10 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       // INPUT without RECORD = STREAM INPUT
       // RECORD = RECORD (not STREAM)
       bool isRecord = s->openRecord;
-      bool isPrint = s->fileSym && s->fileSym->filePrint;
+      // PRINT can be given on the DECLARE (the FILE variable's own PRINT
+      // attribute) or on the OPEN statement itself; either makes the file a
+      // formatted stream.
+      bool isPrint = (s->fileSym && s->fileSym->filePrint) || s->openPrint;
       bool isStream = false;
       if (isRecord) {
         isStream = false;
@@ -5793,6 +5901,13 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     return;
   for (auto& it : s->items)
     typeExpr(it.get(), sc, p);
+  for (auto& it : s->items)
+    if (it->kind == Expr::PutIter && (isGet || s->items.size() != 1)) {
+      d_.error(it->loc,
+               "an iterative EDIT datalist must be the sole PUT EDIT item in this stage",
+               "(111)");
+      return;
+    }
   // First pass: type all format items including nested Repeat groups.
   std::function<void(std::vector<FormatItem>&)> typeFormats = [&](std::vector<FormatItem>& fmts) {
     for (auto& f : fmts) {
@@ -5806,16 +5921,19 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
       }
       if (f.kind == FormatItem::Repeat) {
         typeExpr(f.count.get(), sc, p);
-        // The repetition count must be an integer-compatible scalar (rule 47).
-        if (f.count && !f.count->ty.isNumeric() && !f.count->ty.isVoid())
-          d_.error(f.count->loc, "a format iteration count must be an integer expression", "(47)");
-        // A constant negative count is a compile-time error (ADR-376); a
-        // runtime-evaluated negative value traps in IRGen.
-        bool negLit = f.count && f.count->kind == Expr::IntLit && f.count->ival < 0;
-        bool negUnary = f.count && f.count->kind == Expr::Unary && f.count->op == Tok::Minus &&
-                        f.count->a && f.count->a->kind == Expr::IntLit;
-        if (negLit || negUnary)
-          d_.error(f.count->loc, "a format repetition count must not be negative", "(47)");
+        // The repetition count must be an integer-compatible scalar (rule
+        // 47): not merely numeric. A FIXED DECIMAL with a fractional scale
+        // (1.5) is numeric but names no whole number of repetitions.
+        if (f.count && !f.count->ty.isVoid()) {
+          const Type& ct = f.count->ty;
+          bool integerish = ct.isNumeric() && (!ct.isFixed() || ct.scale == 0);
+          if (!integerish)
+            d_.error(f.count->loc, "a format iteration count must be an integer expression",
+                     "(47)");
+        }
+        // A nonpositive count skips the group (Y33-6003-0 §4.7 lines
+        // 15675-15690: "if the value is zero or negative, the format item is
+        // skipped"), so a negative count is not an error.
         typeFormats(f.items);
       }
       // An F/E scale factor (rule (50)) is a numeric expression evaluated for
@@ -6207,6 +6325,46 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     d_.error(e->loc, "a ': ... :' designator is only allowed in an enquiry built-in", "(123)");
     e->ty = Type::voidTy();
     break;
+  case Expr::PutIter: {
+    // A PUT LIST iterative datalist (rules (72),(73),(111)):
+    //   ( expression DO control = from TO to [BY by] )
+    // The control variable is resolved like a DO control variable (it may be
+    // implicit), and the iterated expression carries the item's type: each
+    // iteration transmits one value of that type.
+    Symbol* ctl = lookup(sc, e->putIterVar);
+    if (!ctl) {
+      ctl = implicitDeclare(sc, e->putIterVar, e->loc, false);
+      ctl->owner = p;
+      p->localSyms.push_back(ctl); // implicit vars are AUTOMATIC storage
+    }
+    if (!ctl->ty.isNumeric() || ctl->ty.isArray())
+      d_.error(e->loc, "the control variable of an iterative datalist must be arithmetic, found " +
+                           ctl->ty.desc(), "(72)");
+    if (ctl->isValue)
+      d_.error(e->loc, "an iterative datalist cannot modify a VALUE constant", "(72)");
+    if (ctl->ty.isFixed() && ctl->ty.scale != 0)
+      d_.error(e->loc, "a scaled FIXED datalist control variable is not implemented", "(16)");
+    noteStaticUse(p, ctl);
+    e->sym = ctl;
+    typeExpr(e->putIterExpr.get(), sc, p);
+    typeExpr(e->putIterFrom.get(), sc, p);
+    typeExpr(e->putIterTo.get(), sc, p);
+    typeExpr(e->putIterBy.get(), sc, p);
+    for (Expr* bound : {e->putIterFrom.get(), e->putIterTo.get(), e->putIterBy.get()})
+      if (bound && (!bound->ty.isNumeric() || bound->ty.isArray()))
+        d_.error(bound->loc, "an iterative datalist bound or step must be scalar arithmetic", "(73)");
+    ConstNum step;
+    if (e->putIterBy && constNumOf(e->putIterBy.get(), step) && step.value == 0)
+      d_.error(e->putIterBy->loc, "an iterative datalist step must not be zero", "(73)");
+    if (e->putIterExpr && e->putIterExpr->kind == Expr::PutIter)
+      d_.error(e->loc, "nested iterative datalists are not implemented in this stage", "(111)");
+    if (!e->putIterExpr->ty.isNumeric() && !e->putIterExpr->ty.isChar())
+      d_.error(e->loc, "an iterative datalist item must be a numeric or character expression", "(111)");
+    // The item's type is the iterated expression's: every iteration
+    // transmits one value of it.
+    e->ty = e->putIterExpr->ty;
+    break;
+  }
   case Expr::VarRef: {
     // ONSOURCE pseudo-variable (TR 123, ADR-210): bare ONSOURCE has a type so
     // it can be assigned to; the IRGen emits pli_set_on_source calls.

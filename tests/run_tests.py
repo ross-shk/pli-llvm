@@ -27,8 +27,10 @@ import os
 import re
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 TIMEOUT = 10  # seconds per exec run step
 # The ceiling a load-scaled exec budget may reach.
@@ -48,6 +50,94 @@ SANITIZER_TIMEOUT = 240
 FUZZ_TIMEOUT = 180
 
 
+def _host_load() -> float:
+    """The host's load average, or its CPU busy fraction scaled by core count.
+
+    `os.getloadavg()` is Unix-only, so on Windows the load-scaled timeouts
+    below silently fell back to their flat floor and a slow-but-correct
+    driver was reported as a failure. Windows has no load average, but
+    `GetSystemTimes` reports the idle and busy kernel/user times, so the
+    same quantity - the number of cores' worth of work in flight - is
+    recovered from the busy fraction. Returns 0.0 when neither probe works.
+    """
+    try:
+        return float(os.getloadavg()[0])
+    except (AttributeError, OSError):
+        pass
+    if not IS_WINDOWS:
+        return 0.0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD),
+                        ("dwHighDateTime", wintypes.DWORD)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
+
+        def stamp():
+            k32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel),
+                               ctypes.byref(user))
+            return (idle.dwHighDateTime << 32) | idle.dwLowDateTime, \
+                   (kernel.dwHighDateTime << 32) | kernel.dwLowDateTime, \
+                   (user.dwHighDateTime << 32) | user.dwLowDateTime
+
+        i0, k0, u0 = stamp()
+        time.sleep(0.2)
+        i1, k1, u1 = stamp()
+        total = (k1 - k0) + (u1 - u0)
+        if total <= 0:
+            return 0.0
+        busy = total - (i1 - i0)
+        return max(0.0, busy / total) * (os.cpu_count() or 1)
+    except Exception:
+        return 0.0
+
+
+# A fixed CPU-bound workload used to measure how much slower the host runs
+# under contention than when idle. The loop count is small enough to keep the
+# probe cheap and large enough for the wall-clock reading to be stable.
+_PROBE_ITERS = 150000
+# The probe's fastest observed time: the least-contended reading, which is
+# the fair baseline to compare a later reading against. Set from an idle
+# host at start-up, then lowered if a quieter moment is ever observed.
+_probe_baseline: Optional[float] = None
+
+
+def _probe_seconds() -> float:
+    """Wall-clock seconds for the fixed CPU-bound workload."""
+    t0 = time.perf_counter()
+    x = 0
+    for i in range(_PROBE_ITERS):
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+    del x
+    return time.perf_counter() - t0
+
+
+def _contention_factor() -> float:
+    """How much slower a CPU-bound task runs now than on an idle host.
+
+    The load average counts runnable tasks, so on Unix it already exceeds
+    the core count when the machine is oversubscribed and the load-scaled
+    budgets grow on their own. Windows has no load average, and the busy
+    fraction recovered above saturates at the core count, so it cannot show
+    oversubscription: a box running one task per core looks identical to a
+    saturated one. This probe measures the effect directly instead - the
+    same fixed workload takes proportionally longer when the scheduler
+    cannot give the process a full core - so the budget grows by the
+    factor the run actually experiences.
+    """
+    global _probe_baseline
+    now = _probe_seconds()
+    if _probe_baseline is None or now < _probe_baseline:
+        _probe_baseline = now
+    if not _probe_baseline:
+        return 1.0
+    return max(1.0, now / _probe_baseline)
+
+
 def exec_timeout() -> int:
     """The per-run budget for a compiled test, scaled by host load.
 
@@ -56,13 +146,13 @@ def exec_timeout() -> int:
     The load average is sampled once per test, so an idle host keeps the
     tight budget that catches a genuine hang.
     """
-    try:
-        load = os.getloadavg()[0]
-    except (AttributeError, OSError):
-        return TIMEOUT
-    cores = os.cpu_count() or 1
-    scaled = int(TIMEOUT * load / cores)
-    return min(EXEC_TIMEOUT_MAX, max(TIMEOUT, scaled))
+    budget = TIMEOUT
+    load = _host_load()
+    if load > 0:
+        cores = os.cpu_count() or 1
+        budget = max(budget, int(TIMEOUT * load / cores))
+    budget = int(budget * _contention_factor())
+    return min(EXEC_TIMEOUT_MAX, max(TIMEOUT, budget))
 
 
 def driver_timeout() -> int:
@@ -75,13 +165,13 @@ def driver_timeout() -> int:
     once, at start-up, and the budget grows with it. On an idle host it
     stays at DRIVER_TIMEOUT, so a genuine hang is still caught quickly.
     """
-    try:
-        load = os.getloadavg()[0]
-    except (AttributeError, OSError):
-        return DRIVER_TIMEOUT
-    cores = os.cpu_count() or 1
-    scaled = int(DRIVER_TIMEOUT * load / cores)
-    return min(DRIVER_TIMEOUT_MAX, max(DRIVER_TIMEOUT, scaled))
+    budget = DRIVER_TIMEOUT
+    load = _host_load()
+    if load > 0:
+        cores = os.cpu_count() or 1
+        budget = max(budget, int(DRIVER_TIMEOUT * load / cores))
+    budget = int(budget * _contention_factor())
+    return min(DRIVER_TIMEOUT_MAX, max(DRIVER_TIMEOUT, budget))
 ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = sys.platform == "win32"
 EXE_EXT = ".exe" if IS_WINDOWS else ""
@@ -441,6 +531,12 @@ def main():
     ncores = os.cpu_count() or 4
     workers = int(os.environ.get("JOBS", str(ncores)))
 
+    # Prime the contention baseline before the suite starts loading the
+    # machine: the first probe of the run is the closest thing to an idle
+    # reading, and every later probe is compared against it.
+    global _probe_baseline
+    _probe_baseline = _probe_seconds()
+
     # Tests that cannot run on Windows for platform reasons (not code bugs):
     # - builtins/system shells out to the Unix `true`/`false` commands.
     # - core/socket_pair needs <sys/socket.h>, absent on Windows.
@@ -448,27 +544,47 @@ def main():
     WINDOWS_SKIP = {
         ("tests/builtins", "system"): "needs Unix true/false commands",
         ("tests/core", "socket_pair"): "needs <sys/socket.h>",
-        ("tests/core", "c_struct_return"): "needs clang in PATH",
-        ("tests/core", "cbyvalue"): "needs clang in PATH",
-        ("tests/core", "cinterop"): "needs clang in PATH",
-        ("tests/core", "c_call_pli_abi"): "needs clang in PATH",
-        ("tests/core", "entry_mixed"): "needs clang in PATH",
         ("tests/driver", "task_record"): "needs a POSIX FIFO",
-        ("tests/driver", "link"): "needs clang in PATH",
-        ("tests/driver", "multic"): "needs clang in PATH",
-        ("tests/driver", "multimod"): "needs clang in PATH",
-        ("tests/driver", "package"): "needs clang in PATH",
-        ("tests/driver", "rt_platform"): "needs clang in PATH",
-        ("tests/driver", "struct_mirror"): "needs clang in PATH",
-        ("tests/driver", "winsock"): "needs clang in PATH",
     }
+
+    # Tests that need a C compiler for the C side of the interop. They are
+    # skipped only when no C compiler is available: on a box with clang (or
+    # gcc) in PATH they run, so the coverage does not depend on the machine.
+    NEEDS_CC_SKIP = {
+        ("tests/core", "c_struct_return"),
+        ("tests/core", "cbyvalue"),
+        ("tests/core", "cinterop"),
+        ("tests/core", "c_call_pli_abi"),
+        ("tests/core", "entry_mixed"),
+        ("tests/driver", "link"),
+        ("tests/driver", "multic"),
+        ("tests/driver", "multimod"),
+        ("tests/driver", "package"),
+        ("tests/driver", "rt_platform"),
+        ("tests/driver", "struct_mirror"),
+        ("tests/driver", "winsock"),
+    }
+
+    def have_c_compiler() -> bool:
+        """Whether a C compiler is available for the C side of the interop."""
+        import shutil
+        for cand in (CLANG, "clang", "clang-cl", "gcc", "cc"):
+            if cand and shutil.which(cand):
+                return True
+        return False
+
+    cc_available = have_c_compiler()
 
     def work(job):
         dir_path, name, kind = job
         print(f"RUN {name}", flush=True)
         # dir_path may use native separators; normalize for the skip lookup.
-        if IS_WINDOWS and (Path(dir_path).as_posix(), name) in WINDOWS_SKIP:
-            return job, f"SKIP {name} ({WINDOWS_SKIP[(Path(dir_path).as_posix(), name)]})", 0, ()
+        if IS_WINDOWS:
+            key = (Path(dir_path).as_posix(), name)
+            if key in WINDOWS_SKIP:
+                return job, f"SKIP {name} ({WINDOWS_SKIP[key]})", 0, ()
+            if key in NEEDS_CC_SKIP and not cc_available:
+                return job, f"SKIP {name} (needs clang in PATH)", 0, ()
         r = Runner(dir_path, name)
         r.kind = kind
         result, rc = r.run()

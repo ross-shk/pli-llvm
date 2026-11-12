@@ -87,6 +87,10 @@ private:
   StmtP parsePut();
   StmtP parseDisplay(); // display-statement (rule 114)
   StmtP parseGet();
+  // Parse one datalist element (rule (111)): an expression, or an iterative
+  // datalist `( expr DO var = from TO to [BY by] )` lowered to an
+  // Expr::PutIter node. Used by the LIST, DATA and EDIT datalists alike.
+  ExprP parseDatalistElement(const char* rule);
   // Edit-directed transmission (rule (108)): parse `EDIT ( { ( datalist )
   // formatlist }••• )` into st->items/st->formats with st->edit set. Returns
   // true on success; on error emits a diagnostic, resyncs, and returns false.

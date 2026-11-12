@@ -272,6 +272,8 @@ struct HStmt {
   bool openBuffered = false;
   bool openUnbuffered = false;
   bool openExclusive = false;
+  bool openBackwards = false; // OPEN ... BACKWARDS (rule (101)): a sequential
+                              // record file is read from the last record first
   // CLOSE options (rule (103))
   HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.

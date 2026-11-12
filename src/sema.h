@@ -158,6 +158,11 @@ struct Symbol {
 
 struct Scope {
   Scope* parent = nullptr;
+  // The scope of the procedure this scope belongs to. A BEGIN block opens a
+  // child scope (rule (68)), but an implicit declaration (rule (130)) is
+  // established in the procedure's scope, so the name is visible outside the
+  // block that first used it.
+  Scope* procScope = nullptr;
   std::unordered_map<std::string, Symbol*> tab;
   std::vector<Symbol*> order; // declaration order, for deterministic output
   // DEFINE ALIAS types (extension, ADR-114): a separate namespace from
@@ -409,6 +414,8 @@ private:
   // leading unary minus; returns the folded literal, or nullptr after a
   // diagnostic when it is not a literal or not assignable to `ty`.
   Expr* foldInitialConstant(Expr* e, const Type& ty, SourceLoc loc);
+  // Rule (31): an INITIAL value must be an initial-constant.
+  bool isInitialConstant(const Expr* e) const;
   // Expand an INITIAL itemlist (rules (28)-(31)) into a flat sequence of folded
   // element values, expanding iteration factors and resolving '*'.
   // `maxElems` bounds the expansion: an iteration factor larger than the

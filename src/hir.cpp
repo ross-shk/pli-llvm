@@ -474,6 +474,7 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->openBuffered = s->openBuffered;
   h->openUnbuffered = s->openUnbuffered;
   h->openExclusive = s->openExclusive;
+  h->openBackwards = s->openBackwards;
   h->closeIdent = lowerExpr(s->closeIdent.get());
   h->keyOpt = lowerExpr(s->keyOpt.get());
   h->keyToOpt = lowerExpr(s->keyToOpt.get());

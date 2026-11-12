@@ -444,6 +444,37 @@ def _stack_flags() -> List[str]:
     return []
 
 
+_C_TRIPLE_CACHE: Optional[str] = None
+
+
+def _cc_target_triple() -> str:
+    """Target triple the C compiler builds for, or "" when unknown.
+
+    Asked once and cached: every C compile consults it.
+    """
+    global _C_TRIPLE_CACHE
+    if _C_TRIPLE_CACHE is None:
+        rc, out, _ = run_command([CC, "-dumpmachine"])
+        _C_TRIPLE_CACHE = (out.strip().splitlines() or [""])[0] if rc == 0 else ""
+    return _C_TRIPLE_CACHE
+
+
+def _c_stack_flags() -> List[str]:
+    """Stack-size flag spelled for the C twin's own link driver.
+
+    /STACK:<size> is link.exe/lld-link syntax; GNU ld (MinGW) spells the
+    same thing --stack <size> and rejects the MSVC form outright. The PL/I
+    build always links through lld-link, but the C twin follows whichever
+    driver its compiler uses, so the flag has to follow suit.
+    """
+    if not IS_WINDOWS:
+        return []
+    triple = _cc_target_triple().lower()
+    if "gnu" in triple or "mingw" in triple:
+        return ["-Wl,--stack," + str(STACK_SIZE)]
+    return _stack_flags()
+
+
 def _c_policy_flags() -> List[str]:
     """Flags that make the C twin match the PL/I build's target policy.
 
@@ -567,7 +598,7 @@ def compile_c(bench_name: str, c_file: str, opt: str, output: Path,
     src = BENCHMARK_DIR / c_file
     cmd = ([compiler, opt] + _c_policy_flags() + _c_runtime_flags() + _windows_sdk_flags()
            + [str(src), "-o", str(output)])
-    cmd.extend(_stack_flags())
+    cmd.extend(_c_stack_flags())
     if bench_name in BENCHMARKS_REQUIRING_MATH and not IS_WINDOWS:
         # -lm is POSIX-only; on Windows the math routines live in the CRT,
         # so no import library is needed (and no m.lib bootstrap either).

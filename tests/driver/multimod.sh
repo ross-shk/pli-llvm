@@ -8,6 +8,8 @@
 # the merged runtime definitions). It runs from the
 # gitignored out/ dir so artifacts do not pollute the repo.
 set -u
+PLI=${PLI:-./build/cmake/pli}
+CC=${CC:-${CLANG:-clang}}
 # Windows (MSYS/MinGW/Cygwin sh): linked binaries need a .exe suffix, there
 # is no libm (the UCRT provides it), and program output uses CRLF. On Unix
 # EXE is empty, MATHLIB stays -lm, and stripping CR is a no-op.
@@ -15,11 +17,24 @@ case "$(uname -s)" in
   # The hermetic stash keeps compiler-rt builtins under lib/windows, outside
   # clang's resource dir, so --rtlib=compiler-rt cannot find them: pass the
   # file ctest resolved, and keep the flag only when CMake did not resolve one.
-  MINGW*|MSYS*|CYGWIN*) EXE=.exe; MATHLIB=; RTLIBFLAGS=${CLANG_RT_BUILTINS:---rtlib=compiler-rt} ;;
-  *) EXE=; MATHLIB=-lm; RTLIBFLAGS= ;;
+  # A MinGW-targeting clang is the exception: its driver uses libgcc, which
+  # the MinGW sysroot always ships, so --rtlib=compiler-rt there would ask
+  # for a libclang_rt.builtins the toolchain does not have.
+  MINGW*|MSYS*|CYGWIN*)
+    EXE=.exe; MATHLIB=
+    case "$($CC -dumpmachine 2>/dev/null)" in
+      *-gnu*|*mingw*) RTLIBFLAGS= ;;
+      *) RTLIBFLAGS=${CLANG_RT_BUILTINS:---rtlib=compiler-rt} ;;
+    esac
+    # A PL/I object carries the merged runtime and is built against the
+    # project's own MinGW sysroot (platform/windows-mingw), so it must be
+    # linked by the driver that owns that sysroot - the same rule link.sh
+    # states. A foreign MinGW would supply a different CRT and the result
+    # would not run.
+    LINKER=$PLI
+    ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS=; LINKER=$CC ;;
 esac
-PLI=${PLI:-./build/cmake/pli}
-CC=${CC:-${CLANG:-clang}}
 OUT=tests/driver/out/multimod
 mkdir -p tests/driver/out
 
@@ -60,7 +75,7 @@ EOF
 
 $PLI "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL multimod: lib compile"; exit 1; }
 $PLI "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL multimod: main compile"; exit 1; }
-# -lm after the objects: the merged runtime needs libm on Linux (no-op on macOS).
-$CC "$OUT.main.o" "$OUT.lib.o" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
+# The merged runtime needs libm on Linux (a no-op on macOS and Windows).
+$LINKER "$OUT.main.o" "$OUT.lib.o" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL multimod: link"; exit 1; }
 "$OUT$EXE"
 exit 0

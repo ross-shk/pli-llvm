@@ -1,0 +1,4 @@
+ /* Rule (110): an unmatched EDIT delimiter is not a datalist wrapper. */
+ bad_datalist_parentheses: procedure options(main);
+   put edit(1)) (f(4));
+ end bad_datalist_parentheses;

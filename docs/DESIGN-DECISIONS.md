@@ -14547,3 +14547,37 @@ effect (storage is already uninitialized by default in this implementation).
 **Consequences.** Added to GRAMMAR-COVERAGE.md extensions table with test
 references `reserved_test.pli`, `bad_reserved_initial.pli`. No TR 25.084
 conformance claim for this feature.
+
+## ADR-388 — A nonpositive format iteration count skips the group (supersedes ADR-376)
+
+**Context.** ADR-376 decided that a negative format iteration count is an
+error: a literal negative count was diagnosed at compile time with rule (47)
+and a runtime negative count raised ERROR. That decision rested on the
+repository carrying no Y33-6003 text for the negative case — the text was
+found later, in `docs/WAVE1-FORMAT-ITERATION-ISSUES.md`, which quotes
+Y33-6003-0 §4.7 (lines 15675-15690): "a repetition factor ... the expression
+is evaluated once ... if the value is zero or negative, the format item is
+skipped". GRAMMAR-COVERAGE row (44)-(55) already states the rule this way
+("a nonpositive count (≤0) skips the group per Y33-6003-0 §15675-15690")
+and names `format_repeat_negative.pli` and `format_repeat_zero_neg.pli` as
+the covering tests.
+
+The implementation had drifted from that: the negative count was diagnosed
+at compile time and raised ERROR at run time, so the two covering tests
+could not pass. The test that pinned ADR-376's behaviour,
+`bad_edit_iter.pli`, had also been renamed to
+`bad_format_repeat_nonint.pli` with its body changed to a non-integer
+count, so the negative case lost its coverage.
+
+**Decision.** A nonpositive repetition count skips the group, per
+Y33-6003-0 §4.7. A literal negative count is no longer diagnosed at compile
+time, and a runtime negative count no longer raises ERROR — it skips, like a
+zero count. Only a non-integer count is diagnosed, with rule (47). This
+supersedes ADR-376.
+
+**Consequences.** `tests/core/format_repeat_negative.pli` and
+`tests/core/format_repeat_zero_neg.pli` cover the negative and zero skip
+cases; `tests/core/bad_format_repeat_nonint.pli` pins the non-integer
+diagnostic; `tests/core/format_repeat_live.pli` covers the variable, nested
+and call-count repeats. GRAMMAR-COVERAGE row (44)-(55) already states this
+rule and needs no change.

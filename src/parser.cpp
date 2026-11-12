@@ -1444,7 +1444,22 @@ std::string Parser::parseCondition(std::string* fileArg) {
     expect(Tok::RParen, "(97)");
     return cond;
   }
-  if (w == "ENDPAGE" || w == "KEY" || w == "NAME" ||
+  if (w == "ENDPAGE") {
+    // ENDPAGE(file) (rule 97) is a file condition: it names its file, and
+    // sema keys the handler per file slot (Stmt::kEndpageBaseCondKey).
+    advance();
+    if (at(Tok::LParen)) {
+      advance(); // (
+      if (at(Tok::Word)) {
+        if (fileArg)
+          *fileArg = cur().text;
+        advance();
+      }
+      expect(Tok::RParen, "(97)");
+    }
+    return "ENDPAGE";
+  }
+  if (w == "KEY" || w == "NAME" ||
       w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))
@@ -1737,8 +1752,13 @@ StmtP Parser::parseDeclare() {
         base.level = factoredLevel;
       }
       parseDeclTail(base);
-      // Consume comma before potential members (if present)
-      eat(Tok::Comma);
+      // A structure member follows the factored tail as `2 name ...`, so the
+      // comma before it belongs to the member list. Without a member the
+      // comma separates this declaration from the next item of the same
+      // DECLARE statement, and the item loop consumes it.
+      bool memberFollows = at(Tok::Comma) && peek().kind == Tok::Number && !peek().isFloat;
+      if (memberFollows)
+        advance(); // comma before the members
       // Check if this is a factored structure (members follow with higher level numbers)
       bool isFactoredStructure = false;
       if (at(Tok::Number) && !cur().isFloat) {
@@ -3983,6 +4003,104 @@ StmtP Parser::parseDisplay() {
 }
 
 // stream-io-statement ::= {GET | PUT} stream-optionslist ;    rules (104)-(109)
+// Parse one datalist element (rule (111)): an expression, or an iterative
+// datalist `( expr DO var = from TO to [BY by] )` which lowers to an
+// Expr::PutIter node. The leading '(' is saved so a plain parenthesised
+// expression backtracks to parseExpr. Shared by the LIST, DATA and EDIT
+// datalists so an iteration works in each.
+// Parser::parseDatalistElement
+ExprP Parser::parseDatalistElement(const char* rule) {
+  if (!at(Tok::LParen))
+    return parseExpr();
+  size_t save = i_;
+  advance(); // consume the element's leading (
+  // Look for a positional DO specification, not a variable named DO. Preserve
+  // expression parentheses; only recurse when a nested datalist contains DO.
+  bool isIter = false;
+  bool nested = false;
+  {
+    size_t depth = 0;
+    for (size_t j = i_; j < t_.size(); ++j) {
+      const Token& tk = t_[j];
+      if (tk.kind == Tok::LParen) {
+        ++depth;
+      } else if (tk.kind == Tok::RParen) {
+        if (depth == 0)
+          break; // this closes the element's own group
+        --depth;
+      } else if (tk.kind == Tok::Word && tk.isWord("DO") && j + 2 < t_.size() &&
+                 t_[j + 1].kind == Tok::Word && t_[j + 2].kind == Tok::Eq) {
+        isIter = true;
+        nested = depth != 0;
+        break;
+      } else if (tk.kind == Tok::Semi || tk.kind == Tok::Eof) {
+        break;
+      }
+    }
+  }
+  if (!isIter) {
+    // A plain parenthesised expression: backtrack and parse normally.
+    i_ = save;
+    return parseExpr();
+  }
+  if (nested) {
+    if (exprDepth_ >= kMaxExprDepth) {
+      d_.error(cur().loc, "datalist nesting is too deep", "(111)");
+      return nullptr;
+    }
+    DepthGuard guard(exprDepth_);
+    ExprP inner = parseDatalistElement(rule);
+    expect(Tok::RParen, rule);
+    return inner;
+  }
+  ExprP expr = parseExpr();
+  if (!expr)
+    return nullptr;
+  if (!atWord("DO")) {
+    i_ = save;
+    return parseExpr();
+  }
+  advance(); // consume DO
+  if (!at(Tok::Word)) {
+    d_.error(cur().loc, "expected control variable name after DO", rule);
+    resync();
+    i_ = save;
+    return parseExpr();
+  }
+  std::string varName = cur().text;
+  advance(); // consume variable name
+  if (!expect(Tok::Eq, rule)) {
+    resync();
+    i_ = save;
+    return parseExpr();
+  }
+  ExprP from = parseExpr();
+  ExprP to = nullptr;
+  ExprP by = nullptr;
+  if (atWord("TO")) {
+    advance();
+    to = parseExpr();
+  } else {
+    d_.error(cur().loc, "expected TO in an iterative datalist", rule);
+    resync();
+    i_ = save;
+    return parseExpr();
+  }
+  if (atWord("BY")) {
+    advance();
+    by = parseExpr();
+  }
+  expect(Tok::RParen, rule);
+  auto iter = std::make_unique<Expr>();
+  iter->kind = Expr::PutIter;
+  iter->loc = expr->loc;
+  iter->putIterExpr = std::move(expr);
+  iter->putIterVar = std::move(varName);
+  iter->putIterFrom = std::move(from);
+  iter->putIterTo = std::move(to);
+  iter->putIterBy = std::move(by);
+  return iter;
+}
 StmtP Parser::parsePut() {
   auto st = std::make_unique<Stmt>();
   st->kind = Stmt::Put;
@@ -4010,59 +4128,7 @@ StmtP Parser::parsePut() {
       if (expect(Tok::LParen, "(109)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            // Check for PUT LIST iteration: ( expr DO var = from TO to [BY by] )
-            if (at(Tok::LParen)) {
-              // Save position to potentially backtrack
-              size_t save = i_;
-              advance(); // consume (
-              ExprP expr = parseExpr();
-              if (atWord("DO")) {
-                // This is a PUT LIST iteration
-                advance(); // consume DO
-                if (!at(Tok::Word)) {
-                  d_.error(cur().loc, "expected control variable name after DO", "(109)");
-                  resync();
-                  return nullptr;
-                }
-                std::string varName = cur().text;
-                advance(); // consume variable name
-                if (!expect(Tok::Eq, "(109)")) {
-                  resync();
-                  return nullptr;
-                }
-                ExprP from = parseExpr();
-                ExprP to = nullptr;
-                ExprP by = nullptr;
-                if (atWord("TO")) {
-                  advance();
-                  to = parseExpr();
-                } else {
-                  d_.error(cur().loc, "expected TO in PUT LIST iteration", "(109)");
-                  resync();
-                  return nullptr;
-                }
-                if (atWord("BY")) {
-                  advance();
-                  by = parseExpr();
-                }
-                expect(Tok::RParen, "(109)");
-                ExprP iter = std::make_unique<Expr>();
-                iter->kind = Expr::PutIter;
-                iter->loc = expr->loc;
-                iter->putIterExpr = std::move(expr);
-                iter->putIterVar = std::move(varName);
-                iter->putIterFrom = std::move(from);
-                iter->putIterTo = std::move(to);
-                iter->putIterBy = std::move(by);
-                st->items.push_back(std::move(iter));
-              } else {
-                // Not a DO iteration, backtrack and parse as regular expression
-                i_ = save;
-                st->items.push_back(parseExpr());
-              }
-            } else {
-              st->items.push_back(parseExpr());
-            }
+            st->items.push_back(parseDatalistElement("(109)"));
             if (!eat(Tok::Comma))
               break;
           }
@@ -4101,7 +4167,7 @@ StmtP Parser::parsePut() {
       if (expect(Tok::LParen, "(106)")) {
         if (!at(Tok::RParen)) {
           for (;;) {
-            st->items.push_back(parseExpr());
+            st->items.push_back(parseDatalistElement("(106)"));
             if (!eat(Tok::Comma))
               break;
           }
@@ -4266,7 +4332,7 @@ bool Parser::parseEditClause(Stmt* st) {
       return false;
     if (!at(Tok::RParen)) {
       for (;;) {
-        st->items.push_back(parseExpr());
+        st->items.push_back(parseDatalistElement("(110)"));
         if (!eat(Tok::Comma))
           break;
       }
@@ -5282,8 +5348,17 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("STREAM") || atWord("PRINT")) {
+    if (atWord("STREAM")) {
+      // STREAM (rule (40)): an unformatted stream file.
       sawStream = true;
+      st->openStream = true;
+      advance();
+      continue;
+    }
+    if (atWord("PRINT")) {
+      // PRINT (rule (40)): a stream file with page/line formatting.
+      sawStream = true;
+      st->openPrint = true;
       advance();
       continue;
     }
@@ -5349,17 +5424,53 @@ StmtP Parser::parseOpen() {
       }
       continue;
     }
-    if (atWord("ENVIRONMENT")) {
-      // ENVIRONMENT (rule 101): implementation-defined file attribute.
-      // Accepted on OPEN as a no-op, like on DECLARE (rule 39).
+    if (atWord("RECSIZE") || atWord("BLKSIZE")) {
+      // RECSIZE(expr)/BLKSIZE(expr) (rule (101)): implementation-defined
+      // record block sizing, accepted as a parsed no-op with no runtime
+      // effect, like the other implementation-dependent OPEN options.
       advance();
+      if (eat(Tok::LParen)) {
+        st->openRecordSizeNoops.push_back(parseExpr());
+        expect(Tok::RParen, "(101)");
+      } else {
+        d_.error(cur().loc, "RECSIZE/BLKSIZE requires a parenthesized argument", "(101)");
+        resync();
+        return nullptr;
+      }
+      continue;
+    }
+    if (atWord("ENVIRONMENT")) {
+      // ENVIRONMENT (rule 101): an implementation-defined file attribute. It
+      // belongs to DECLARE (rule (39)), not to OPEN, so it is recorded here
+      // and diagnosed below.
+      advance();
+      st->openEnvironment = true;
       if (at(Tok::LParen)) skipParen("(101)");
       continue;
     }
-    if (atWord("BUFFERED") || atWord("UNBUFFERED") || atWord("EXCLUSIVE")) {
-      // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
-      // file attributes; accepted with no runtime effect.
+    if (atWord("BUFFERED")) {
+      // BUFFERED (rule (101)): a buffered sequential record file.
       advance();
+      st->openBuffered = true;
+      continue;
+    }
+    if (atWord("UNBUFFERED")) {
+      // UNBUFFERED (rule (101)): an unbuffered sequential record file.
+      advance();
+      st->openUnbuffered = true;
+      continue;
+    }
+    if (atWord("EXCLUSIVE")) {
+      // EXCLUSIVE (rule (101)): exclusive access to a direct update file.
+      advance();
+      st->openExclusive = true;
+      continue;
+    }
+    if (atWord("BACKWARDS")) {
+      // BACKWARDS (rule (101)): a sequential record file is read from the
+      // last record first.
+      advance();
+      st->openBackwards = true;
       continue;
     }
     d_.error(cur().loc, "unexpected token in OPEN statement", "(101)");
@@ -5376,6 +5487,21 @@ StmtP Parser::parseOpen() {
              "(101)");
   else if (st->openUpdate && st->openInput)
     d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
+  // OPEN options (rule (101)): the file-organisation constraints.
+  if (st->openBuffered && st->openUnbuffered)
+    d_.error(st->loc, "BUFFERED and UNBUFFERED are mutually exclusive", "(101)");
+  if ((st->openBuffered || st->openUnbuffered) && !st->openRecord)
+    d_.error(st->loc, "BUFFERED/UNBUFFERED require RECORD SEQUENTIAL", "(101)");
+  if (st->openExclusive && (!st->openDirect || !st->openUpdate))
+    d_.error(st->loc, "EXCLUSIVE requires DIRECT UPDATE", "(101)");
+  if (st->openBackwards && (!st->openRecord || !st->openInput))
+    d_.error(st->loc, "BACKWARDS requires RECORD SEQUENTIAL INPUT", "(101)");
+  // PAGESIZE (rule (101)) is the page size of a formatted stream file; the
+  // check needs the file's PRINT attribute, so sema diagnoses it.
+  // ENVIRONMENT (rule (101)) names an implementation-defined file attribute;
+  // it is a DECLARE attribute (rule (39)), not an OPEN option.
+  if (st->openEnvironment)
+    d_.error(st->loc, "ENVIRONMENT is not an OPEN option", "(101)");
 
   expect(Tok::Semi, "(100)");
   return st;

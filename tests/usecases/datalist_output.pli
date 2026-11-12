@@ -1,0 +1,35 @@
+ /* Rules (72),(73),(106),(108),(111): values, names, and live bounds. */
+ datalist_output: procedure options(main);
+   declare a(3) fixed bin(31);
+   declare i fixed bin(31), n fixed bin(31) initial(3);
+   declare calls fixed bin(31) initial(0);
+   declare buf char(200);
+   declare do fixed bin(31) initial(7);
+   a(1) = 5; a(2) = 10; a(3) = 15;
+   put string(buf) edit((((a(i)) do i = 1 to n))) (f(4));
+   if substr(buf,1,12) ^= '   5  10  15' then do;
+     put skip list('FAIL datalist_output: edit', buf); stop;
+   end;
+   put string(buf) edit(((a(i) + 1) * 2 do i = n to 1 by -1))
+     (f(4), x(1));
+   if substr(buf,1,15) ^= '  32   22   12 ' then do;
+     put skip list('FAIL datalist_output: descending', buf); stop;
+   end;
+   put string(buf) edit((a(i) do i = 2 to 1)) (f(4));
+   if buf ^= '' then do;
+     put skip list('FAIL datalist_output: zero trip'); stop;
+   end;
+   put string(buf) data((a(next_index()) do i = 1 to n));
+   if buf ^= 'A(1)=5, A(2)=10, A(3)=15;' | calls ^= 3 then do;
+     put skip list('FAIL datalist_output: data', buf, calls); stop;
+   end;
+   put string(buf) list((do + 1));
+   if substr(buf,1,1) ^= '8' then do;
+     put skip list('FAIL datalist_output: keyword variable'); stop;
+   end;
+   put skip list('PASS datalist_output');
+ next_index: procedure returns(fixed bin(31));
+   calls = calls + 1;
+   return(calls);
+ end next_index;
+ end datalist_output;

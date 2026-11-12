@@ -1,0 +1,5 @@
+ /* Rules (110),(111): DATA iteration requires a variable reference. */
+ bad_datalist_data_expression: procedure options(main);
+   declare i fixed bin(31);
+   put data((i + 1 do i = 1 to 3));
+ end bad_datalist_data_expression;
