@@ -17,8 +17,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #else
-#include <windows.h>
 #include <io.h>
+#include <windows.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -99,14 +99,10 @@ std::string createMemBlob(llvm::StringRef bytes, std::string& err) {
   }
   // Reopen with DELETE_ON_CLOSE and full sharing so lld can open the path.
   fs::path nativePath(path.c_str());
-  HANDLE h = CreateFileW(
-      nativePath.wstring().c_str(),
-      GENERIC_WRITE | DELETE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-      nullptr);
+  HANDLE h =
+      CreateFileW(nativePath.wstring().c_str(), GENERIC_WRITE | DELETE,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                  FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
     llvm::sys::fs::remove(path);
     err = "CreateFileW DELETE_ON_CLOSE failed: " + std::to_string(GetLastError());

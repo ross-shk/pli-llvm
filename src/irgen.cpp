@@ -14,18 +14,18 @@
 #define PLI_LLVM_VERSION "unknown"
 #endif
 
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Config/llvm-config.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/ConstantRange.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -112,7 +112,7 @@ static PliI128 binLitRescaled(const Expr* e, const Type& t) {
   if (t.scale > 0)
     v = v * pli_from_i64(1LL << t.scale);
   else if (t.scale < 0)
-    v = v / pli_from_i64(1LL << -t.scale);  // Negative scale: divide by 2^|q|
+    v = v / pli_from_i64(1LL << -t.scale); // Negative scale: divide by 2^|q|
   if (e->kind == Expr::DecLit && e->decScale > 0)
     v = v / pliPow10_128(e->decScale);
   return v;
@@ -274,8 +274,8 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
         if (m->ty.isArray() && m->ty.isDynamic())
           maxBytes = std::max(maxBytes, (unsigned)mod_.getDataLayout().getPointerSize());
         else
-          maxBytes = std::max(maxBytes,
-                              (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(m->ty)));
+          maxBytes =
+              std::max(maxBytes, (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(m->ty)));
       }
       return llvm::ArrayType::get(b_.getInt8Ty(), maxBytes);
     }
@@ -293,11 +293,11 @@ llvm::Type* IRGen::llvmTy(const Type& t) {
     // `__attribute__((packed))` record (ADR-169).
     return llvm::StructType::get(ctx_, mts, t.unaligned);
   }
-   case TK::Pointer:
-   case TK::Offset: // an OFFSET is an opaque locator (rule (22))
-   case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
-   case TK::Entry:  // an ENTRY value is a procedure pointer (ADR-171)
-   case TK::Label:  // a LABEL variable holds an IR block address (rule (21))
+  case TK::Pointer:
+  case TK::Offset: // an OFFSET is an opaque locator (rule (22))
+  case TK::Area:   // an AREA is a pointer to the runtime region (rule (20))
+  case TK::Entry:  // an ENTRY value is a procedure pointer (ADR-171)
+  case TK::Label:  // a LABEL variable holds an IR block address (rule (21))
     return b_.getPtrTy();
   case TK::Task:
   case TK::Event:
@@ -429,28 +429,24 @@ Val IRGen::emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc) {
   // (zero-padded on the left) by numeric value. No i128 is introduced.
   Val A = a, Bv = b;
   if (A.ty.isBit() && A.ty.len == 1 && !A.reg->getType()->isArrayTy()) {
-    llvm::Value* byte = b_.CreateSelect(A.reg, b_.getInt8((int8_t)0x80),
-                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Value* byte = b_.CreateSelect(A.reg, b_.getInt8((int8_t)0x80), b_.getInt8(0), "bcmp.b1");
     llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
     A.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.a1");
-  } else if (A.ty.isBit() && A.ty.len <= 64 &&
-             !A.reg->getType()->isArrayTy()) {
+  } else if (A.ty.isBit() && A.ty.len <= 64 && !A.reg->getType()->isArrayTy()) {
     A.reg = unpackBitValue(A.reg, A.ty.len, loc);
   }
   if (Bv.ty.isBit() && Bv.ty.len == 1 && !Bv.reg->getType()->isArrayTy()) {
-    llvm::Value* byte = b_.CreateSelect(Bv.reg, b_.getInt8((int8_t)0x80),
-                                        b_.getInt8(0), "bcmp.b1");
+    llvm::Value* byte = b_.CreateSelect(Bv.reg, b_.getInt8((int8_t)0x80), b_.getInt8(0), "bcmp.b1");
     llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), 1);
     Bv.reg = b_.CreateInsertValue(llvm::UndefValue::get(arrTy), byte, (unsigned)0, "bcmp.b1");
-  } else if (Bv.ty.isBit() && Bv.ty.len <= 64 &&
-             !Bv.reg->getType()->isArrayTy()) {
+  } else if (Bv.ty.isBit() && Bv.ty.len <= 64 && !Bv.reg->getType()->isArrayTy()) {
     Bv.reg = unpackBitValue(Bv.reg, Bv.ty.len, loc);
   }
 
   Val v;
   v.ty = Type::bit(1);
   const int na = A.ty.len, nb = Bv.ty.len;
-  const int N  = std::max(na, nb);
+  const int N = std::max(na, nb);
   const int Bn = (N + 7) / 8;
 
   // Normalize each operand into an N-bit (Bn-byte) left-justified representation
@@ -459,16 +455,18 @@ Val IRGen::emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc) {
   // <= 64 integer-pack comparison (pack is right-justified).
   auto normalize = [&](const Val& x, int nx) -> llvm::Value* {
     const int Bx = (nx + 7) / 8;
-    const int S  = N - nx;
+    const int S = N - nx;
     llvm::Type* arrTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)Bn);
     llvm::Value* out = llvm::UndefValue::get(arrTy);
     for (int j = 0; j < Bn; ++j) {
       llvm::Value* byte = b_.getInt8(0);
       for (int t = 0; t < 8; ++t) {
         const int L = j * 8 + t - S; // original local bit index
-        if (L < 0 || L >= nx) continue;
+        if (L < 0 || L >= nx)
+          continue;
         const int bi = L / 8;
-        if (bi >= Bx) continue;
+        if (bi >= Bx)
+          continue;
         llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
         if (bi == Bx - 1) {
           const int keep = nx - 8 * (Bx - 1);
@@ -501,33 +499,48 @@ Val IRGen::emitBitCmp(const Val& a, const Val& b, Tok op, SourceLoc loc) {
       llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
       acc = b_.CreateAnd(acc, b_.CreateICmpEQ(av, bv, "bcmp.eq"), "bcmp.acc");
     }
-    if (op == Tok::Ne) acc = b_.CreateNot(acc, "bcmp.ne");
+    if (op == Tok::Ne)
+      acc = b_.CreateNot(acc, "bcmp.ne");
     v.reg = acc;
     return v;
   }
 
   llvm::Value* equalSoFar = b_.getTrue();
-  llvm::Value* less       = b_.getFalse();
+  llvm::Value* less = b_.getFalse();
   for (int k = 0; k < Bn; ++k) {
     llvm::Value* av = b_.CreateExtractValue(An.reg, (unsigned)k, "bcmp.a");
     llvm::Value* bv = b_.CreateExtractValue(BnV.reg, (unsigned)k, "bcmp.b");
     llvm::Value* eq = b_.CreateICmpEQ(av, bv, "bcmp.oeq");
     llvm::Value* lt = b_.CreateICmpULT(av, bv, "bcmp.olt");
     llvm::Value* diff = b_.CreateAnd(equalSoFar, b_.CreateNot(eq, "bcmp.oneq"), "bcmp.diff");
-    less       = b_.CreateSelect(diff, lt, less, "bcmp.less");
+    less = b_.CreateSelect(diff, lt, less, "bcmp.less");
     equalSoFar = b_.CreateAnd(equalSoFar, eq, "bcmp.eqsf");
   }
 
   llvm::Value* res = nullptr;
   switch (op) {
-    case Tok::Lt:  res = less; break;
-    case Tok::Le:  res = b_.CreateOr(less, equalSoFar, "bcmp.le"); break;
-    case Tok::Gt:  res = b_.CreateAnd(b_.CreateNot(less, "bcmp.ngt"),
-                                       b_.CreateNot(equalSoFar, "bcmp.neq"), "bcmp.gt"); break;
-    case Tok::Ge:  res = b_.CreateNot(less, "bcmp.ge"); break;
-    case Tok::Ngt: res = b_.CreateOr(less, equalSoFar, "bcmp.ngt2"); break;
-    case Tok::Nlt: res = b_.CreateNot(less, "bcmp.nlt"); break;
-    default:       res = b_.getFalse(); break;
+  case Tok::Lt:
+    res = less;
+    break;
+  case Tok::Le:
+    res = b_.CreateOr(less, equalSoFar, "bcmp.le");
+    break;
+  case Tok::Gt:
+    res = b_.CreateAnd(b_.CreateNot(less, "bcmp.ngt"), b_.CreateNot(equalSoFar, "bcmp.neq"),
+                       "bcmp.gt");
+    break;
+  case Tok::Ge:
+    res = b_.CreateNot(less, "bcmp.ge");
+    break;
+  case Tok::Ngt:
+    res = b_.CreateOr(less, equalSoFar, "bcmp.ngt2");
+    break;
+  case Tok::Nlt:
+    res = b_.CreateNot(less, "bcmp.nlt");
+    break;
+  default:
+    res = b_.getFalse();
+    break;
   }
   v.reg = res;
   return v;
@@ -849,7 +862,7 @@ static const std::map<std::string, RtAttr>& kRuntimeAttrs() {
       {"pli_on_push_error", {.mem = RtMemOtherMod}},
       {"pli_empty_area", {.willReturn = true, .alwaysInline = true, .mem = RtMemNone}},
       {"pli_put_edit_pic", {.willReturn = true, .alwaysInline = true, .mem = RtMemOtherMod}},
-    };
+  };
   return table;
 }
 
@@ -1060,14 +1073,17 @@ bool IRGen::hasLLVMLowering(const std::string& op) { return pli::hasLLVMLowering
 
 // The lowering policy as --print-facts prints it: the base mode, then any
 // per-operation override (ADR-260).
-static std::string loweringModeName(LowerMode mode,
-                                    const std::map<std::string, LowerMode>& perOp) {
+static std::string loweringModeName(LowerMode mode, const std::map<std::string, LowerMode>& perOp) {
   auto name = [](LowerMode m) -> const char* {
     switch (m) {
-    case LowerMode::Runtime: return "runtime";
-    case LowerMode::LLVM: return "llvm";
-    case LowerMode::MLIR: return "mlir";
-    case LowerMode::Auto: return "auto";
+    case LowerMode::Runtime:
+      return "runtime";
+    case LowerMode::LLVM:
+      return "llvm";
+    case LowerMode::MLIR:
+      return "mlir";
+    case LowerMode::Auto:
+      return "auto";
     }
     return "auto";
   };
@@ -1115,9 +1131,7 @@ pli::InlineDecision IRGen::inlineDecision(const std::string& op, const pli::Call
   return d;
 }
 
-bool IRGen::runtimePath(const std::string& op) {
-  return inlineDecision(op, {}).library();
-}
+bool IRGen::runtimePath(const std::string& op) { return inlineDecision(op, {}).library(); }
 
 bool IRGen::useRuntimeCall(const std::string& op, const pli::CallSite& site) {
   pli::InlineDecision d = inlineDecision(op, site);
@@ -1126,9 +1140,15 @@ bool IRGen::useRuntimeCall(const std::string& op, const pli::CallSite& site) {
   // shows a per-call-site path flip (ADR-254, WS-K2).
   std::string pathName;
   switch (d.path) {
-    case pli::InlinePath::ConstantTable: pathName = "table"; break;
-    case pli::InlinePath::LLVM:          pathName = "llvm";   break;
-    case pli::InlinePath::Library:       pathName = "runtime";break;
+  case pli::InlinePath::ConstantTable:
+    pathName = "table";
+    break;
+  case pli::InlinePath::LLVM:
+    pathName = "llvm";
+    break;
+  case pli::InlinePath::Library:
+    pathName = "runtime";
+    break;
   }
   // Record the decision so --print-facts can show it (ADR-260), with the
   // reason the decision layer gave (ADR-254).
@@ -1151,8 +1171,8 @@ void IRGen::emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* s
   emitAssignCharLLVM(dst, dstLen, src, srcLen);
 }
 
-llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
-                              llvm::Value* bLen, const pli::CallSite& site) {
+llvm::Value* IRGen::emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen,
+                              const pli::CallSite& site) {
   if (useRuntimeCall("index", site)) {
     return b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen});
   }
@@ -1569,8 +1589,10 @@ void IRGen::emitTrim(llvm::Value* dst, llvm::Value* dstcap, llvm::Value* s, llvm
 llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
                               llvm::ArrayRef<llvm::Type*> params) {
   llvm::Function* f = llvm::cast<llvm::Function>(
-      b_.GetInsertBlock()->getModule()->getOrInsertFunction(name,
-          llvm::FunctionType::get(ret, params, false)).getCallee());
+      b_.GetInsertBlock()
+          ->getModule()
+          ->getOrInsertFunction(name, llvm::FunctionType::get(ret, params, false))
+          .getCallee());
   f->addFnAttr(llvm::Attribute::NoUnwind);
   f->addFnAttr(llvm::Attribute::WillReturn);
   f->addFnAttr(llvm::Attribute::NoFree);
@@ -1584,8 +1606,7 @@ llvm::Function* IRGen::scanFn(const std::string& name, llvm::Type* ret,
 // P7.2: detect a constant string needle (pointer to a private GlobalVariable
 // initializer that is a ConstantDataArray of i8 with known content).
 // Returns the pointer-stripped global + the byte span, or nullptr.
-static std::pair<llvm::GlobalVariable*, llvm::StringRef>
-extractConstantNeedle(llvm::Value* v) {
+static std::pair<llvm::GlobalVariable*, llvm::StringRef> extractConstantNeedle(llvm::Value* v) {
   if (auto* gv = llvm::dyn_cast<llvm::GlobalVariable>(v->stripPointerCasts())) {
     if (gv->isConstant()) {
       if (auto* ca = llvm::dyn_cast<llvm::ConstantDataArray>(gv->getInitializer())) {
@@ -1632,8 +1653,7 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
     // x86 path compare a fixed-width vector.
     if (auto* blenC = llvm::dyn_cast<llvm::ConstantInt>(bLen)) {
       uint64_t realLen = blenC->getZExtValue();
-      if (realLen >= 1 && realLen <= 16 &&
-          tgtTriple.getArch() == llvm::Triple::x86_64)
+      if (realLen >= 1 && realLen <= 16 && tgtTriple.getArch() == llvm::Triple::x86_64)
         return emitIndexConstantSSE2(a, aLen, b, bLen, (unsigned char)str[0], realLen);
     }
     uint64_t nlen = str.size();
@@ -1685,15 +1705,15 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   llvm::Value* b0 = b_.CreateLoad(b_.getInt8Ty(), b, "idx.b0");
   llvm::Value* b032 = b_.CreateZExt(b0, b_.getInt32Ty(), "idx.b032");
 
-  llvm::Function* memchrFn = scanFn("memchr", b_.getPtrTy(),
-                                      {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
+  llvm::Function* memchrFn =
+      scanFn("memchr", b_.getPtrTy(), {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
   llvm::CallInst* foundCall = b_.CreateCall(memchrFn, {a, b032, aLen64}, "idx.memchr");
   foundCall->addFnAttr(llvm::Attribute::Speculatable);
   llvm::Value* found = foundCall;
 
   // found == null -> no match -> return 0
-  llvm::Value* foundNull = b_.CreateICmpEQ(
-      found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
+  llvm::Value* foundNull =
+      b_.CreateICmpEQ(found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
 
   // pos = found - a (candidate position in haystack)
   llvm::Value* foundInt = b_.CreatePtrToInt(found, b_.getInt64Ty(), "idx.found_int");
@@ -1713,8 +1733,8 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   llvm::Value* safePos = b_.CreateSelect(shouldExit, zero, pos, "idx.safe_pos");
   llvm::Value* safeLen = b_.CreateSelect(shouldExit, zero, bLen64, "idx.safe_len");
   llvm::Value* aPosPtr = b_.CreateGEP(b_.getInt8Ty(), a, {safePos}, "idx.apos_ptr");
-  llvm::Function* memcmpFn = scanFn("memcmp", b_.getInt32Ty(),
-                                      {b_.getPtrTy(), b_.getPtrTy(), b_.getInt64Ty()});
+  llvm::Function* memcmpFn =
+      scanFn("memcmp", b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy(), b_.getInt64Ty()});
   llvm::CallInst* cmpCall = b_.CreateCall(memcmpFn, {aPosPtr, b, safeLen}, "idx.memcmp");
   cmpCall->addFnAttr(llvm::Attribute::Speculatable);
   llvm::Value* cmp = cmpCall;
@@ -1740,8 +1760,7 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   // slow_path: first candidate didn't match -> delegate to runtime pli_index
   // (handles arbitrary needle patterns with full correctness).
   startBlock(slowPathBB);
-  llvm::Value* slowResult =
-      b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen}, "idx.slow");
+  llvm::Value* slowResult = b_.CreateCall(runtimeFn("pli_index"), {a, aLen, b, bLen}, "idx.slow");
   b_.CreateBr(exitBB);
 
   // exit: merge all result values.
@@ -1752,7 +1771,7 @@ llvm::Value* IRGen::emitIndexLLVM(llvm::Value* a, llvm::Value* aLen, llvm::Value
   resultPhi->addIncoming(matchResult, matchBB);
   resultPhi->addIncoming(slowResult, slowPathBB);
 
-   return resultPhi;
+  return resultPhi;
 }
 
 // SSE2-accelerated INDEX for a constant needle on x86-64. glibc's memchr is
@@ -1773,8 +1792,7 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
   llvm::Value* firstVec = llvm::ConstantVector::getSplat(
       llvm::ElementCount::get(16, false), llvm::ConstantInt::get(b_.getInt8Ty(), first));
   llvm::Value* firstScalar = llvm::ConstantInt::get(b_.getInt8Ty(), first);
-  llvm::Function* memcmpFn =
-      scanFn("memcmp", b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy(), i64});
+  llvm::Function* memcmpFn = scanFn("memcmp", b_.getInt32Ty(), {b_.getPtrTy(), b_.getPtrTy(), i64});
 
   // The CFG: guards, a 16-byte scan loop, a scalar tail, and one verify block.
   llvm::BasicBlock* ret1BB = llvm::BasicBlock::Create(ctx_, "idx.ret1", F);
@@ -1804,16 +1822,15 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
   llvm::PHINode* pos = b_.CreatePHI(i64, 4, "idx.pos");
   pos->addIncoming(zero, checkBB);
   llvm::Value* rem = b_.CreateSub(aLen64, pos, "idx.rem");
-  b_.CreateCondBr(b_.CreateICmpUGE(rem, llvm::ConstantInt::get(i64, 16), "idx.can_vec"),
-                  vecBB, tailBB);
+  b_.CreateCondBr(b_.CreateICmpUGE(rem, llvm::ConstantInt::get(i64, 16), "idx.can_vec"), vecBB,
+                  tailBB);
 
   startBlock(vecBB);
   llvm::Value* vecPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.vec_ptr");
   llvm::Value* hayVec = b_.CreateAlignedLoad(vecTy, vecPtr, llvm::Align(1), "idx.hay_vec");
   llvm::Value* cmpVec = b_.CreateICmpEQ(hayVec, firstVec, "idx.cmp_vec");
   llvm::Value* bits = b_.CreateBitCast(cmpVec, b_.getInt16Ty(), "idx.bits");
-  b_.CreateCondBr(b_.CreateICmpNE(bits, llvm::ConstantInt::get(b_.getInt16Ty(), 0),
-                                  "idx.any"),
+  b_.CreateCondBr(b_.CreateICmpNE(bits, llvm::ConstantInt::get(b_.getInt16Ty(), 0), "idx.any"),
                   vecFoundBB, vecNextBB);
 
   startBlock(vecNextBB);
@@ -1824,8 +1841,7 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
   startBlock(vecFoundBB);
   llvm::Function* cttz = llvm::Intrinsic::getOrInsertDeclaration(
       b_.GetInsertBlock()->getModule(), llvm::Intrinsic::cttz, {b_.getInt16Ty()});
-  llvm::Value* off16 =
-      b_.CreateCall(cttz, {bits, b_.getFalse()}, "idx.off16");
+  llvm::Value* off16 = b_.CreateCall(cttz, {bits, b_.getFalse()}, "idx.off16");
   llvm::Value* off = b_.CreateZExt(off16, i64, "idx.off");
   llvm::Value* vecCand = b_.CreateAdd(pos, off, "idx.vec_cand");
   b_.CreateBr(verifyBB);
@@ -1835,8 +1851,7 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
   startBlock(tailCheckBB);
   llvm::Value* tailPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.tail_ptr");
   llvm::Value* tailCh = b_.CreateLoad(b_.getInt8Ty(), tailPtr, "idx.tail_ch");
-  b_.CreateCondBr(b_.CreateICmpEQ(tailCh, firstScalar, "idx.tail_first"),
-                  verifyBB, tailNextBB);
+  b_.CreateCondBr(b_.CreateICmpEQ(tailCh, firstScalar, "idx.tail_first"), verifyBB, tailNextBB);
   startBlock(tailNextBB);
   llvm::Value* afterByte = b_.CreateAdd(pos, one, "idx.next_byte");
   b_.CreateBr(loopBB);
@@ -1852,10 +1867,9 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
 
   startBlock(verifyMemBB);
   llvm::Value* candPtr = b_.CreateGEP(b_.getInt8Ty(), a, {cand}, "idx.cand_ptr");
-  llvm::Value* cmp = b_.CreateCall(
-      memcmpFn, {candPtr, b, llvm::ConstantInt::get(i64, needleLen)}, "idx.memcmp");
-  b_.CreateCondBr(b_.CreateICmpEQ(cmp, llvm::ConstantInt::get(b_.getInt32Ty(), 0),
-                                  "idx.cmp_eq"),
+  llvm::Value* cmp =
+      b_.CreateCall(memcmpFn, {candPtr, b, llvm::ConstantInt::get(i64, needleLen)}, "idx.memcmp");
+  b_.CreateCondBr(b_.CreateICmpEQ(cmp, llvm::ConstantInt::get(b_.getInt32Ty(), 0), "idx.cmp_eq"),
                   matchBB, verifyNextBB);
   startBlock(verifyNextBB);
   llvm::Value* afterCand = b_.CreateAdd(cand, one, "idx.next_cand");
@@ -1897,7 +1911,7 @@ llvm::Value* IRGen::emitIndexConstantSSE2(llvm::Value* a, llvm::Value* aLen, llv
 // which compares a 16-byte haystack against a needle in one hardware
 // instruction; on ARM64 the cmeq approach is the equivalent. Both are
 // gated on the target triple in emitIndexLLVM's dispatch.
-llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,                                           llvm::Value* /*b*/,
+llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen, llvm::Value* /*b*/,
                                           llvm::Value* bLen, llvm::StringRef needleStr) {
   llvm::Function* F = b_.GetInsertBlock()->getParent();
   llvm::Value* zero = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
@@ -1909,20 +1923,19 @@ llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,    
   // <16 x i8> needle vector (zero-padded) + mask (first n bytes 0xFF).
   std::vector<llvm::Constant*> needleElems, maskElems;
   for (uint64_t i = 0; i < 16; ++i) {
-    needleElems.push_back(llvm::ConstantInt::get(
-        b_.getInt8Ty(), i < needleLen ? (uint8_t)needleStr[i] : 0));
-    maskElems.push_back(llvm::ConstantInt::get(
-        b_.getInt8Ty(), i < needleLen ? 0xFF : 0x00));
+    needleElems.push_back(
+        llvm::ConstantInt::get(b_.getInt8Ty(), i < needleLen ? (uint8_t)needleStr[i] : 0));
+    maskElems.push_back(llvm::ConstantInt::get(b_.getInt8Ty(), i < needleLen ? 0xFF : 0x00));
   }
   llvm::Value* needleVec = llvm::ConstantVector::get(needleElems);
   llvm::Value* maskVec = llvm::ConstantVector::get(maskElems);
   llvm::VectorType* vecTy = llvm::VectorType::get(b_.getInt8Ty(), 16, false);
-  llvm::Value* zeroVec = llvm::ConstantVector::getSplat(
-      llvm::ElementCount::get(16, false), llvm::ConstantInt::get(b_.getInt8Ty(), 0));
+  llvm::Value* zeroVec = llvm::ConstantVector::getSplat(llvm::ElementCount::get(16, false),
+                                                        llvm::ConstantInt::get(b_.getInt8Ty(), 0));
 
   // memchr function: reused for finding first-char candidates.
-  llvm::Function* memchrFn = scanFn("memchr", b_.getPtrTy(),
-                                    {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
+  llvm::Function* memchrFn =
+      scanFn("memchr", b_.getPtrTy(), {b_.getPtrTy(), b_.getInt32Ty(), b_.getInt64Ty()});
   uint64_t firstChar = needleLen > 0 ? (uint8_t)needleStr[0] : 0;
 
   // Capture the current insertion block — it's the predecessor of searchBB
@@ -1946,7 +1959,7 @@ llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,    
 
   // Entry: blen <= 0 → ret1; else search
   llvm::Value* blenLe0 = b_.CreateICmpULE(bLen64, zero, "idx.blenle0");
-  b_.CreateCondBr(blenLe0, ret1BB, searchBB);  // callerBB is predecessor
+  b_.CreateCondBr(blenLe0, ret1BB, searchBB); // callerBB is predecessor
 
   startBlock(ret1BB);
   b_.CreateBr(exitBB);
@@ -1965,8 +1978,8 @@ llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,    
   llvm::Value* found = foundCall;
 
   // found == null → ret0 (no more candidates)
-  llvm::Value* foundNull = b_.CreateICmpEQ(
-      found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
+  llvm::Value* foundNull =
+      b_.CreateICmpEQ(found, llvm::ConstantPointerNull::get(b_.getPtrTy()), "idx.found_null");
   b_.CreateCondBr(foundNull, ret0BB, verifyBB);
 
   startBlock(verifyBB);
@@ -1980,8 +1993,7 @@ llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,    
   // are stack allocas with fixed size and the mask zeroes irrelevant bytes,
   // this is safe after SROA.
   llvm::Value* aPosPtr = b_.CreateGEP(b_.getInt8Ty(), a, {pos}, "idx.apos_ptr");
-  llvm::Value* hayVec =
-      b_.CreateAlignedLoad(vecTy, aPosPtr, llvm::Align(1), "idx.hay_vec");
+  llvm::Value* hayVec = b_.CreateAlignedLoad(vecTy, aPosPtr, llvm::Align(1), "idx.hay_vec");
   llvm::Value* diff = b_.CreateXor(hayVec, needleVec, "idx.diff");
 
   // AND with mask to isolate needle-length bytes: result is 0 where byte
@@ -1993,8 +2005,7 @@ llvm::Value* IRGen::emitIndexConstantNEON(llvm::Value* a, llvm::Value* aLen,    
   llvm::Value* bits = b_.CreateBitCast(matchVec, llvm::Type::getIntNTy(ctx_, 16), "idx.bits");
   // Create a mask with the first needleLen bits set (e.g., needleLen=8 → 0xFF)
   uint32_t matchMaskVal = (1u << needleLen) - 1;
-  llvm::Value* matchMask =
-      llvm::ConstantInt::get(b_.getInt16Ty(), matchMaskVal);
+  llvm::Value* matchMask = llvm::ConstantInt::get(b_.getInt16Ty(), matchMaskVal);
   llvm::Value* maskedBits = b_.CreateAnd(bits, matchMask, "idx.masked_bits");
   llvm::Value* allMatch = b_.CreateICmpEQ(maskedBits, matchMask, "idx.all_match");
 
@@ -3017,8 +3028,8 @@ llvm::Value* IRGen::emitFixedOfFloatLLVM(llvm::Value* x) {
 // rt_stream.c pli_fixed_char_parts. Accumulates up to 38 significant digits
 // in i256 and up to 76 fractional digits; a second decimal point or trailing
 // text ends the scan. *ok=0 on no digits or digit overflow.
-llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
-                                           llvm::Value* okSlot, llvm::Value* fracSlot) {
+llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen, llvm::Value* okSlot,
+                                           llvm::Value* fracSlot) {
   llvm::Function* F = b_.GetInsertBlock()->getParent();
   llvm::Type* i256Ty = b_.getIntNTy(256);
   llvm::Value* zero64 = llvm::ConstantInt::get(b_.getInt64Ty(), 0);
@@ -3120,30 +3131,26 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   // fractional digits increment *frac even when they are leading zeros.
   auto emitDigitBody = [&](bool fractional) {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.d_i");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_ptr"), "fxc.d_c");
+    llvm::Value* c =
+        b_.CreateLoad(b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.d_ptr"), "fxc.d_c");
     llvm::Value* dig8 = b_.CreateSub(c, zeroCh, "fxc.d_sub");
     llvm::Value* dig32 = b_.CreateZExt(dig8, b_.getInt32Ty(), "fxc.dig32");
     llvm::Value* dig256 = b_.CreateZExt(dig8, i256Ty, "fxc.dig256");
     llvm::Value* seen = b_.CreateLoad(b_.getInt1Ty(), seenSlot, "fxc.seen");
-    llvm::Value* sig = b_.CreateOr(seen, b_.CreateICmpNE(dig32, zero32, "fxc.nonzero"),
-                                   "fxc.sig");
+    llvm::Value* sig = b_.CreateOr(seen, b_.CreateICmpNE(dig32, zero32, "fxc.nonzero"), "fxc.sig");
     llvm::Value* digits = b_.CreateLoad(b_.getInt32Ty(), digitsSlot, "fxc.digits");
     llvm::Value* frac = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.frac");
     llvm::Value* overflow = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ov");
-    llvm::Value* capDigits = b_.CreateAnd(sig, b_.CreateICmpUGE(digits, maxDigits, "fxc.capd"),
-                                          "fxc.cap_digits");
-    llvm::Value* capFrac =
-        fractional ? b_.CreateICmpUGE(frac, maxFrac, "fxc.capf") : b_.getFalse();
+    llvm::Value* capDigits =
+        b_.CreateAnd(sig, b_.CreateICmpUGE(digits, maxDigits, "fxc.capd"), "fxc.cap_digits");
+    llvm::Value* capFrac = fractional ? b_.CreateICmpUGE(frac, maxFrac, "fxc.capf") : b_.getFalse();
     llvm::Value* cap = b_.CreateOr(capDigits, capFrac, "fxc.cap");
     llvm::Value* canAcc = b_.CreateAnd(b_.CreateNot(overflow), b_.CreateNot(cap), "fxc.canacc");
     llvm::Value* all = b_.CreateLoad(i256Ty, allSlot, "fxc.all");
-    llvm::Value* nv = b_.CreateAdd(b_.CreateMul(all, ten256, "fxc.mul10"), dig256,
-                                   "fxc.adddig");
+    llvm::Value* nv = b_.CreateAdd(b_.CreateMul(all, ten256, "fxc.mul10"), dig256, "fxc.adddig");
     b_.CreateStore(b_.CreateSelect(canAcc, nv, all, "fxc.all_next"), allSlot, false);
     llvm::Value* newDigits = b_.CreateAdd(digits, one32, "fxc.digits_next");
-    b_.CreateStore(b_.CreateSelect(b_.CreateAnd(canAcc, sig), newDigits, digits,
-                                   "fxc.digits_sel"),
+    b_.CreateStore(b_.CreateSelect(b_.CreateAnd(canAcc, sig), newDigits, digits, "fxc.digits_sel"),
                    digitsSlot, false);
     llvm::Value* newOverflow = b_.CreateOr(overflow, cap, "fxc.ov_next");
     if (fractional) {
@@ -3162,8 +3169,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ib_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ib_cond");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ib_ptr"), "fxc.ib_c");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ib_ptr"), "fxc.ib_c");
     llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.ib_ge0"),
                                         b_.CreateICmpULE(c, nineCh, "fxc.ib_le9"), "fxc.is_digit");
     b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ib_cont"), intBodyBB, dotBB);
@@ -3179,8 +3186,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.dot_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.dot_cond");
-    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
-                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.dot_ptr"), "fxc.dot_c");
+    llvm::Value* c = b_.CreateLoad(
+        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.dot_ptr"), "fxc.dot_c");
     llvm::Value* isDot = b_.CreateICmpEQ(c, dotCh, "fxc.is_dot");
     llvm::Value* hadDot = b_.CreateLoad(b_.getInt1Ty(), dotSlot, "fxc.had_dot");
     llvm::Value* take = b_.CreateAnd(
@@ -3200,8 +3207,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.fb_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.fb_cond");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.fb_ptr"), "fxc.fb_c");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.fb_ptr"), "fxc.fb_c");
     llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.fb_ge0"),
                                         b_.CreateICmpULE(c, nineCh, "fxc.fb_le9"), "fxc.fb_digit");
     b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.fb_cont"), fracBodyBB, checkBB);
@@ -3224,14 +3231,11 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   startBlock(expMarkBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.em_i");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.em_ptr"), "fxc.em_c");
-    llvm::Value* isExp =
-        b_.CreateOr(b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'),
-                                    "fxc.em_e"),
-                    b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'),
-                                    "fxc.em_E"),
-                    "fxc.em_is");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.em_ptr"), "fxc.em_c");
+    llvm::Value* isExp = b_.CreateOr(
+        b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'e'), "fxc.em_e"),
+        b_.CreateICmpEQ(c, llvm::ConstantInt::get(b_.getInt8Ty(), 'E'), "fxc.em_E"), "fxc.em_is");
     llvm::Value* next = b_.CreateAdd(i, one64, "fxc.em_next");
     b_.CreateStore(b_.CreateSelect(isExp, next, i, "fxc.em_idx"), idxSlot, false);
     b_.CreateCondBr(isExp, expSignBB, finishBB);
@@ -3240,8 +3244,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.es_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.es_range");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.es_ptr"), "fxc.es_c");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.es_ptr"), "fxc.es_c");
     llvm::Value* isPlus = b_.CreateICmpEQ(c, plus, "fxc.es_plus");
     llvm::Value* isMinus = b_.CreateICmpEQ(c, minus, "fxc.es_minus");
     llvm::Value* hasSign =
@@ -3255,21 +3259,19 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ef_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.ef_range");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ef_ptr"), "fxc.ef_c");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ef_ptr"), "fxc.ef_c");
     llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.ef_ge0"),
-                                        b_.CreateICmpULE(c, nineCh, "fxc.ef_le9"),
-                                        "fxc.ef_dig");
-    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ef_cont"), expFirstBodyBB,
-                    expFailBB);
+                                        b_.CreateICmpULE(c, nineCh, "fxc.ef_le9"), "fxc.ef_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.ef_cont"), expFirstBodyBB, expFailBB);
   }
   startBlock(expFirstBodyBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.efb_i");
     llvm::Value* c = b_.CreateLoad(
         b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.efb_ptr"), "fxc.efb_c");
-    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.efb_sub"),
-                                   b_.getInt32Ty(), "fxc.efb_d");
+    llvm::Value* d =
+        b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.efb_sub"), b_.getInt32Ty(), "fxc.efb_d");
     b_.CreateStore(d, expSlot, false);
     b_.CreateStore(b_.CreateAdd(i, one64, "fxc.efb_next"), idxSlot, false);
     b_.CreateBr(expBodyBB);
@@ -3278,27 +3280,24 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.eb_i");
     llvm::Value* inRange = b_.CreateICmpULT(i, slen64, "fxc.eb_range");
-    llvm::Value* c = b_.CreateLoad(
-        b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.eb_ptr"), "fxc.eb_c");
+    llvm::Value* c = b_.CreateLoad(b_.getInt8Ty(),
+                                   b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.eb_ptr"), "fxc.eb_c");
     llvm::Value* isDigit = b_.CreateAnd(b_.CreateICmpUGE(c, zeroCh, "fxc.eb_ge0"),
-                                        b_.CreateICmpULE(c, nineCh, "fxc.eb_le9"),
-                                        "fxc.eb_dig");
-    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.eb_cont"), expBodyBodyBB,
-                    expApplyBB);
+                                        b_.CreateICmpULE(c, nineCh, "fxc.eb_le9"), "fxc.eb_dig");
+    b_.CreateCondBr(b_.CreateAnd(inRange, isDigit, "fxc.eb_cont"), expBodyBodyBB, expApplyBB);
   }
   startBlock(expBodyBodyBB);
   {
     llvm::Value* i = b_.CreateLoad(b_.getInt64Ty(), idxSlot, "fxc.ebb_i");
     llvm::Value* c = b_.CreateLoad(
         b_.getInt8Ty(), b_.CreateGEP(b_.getInt8Ty(), s, {i}, "fxc.ebb_ptr"), "fxc.ebb_c");
-    llvm::Value* d = b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.ebb_sub"),
-                                   b_.getInt32Ty(), "fxc.ebb_d");
+    llvm::Value* d =
+        b_.CreateZExt(b_.CreateSub(c, zeroCh, "fxc.ebb_sub"), b_.getInt32Ty(), "fxc.ebb_d");
     llvm::Value* e = b_.CreateLoad(b_.getInt32Ty(), expSlot, "fxc.ebb_e");
-    llvm::Value* next = b_.CreateAdd(b_.CreateMul(e, i32(10), "fxc.ebb_mul"), d,
-                                     "fxc.ebb_add");
+    llvm::Value* next = b_.CreateAdd(b_.CreateMul(e, i32(10), "fxc.ebb_mul"), d, "fxc.ebb_add");
     // Saturate past the parser's scale range; expApply rejects it as malformed.
-    llvm::Value* capped = b_.CreateSelect(
-        b_.CreateICmpUGT(next, i32(1000), "fxc.ebb_over"), i32(1000), next, "fxc.ebb_cap");
+    llvm::Value* capped = b_.CreateSelect(b_.CreateICmpUGT(next, i32(1000), "fxc.ebb_over"),
+                                          i32(1000), next, "fxc.ebb_cap");
     b_.CreateStore(capped, expSlot, false);
     b_.CreateStore(b_.CreateAdd(i, one64, "fxc.ebb_next"), idxSlot, false);
     b_.CreateBr(expBodyBB);
@@ -3313,9 +3312,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
         b_.CreateSelect(neg, e, b_.CreateSub(i32(0), e, "fxc.ea_neg_e"), "fxc.ea_signed");
     llvm::Value* eff = b_.CreateAdd(frac, signedExp, "fxc.ea_eff");
     llvm::Value* negMaxFrac = b_.CreateSub(i32(0), maxFrac, "fxc.ea_negmax");
-    llvm::Value* inRange =
-        b_.CreateAnd(b_.CreateICmpSGE(eff, negMaxFrac, "fxc.ea_lo"),
-                     b_.CreateICmpSLE(eff, maxFrac, "fxc.ea_hi"), "fxc.ea_in");
+    llvm::Value* inRange = b_.CreateAnd(b_.CreateICmpSGE(eff, negMaxFrac, "fxc.ea_lo"),
+                                        b_.CreateICmpSLE(eff, maxFrac, "fxc.ea_hi"), "fxc.ea_in");
     // A zero mantissa is representable at any exponent (0e999 is 0).
     llvm::Value* allNow = b_.CreateLoad(i256Ty, allSlot, "fxc.ea_all");
     llvm::Value* zeroMag = b_.CreateICmpEQ(allNow, zero256, "fxc.ea_zero");
@@ -3339,8 +3337,8 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
   {
     llvm::Value* saw = b_.CreateLoad(b_.getInt1Ty(), sawSlot, "fxc.saw");
     llvm::Value* overflow = b_.CreateLoad(b_.getInt1Ty(), overflowSlot, "fxc.ov_final");
-    llvm::Value* okVal = b_.CreateZExt(
-        b_.CreateAnd(saw, b_.CreateNot(overflow), "fxc.ok"), b_.getInt32Ty(), "fxc.ok_val");
+    llvm::Value* okVal = b_.CreateZExt(b_.CreateAnd(saw, b_.CreateNot(overflow), "fxc.ok"),
+                                       b_.getInt32Ty(), "fxc.ok_val");
     b_.CreateStore(okVal, okSlot, false);
     llvm::Value* all = b_.CreateLoad(i256Ty, allSlot, "fxc.all_load");
     llvm::Value* isNeg = b_.CreateLoad(b_.getInt1Ty(), negSlot, "fxc.neg_load");
@@ -3352,8 +3350,7 @@ llvm::Value* IRGen::emitFixedCharPartsLLVM(llvm::Value* s, llvm::Value* slen,
 // Shared character parse (rule (123)): parse the signed significant digits and
 // the fraction count (adjusted by an exponent), raising CONVERSION (rule 94)
 // on unparseable text. The resume value is the parsed prefix.
-llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
-                                  llvm::Value* fracSlot) {
+llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen, llvm::Value* fracSlot) {
   llvm::Value* okSlot = entryAlloca(b_.getInt32Ty(), "fxc.ok");
   llvm::Value* all;
   if (useRuntimeCall("fixed_of_char")) {
@@ -3364,10 +3361,10 @@ llvm::Value* IRGen::emitCharParts(llvm::Value* s, llvm::Value* slen,
     llvm::Type* pairTy = llvm::StructType::get(ctx_, {b_.getInt64Ty(), b_.getInt64Ty()});
     llvm::Value* outSlot = entryAlloca(pairTy, "fxc.parts");
     b_.CreateCall(runtimeFn("pli_fixed_char_parts"), {s, slen, okSlot, fracSlot, outSlot});
-    llvm::Value* lo = b_.CreateLoad(
-        b_.getInt64Ty(), b_.CreateStructGEP(pairTy, outSlot, 0, "fxc.lo.ptr"), "fxc.lo");
-    llvm::Value* hi = b_.CreateLoad(
-        b_.getInt64Ty(), b_.CreateStructGEP(pairTy, outSlot, 1, "fxc.hi.ptr"), "fxc.hi");
+    llvm::Value* lo = b_.CreateLoad(b_.getInt64Ty(),
+                                    b_.CreateStructGEP(pairTy, outSlot, 0, "fxc.lo.ptr"), "fxc.lo");
+    llvm::Value* hi = b_.CreateLoad(b_.getInt64Ty(),
+                                    b_.CreateStructGEP(pairTy, outSlot, 1, "fxc.hi.ptr"), "fxc.hi");
     llvm::Value* shift = llvm::ConstantInt::get(i128Ty, 64);
     llvm::Value* all128 = b_.CreateOr(
         b_.CreateZExt(lo, i128Ty, "fxc.lo.z"),
@@ -3424,8 +3421,8 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   // A negative fraction count means the exponent moved the point right:
   // multiply the digits now and leave a 1 divisor for the rescale below.
   llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.frac.neg");
-  llvm::Value* fracAbs = b_.CreateSelect(
-      negFrac, b_.CreateSub(i32(0), frac32, "fxc.frac.abs"), frac32, "fxc.frac.mag");
+  llvm::Value* fracAbs = b_.CreateSelect(negFrac, b_.CreateSub(i32(0), frac32, "fxc.frac.abs"),
+                                         frac32, "fxc.frac.mag");
   llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.frac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.pow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.pow_body", curFn_);
@@ -3464,8 +3461,7 @@ Val IRGen::emitFixedFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
     wideMagTrap(raw, dst.prec);
   } else {
     // Binary target: all * 2^q / 10^f, truncated toward zero.
-    llvm::Value* scaled =
-        b_.CreateMul(magScaled, intPowConst(i512Ty, 2, dst.scale), "fxc.bin.mul");
+    llvm::Value* scaled = b_.CreateMul(magScaled, intPowConst(i512Ty, 2, dst.scale), "fxc.bin.mul");
     llvm::Value* q = b_.CreateSDiv(scaled, div10, "fxc.bin.q");
     raw = b_.CreateSelect(isNeg, b_.CreateSub(zero512, q, "fxc.bin.neg"), q, "fxc.bin.raw");
     raw = fixedBinPrecTrap(raw, dst.prec);
@@ -3498,8 +3494,8 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   llvm::Value* frac32 = b_.CreateLoad(b_.getInt32Ty(), fracSlot, "fxc.ffrac.load");
   // A negative fraction count means the exponent moved the point right.
   llvm::Value* negFrac = b_.CreateICmpSLT(frac32, i32(0), "fxc.ffrac.neg");
-  llvm::Value* fracAbs = b_.CreateSelect(
-      negFrac, b_.CreateSub(i32(0), frac32, "fxc.ffrac.abs"), frac32, "fxc.ffrac.mag");
+  llvm::Value* fracAbs = b_.CreateSelect(negFrac, b_.CreateSub(i32(0), frac32, "fxc.ffrac.abs"),
+                                         frac32, "fxc.ffrac.mag");
   llvm::Value* frac64 = b_.CreateZExt(fracAbs, b_.getInt64Ty(), "fxc.ffrac64");
   llvm::BasicBlock* powBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow", curFn_);
   llvm::BasicBlock* powBodyBB = llvm::BasicBlock::Create(ctx_, "fxc.fpow_body", curFn_);
@@ -3527,8 +3523,8 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
   auto magToDouble = [&](llvm::Value* v, const char* nm) {
     llvm::Value* d = llvm::ConstantFP::get(b_.getDoubleTy(), 0.0);
     for (int limb = 3; limb >= 0; --limb) {
-      llvm::Value* sh = b_.CreateLShr(
-          v, llvm::ConstantInt::get(i256Ty, 64 * limb), std::string(nm) + ".sh");
+      llvm::Value* sh =
+          b_.CreateLShr(v, llvm::ConstantInt::get(i256Ty, 64 * limb), std::string(nm) + ".sh");
       llvm::Value* l = b_.CreateTrunc(sh, b_.getInt64Ty(), std::string(nm) + ".lo");
       llvm::Value* ld = b_.CreateUIToFP(l, b_.getDoubleTy(), std::string(nm) + ".d");
       d = b_.CreateFAdd(b_.CreateFMul(d, two64, std::string(nm) + ".mul"), ld,
@@ -3537,11 +3533,10 @@ Val IRGen::emitFloatFromChar(llvm::Value* s, llvm::Value* slen, const Type& dst)
     return d;
   };
   llvm::Value* allNeg = b_.CreateICmpSLT(all, zero256, "fxc.fneg");
-  llvm::Value* allMag = b_.CreateSelect(
-      allNeg, b_.CreateSub(zero256, all, "fxc.fmag.neg"), all, "fxc.fmag");
+  llvm::Value* allMag =
+      b_.CreateSelect(allNeg, b_.CreateSub(zero256, all, "fxc.fmag.neg"), all, "fxc.fmag");
   llvm::Value* digits = magToDouble(allMag, "fxc.fdigits");
-  digits = b_.CreateSelect(allNeg, b_.CreateFNeg(digits, "fxc.fneg.d"), digits,
-                           "fxc.fsigned");
+  digits = b_.CreateSelect(allNeg, b_.CreateFNeg(digits, "fxc.fneg.d"), digits, "fxc.fsigned");
   llvm::Value* scale = magToDouble(pow10, "fxc.fscale");
   Val v;
   v.ty = dst;
@@ -3726,8 +3721,8 @@ llvm::Function* IRGen::runtimeFn(const std::string& name) {
 // call in generated IR disagrees with the runtime body on Windows.
 void IRGen::emitWideDecOut(const char* fn, llvm::Value* wideReg, long long scale) {
   llvm::Value* lo = b_.CreateTrunc(wideReg, b_.getInt64Ty(), "wdec.lo");
-  llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(wideReg, (uint64_t)64, "wdec.shr"),
-                                   b_.getInt64Ty(), "wdec.hi");
+  llvm::Value* hi =
+      b_.CreateTrunc(b_.CreateLShr(wideReg, (uint64_t)64, "wdec.shr"), b_.getInt64Ty(), "wdec.hi");
   deferCall(fn, {lo, hi, i64(scale)});
 }
 
@@ -3764,8 +3759,7 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn, bool 
   const std::vector<llvm::Function*>& handlers = it->second;
   llvm::Function* F = llvm::Function::Create(
       llvm::FunctionType::get(b_.getVoidTy(), false), llvm::GlobalValue::InternalLinkage,
-      "pli_on_trap." + (abortFn.compare(0, 4, "pli_") == 0 ? abortFn.substr(4) : abortFn),
-      &mod_);
+      "pli_on_trap." + (abortFn.compare(0, 4, "pli_") == 0 ? abortFn.substr(4) : abortFn), &mod_);
   F->addFnAttr(llvm::Attribute::Cold);
   F->addFnAttr(llvm::Attribute::NoInline);
   trapDispatch_[key] = F;
@@ -3778,8 +3772,8 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn, bool 
   // The slot lives in this function's entry block, so a trap in a loop does
   // not grow the caller's stack (ADR-263).
   llvm::AllocaInst* ctxSlot = b_.CreateAlloca(b_.getPtrTy(), nullptr, "on.ctxslot");
-  llvm::Value* top = b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot},
-                                    "on.top");
+  llvm::Value* top =
+      b_.CreateCall(runtimeFn("pli_on_top_pair"), {i64((long long)key), ctxSlot}, "on.top");
   llvm::Value* topCtx = b_.CreateLoad(b_.getPtrTy(), ctxSlot, "on.ctx");
   llvm::Value* none = b_.CreateICmpEQ(top, i64(0), "on.none");
   llvm::BasicBlock* abortBB = llvm::BasicBlock::Create(ctx_, "on.abort", F);
@@ -3801,8 +3795,7 @@ llvm::Function* IRGen::onTrapDispatch(int key, const std::string& abortFn, bool 
   llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.ret", F);
   llvm::SwitchInst* sw = b_.CreateSwitch(top, retBB, handlers.size());
   for (size_t i = 0; i < handlers.size(); ++i) {
-    llvm::BasicBlock* hbb =
-        llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), F);
+    llvm::BasicBlock* hbb = llvm::BasicBlock::Create(ctx_, "on.handle." + std::to_string(i + 1), F);
     sw->addCase(llvm::ConstantInt::get(b_.getInt64Ty(), (long long)i + 1), hbb);
     b_.SetInsertPoint(hbb);
     b_.CreateCall(handlers[i], {topCtx});
@@ -3950,7 +3943,8 @@ void IRGen::emitErrorRaise() {
   llvm::Value* fnSlot = entryAlloca(b_.getPtrTy(), "on.ctxslot");
   llvm::Value* fn = b_.CreateCall(runtimeFn("pli_on_top_fn_pair"), {i64(0), fnSlot}, "ontopfn");
   llvm::Value* ctx = b_.CreateLoad(b_.getPtrTy(), fnSlot, "ontopctx");
-  llvm::Value* none = b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
+  llvm::Value* none =
+      b_.CreateICmpEQ(fn, llvm::Constant::getNullValue(b_.getPtrTy()), "onnosystem");
   llvm::BasicBlock* defBB = llvm::BasicBlock::Create(ctx_, "on.default", curFn_);
   llvm::BasicBlock* dspBB = llvm::BasicBlock::Create(ctx_, "on.dispatch", curFn_);
   b_.CreateCondBr(none, defBB, dspBB);
@@ -3977,8 +3971,7 @@ void IRGen::emitStringrangeCheck(const Val& start, const Val& len, llvm::Value* 
   // start < 1, len < 0, or len reaches past the source's current length.
   llvm::Value* lo = b_.CreateICmpSLT(start64, one, "sr.lo");
   llvm::Value* neg = b_.CreateICmpSLT(len64, zero, "sr.neg");
-  llvm::Value* avail =
-      b_.CreateSub(srclen64, b_.CreateSub(start64, one, "sr.start0"), "sr.avail");
+  llvm::Value* avail = b_.CreateSub(srclen64, b_.CreateSub(start64, one, "sr.start0"), "sr.avail");
   llvm::Value* past = b_.CreateICmpSGT(len64, avail, "sr.past");
   llvm::Value* bad = b_.CreateOr(b_.CreateOr(lo, neg, "sr.bad1"), past, "sr.bad");
   std::string id = std::to_string(n_++);
@@ -4535,33 +4528,33 @@ std::string IRGen::run(HProgram& prog) {
   // C entry point: initialise the runtime, invoke the MAIN procedure,
   // terminate normally (this is where FINISH would be raised, see M5).
   if (prog.mainProc) {
-     llvm::Function* main = llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
-                                                   llvm::Function::ExternalLinkage, "main", &mod_);
-     llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, "entry", main);
-     b_.SetInsertPoint(bb);
-     b_.CreateCall(runtimeFn("pli_rt_init"), {});
-     llvm::Function* mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
-     if (!mfn) {
-       mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
-                                    llvm::Function::InternalLinkage, prog.mainProc->irName.substr(1),
-                                    &mod_);
-       llvm::BasicBlock* mb = llvm::BasicBlock::Create(ctx_, "entry", mfn);
-       b_.SetInsertPoint(mb);
-       b_.CreateRetVoid();
-     }
-     // Noinline: the optimizer's interprocedural analysis on the inlined body
-     // can mis-reason about opaque pli_* pseudo-variable calls (set_pageno /
-     // pageno) and collapse main() to unreachable. Keeping the MAIN proc as a
-     // call boundary preserves correct control flow through pli_rt_fini.
-     mfn->addFnAttr(llvm::Attribute::NoInline);
-     b_.SetInsertPoint(bb);
-     // ADR-234: the MAIN procedure runs as a task on worker 0, so the
-     // scheduler can multiplex it with the program's tasks. In the legacy
-     // pthread model pli_sched_main calls the entry directly and nothing
-     // changes.
-     b_.CreateCall(runtimeFn("pli_sched_main"), {b_.CreateBitCast(mfn, b_.getPtrTy())});
-     b_.CreateCall(runtimeFn("pli_rt_fini"), {});
-     b_.CreateRet(i32(0));
+    llvm::Function* main = llvm::Function::Create(llvm::FunctionType::get(b_.getInt32Ty(), false),
+                                                  llvm::Function::ExternalLinkage, "main", &mod_);
+    llvm::BasicBlock* bb = llvm::BasicBlock::Create(ctx_, "entry", main);
+    b_.SetInsertPoint(bb);
+    b_.CreateCall(runtimeFn("pli_rt_init"), {});
+    llvm::Function* mfn = mod_.getFunction(prog.mainProc->irName.substr(1));
+    if (!mfn) {
+      mfn = llvm::Function::Create(llvm::FunctionType::get(b_.getVoidTy(), false),
+                                   llvm::Function::InternalLinkage, prog.mainProc->irName.substr(1),
+                                   &mod_);
+      llvm::BasicBlock* mb = llvm::BasicBlock::Create(ctx_, "entry", mfn);
+      b_.SetInsertPoint(mb);
+      b_.CreateRetVoid();
+    }
+    // Noinline: the optimizer's interprocedural analysis on the inlined body
+    // can mis-reason about opaque pli_* pseudo-variable calls (set_pageno /
+    // pageno) and collapse main() to unreachable. Keeping the MAIN proc as a
+    // call boundary preserves correct control flow through pli_rt_fini.
+    mfn->addFnAttr(llvm::Attribute::NoInline);
+    b_.SetInsertPoint(bb);
+    // ADR-234: the MAIN procedure runs as a task on worker 0, so the
+    // scheduler can multiplex it with the program's tasks. In the legacy
+    // pthread model pli_sched_main calls the entry directly and nothing
+    // changes.
+    b_.CreateCall(runtimeFn("pli_sched_main"), {b_.CreateBitCast(mfn, b_.getPtrTy())});
+    b_.CreateCall(runtimeFn("pli_rt_fini"), {});
+    b_.CreateRet(i32(0));
   }
 
   // Bitcode runtime (OPTIMIZATION.md §10, P3): link the pli_* definitions the
@@ -4619,8 +4612,8 @@ bool IRGen::linkRuntimeBitcode() {
     d_.error({}, "internal error: no embedded runtime for target '" + triple_ + "'", "");
     return false;
   }
-  llvm::MemoryBufferRef buf(
-      llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_runtime.bc");
+  llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
+                            "pli_runtime.bc");
   auto modOrErr = llvm::parseBitcodeFile(buf, ctx_);
   if (!modOrErr) {
     d_.error({}, "internal error: cannot parse the embedded runtime bitcode", "");
@@ -4637,9 +4630,10 @@ bool IRGen::linkRuntimeBitcode() {
       if (llvm::ConstantDataArray* s = llvm::dyn_cast<llvm::ConstantDataArray>(init))
         stamp = s->getAsCString().str(); // strips the trailing NUL
   if (stamp != PLI_LLVM_VERSION) {
-    d_.error({}, "runtime bitcode '" + rtName + "' was built with LLVM " + stamp +
-                     " but pli with LLVM " PLI_LLVM_VERSION +
-                     " — rebuild pli (the runtime is embedded)",
+    d_.error({},
+             "runtime bitcode '" + rtName + "' was built with LLVM " + stamp +
+                 " but pli with LLVM " PLI_LLVM_VERSION +
+                 " — rebuild pli (the runtime is embedded)",
              "");
     return false;
   }
@@ -4718,9 +4712,10 @@ bool IRGen::linkRuntimeBitcode() {
     std::unique_ptr<llvm::Module> plat =
         pli::loadPlatformModule(ctx_, llvm::Triple(triple_), platformBc_, platErr);
     if (!plat) {
-      d_.error({}, "internal error: " + (platErr.empty() ? "no embedded platform runtime for target '" +
-                                                                   triple_ + "'"
-                                                         : platErr),
+      d_.error({},
+               "internal error: " +
+                   (platErr.empty() ? "no embedded platform runtime for target '" + triple_ + "'"
+                                    : platErr),
                "");
       return false;
     }
@@ -5015,26 +5010,25 @@ void IRGen::allocaLocals(HProc* p) {
       a = entryAlloca(llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(s->ty)),
                       s->irName.substr(1));
     } else {
-     a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
-     }
-     // P2: tag plain AUTOMATIC allocas with alias-disjoint facts so LLVM
-     // knows loads through this pointer cannot be clobbered by calls or
-     // stores via unrelated pointers (exercises LICM + LAA). Only plain
-     // automatic locals qualify — the alias taxonomy (ADR-265) decides which
-     // those are, in one place. All scopes share one domain per function so
-     // the facts compare; scalar loads/stores stamp the matching
-     // !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
-     if (pli::aliasClass(s) == pli::AliasClass::Disjoint) {
-       if (!aliasDomain_)
-         aliasDomain_ = mdb.createAnonymousAliasScopeDomain("pli");
-       llvm::MDNode* scope = mdb.createAnonymousAliasScope(aliasDomain_, "plain-automatic");
-       aliasScopes_.push_back(scope);
-       aliasScopeOf_[s] = scope;
-       llvm::AllocaInst* ai = llvm::cast<llvm::AllocaInst>(a);
-       ai->setMetadata(llvm::LLVMContext::MD_noalias,
-                        llvm::MDNode::get(ctx_, {scope}));
-     }
-     symAddr_[s] = a;
+      a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
+    }
+    // P2: tag plain AUTOMATIC allocas with alias-disjoint facts so LLVM
+    // knows loads through this pointer cannot be clobbered by calls or
+    // stores via unrelated pointers (exercises LICM + LAA). Only plain
+    // automatic locals qualify — the alias taxonomy (ADR-265) decides which
+    // those are, in one place. All scopes share one domain per function so
+    // the facts compare; scalar loads/stores stamp the matching
+    // !alias.scope/!noalias via annotateAlias. (ADR-002: IRGen only.)
+    if (pli::aliasClass(s) == pli::AliasClass::Disjoint) {
+      if (!aliasDomain_)
+        aliasDomain_ = mdb.createAnonymousAliasScopeDomain("pli");
+      llvm::MDNode* scope = mdb.createAnonymousAliasScope(aliasDomain_, "plain-automatic");
+      aliasScopes_.push_back(scope);
+      aliasScopeOf_[s] = scope;
+      llvm::AllocaInst* ai = llvm::cast<llvm::AllocaInst>(a);
+      ai->setMetadata(llvm::LLVMContext::MD_noalias, llvm::MDNode::get(ctx_, {scope}));
+    }
+    symAddr_[s] = a;
     // Constant scalar INITIAL/VALUE stores at once (rule 26): dynamic bound
     // expressions below load locals, and the store must dominate those loads
     // even without optimization. emitInitials skips these (same helper).
@@ -5049,8 +5043,7 @@ void IRGen::allocaLocals(HProc* p) {
       llvm::ArrayType* arrTy =
           s->ty.isArray() ? llvm::ArrayType::get(b_.getPtrTy(), (unsigned)n) : nullptr;
       for (long long i = 0; i < n; ++i) {
-        llvm::Value* slot =
-            arrTy ? b_.CreateInBoundsGEP(arrTy, a, {i64(0), i64(i)}, "ar.i") : a;
+        llvm::Value* slot = arrTy ? b_.CreateInBoundsGEP(arrTy, a, {i64(0), i64(i)}, "ar.i") : a;
         llvm::Value* region =
             b_.CreateCall(runtimeFn("pli_area_create"), {i64(s->areaSize)}, "area");
         b_.CreateStore(region, slot);
@@ -5141,8 +5134,7 @@ void IRGen::allocaLocals(HProc* p) {
   // storage of its own (it stays out of localSyms). Subscripting and the
   // array built-ins then check against the live extent.
   for (Symbol* s : sema_.storage()) {
-    if (s->kind != Symbol::Var || !s->ty.isDynamic() ||
-        (!s->basedBase && !s->basedNoPtr))
+    if (s->kind != Symbol::Var || !s->ty.isDynamic() || (!s->basedBase && !s->basedNoPtr))
       continue;
     if (s->owner != p->src)
       continue;
@@ -5454,8 +5446,8 @@ void IRGen::emitLabelElemInits() {
       flat += (e.subs[k] - arr.dims[k].lb) * stride;
       stride *= (long long)(arr.dims[k].ub - arr.dims[k].lb + 1);
     }
-    llvm::Value* addr = b_.CreateInBoundsGEP(llvmTy(arr.elementType()), addressOf(e.sym),
-                                             {i64(flat)}, "lelem");
+    llvm::Value* addr =
+        b_.CreateInBoundsGEP(llvmTy(arr.elementType()), addressOf(e.sym), {i64(flat)}, "lelem");
     b_.CreateStore(llvm::BlockAddress::get(curFn_, e.bb), addr);
   }
 }
@@ -5486,14 +5478,14 @@ llvm::Value* IRGen::onExitDepth(const std::string& label) {
 // Conservative: only non-recursive internal procs with plain params
 // (no adjustable arrays, CHAR(*), BASED, CONTROLLED, DEFINED, or STATIC).
 bool IRGen::inlineInternal(const HProc* p) const {
-  if (p->isRecursive || p->isMain || p->isExternal || p->isPackage
-      || !p->entryNames.empty() || !inlineProcs())
+  if (p->isRecursive || p->isMain || p->isExternal || p->isPackage || !p->entryNames.empty() ||
+      !inlineProcs())
     return false;
   for (const Symbol* prm : p->paramSyms) {
     if (!prm)
       continue;
-    if (prm->ty.isArray() || isStarLen(prm->ty) || prm->isBased()
-        || prm->controlled || prm->definedBase || prm->isStatic)
+    if (prm->ty.isArray() || isStarLen(prm->ty) || prm->isBased() || prm->controlled ||
+        prm->definedBase || prm->isStatic)
       return false;
   }
   return true;
@@ -5528,15 +5520,14 @@ bool IRGen::exprTakesAddr(HExpr* e, Symbol* s) const {
     return true; // a scalar parameter is never subscripted; defensive
   if (e->kind == HExpr::VarRef && e->sym == s)
     return !e->memberPath.empty() || (bool)e->locPtr; // qualified refs need an address
-  if (e->kind == HExpr::Call && (e->name == "ADDR" || e->name == "BYADDR" ||
-                                 e->name == "OMITTED" || e->name == "PRESENT")) {
+  if (e->kind == HExpr::Call &&
+      (e->name == "ADDR" || e->name == "BYADDR" || e->name == "OMITTED" || e->name == "PRESENT")) {
     for (auto& a : e->args)
       if (exprMentions(a.get(), s))
         return true;
     return false;
   }
-  if (e->kind == HExpr::Call && e->sym &&
-      (e->sym->proc || e->sym->isEntry || e->sym->isEntryVar)) {
+  if (e->kind == HExpr::Call && e->sym && (e->sym->proc || e->sym->isEntry || e->sym->isEntryVar)) {
     // A user, external-entry, or entry-variable call: a bare VarRef argument
     // rides by reference (argAddr), so the address escapes there.
     for (auto& a : e->args) {
@@ -5591,9 +5582,8 @@ bool IRGen::stmtTakesAddr(HStmt* st, Symbol* s) const {
       if (exprTakesAddr(it.get(), s))
         return true;
   }
-  if (st->stringTarget &&
-      ((st->kind == HStmt::Put && targetTakes(st->stringTarget.get())) ||
-       (st->kind != HStmt::Put && exprTakesAddr(st->stringTarget.get(), s))))
+  if (st->stringTarget && ((st->kind == HStmt::Put && targetTakes(st->stringTarget.get())) ||
+                           (st->kind != HStmt::Put && exprTakesAddr(st->stringTarget.get(), s))))
     return true;
   for (auto& a : st->args) {
     HExpr* arg = a.get();
@@ -5615,8 +5605,7 @@ bool IRGen::stmtTakesAddr(HStmt* st, Symbol* s) const {
       exprTakesAddr(st->priorityExpr.get(), s) || exprTakesAddr(st->oncodeExpr.get(), s))
     return true;
   for (auto& f : st->formats)
-    if (exprTakesAddr(f.w.get(), s) || exprTakesAddr(f.d.get(), s) ||
-        exprTakesAddr(f.s.get(), s))
+    if (exprTakesAddr(f.w.get(), s) || exprTakesAddr(f.d.get(), s) || exprTakesAddr(f.s.get(), s))
       return true;
   for (auto& b : st->allocBase)
     if (exprTakesAddr(b.get(), s))
@@ -5702,8 +5691,7 @@ void IRGen::computeWholeProgramFacts(const HProgram& prog) {
     if ((e->kind == HExpr::VarRef || e->kind == HExpr::Subscript) && e->sym)
       return e->sym;
     // A pseudo-variable target writes its first argument's storage.
-    if (e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR") &&
-        !e->args.empty())
+    if (e->kind == HExpr::Call && (e->name == "UNSPEC" || e->name == "SUBSTR") && !e->args.empty())
       return rootOf(e->args[0].get());
     return nullptr;
   };
@@ -5879,8 +5867,8 @@ void IRGen::computeWholeProgramFacts(const HProgram& prog) {
   for (auto& p : prog.procs) {
     HProc* proc = p.get();
     bool eligible = !proc->isMain && !proc->isExternal && !proc->isPackage &&
-                    proc->entryNames.empty() && inlineProcs() &&
-                    !addrTaken.count(proc) && !asyncCalled.count(proc);
+                    proc->entryNames.empty() && inlineProcs() && !addrTaken.count(proc) &&
+                    !asyncCalled.count(proc);
     if (eligible)
       for (auto& st : proc->body)
         if (st && st->kind == HStmt::Entry) {
@@ -5973,8 +5961,7 @@ void IRGen::declareProc(HProc* p) {
   // A multi-entry procedure's shared implementation always returns void and
   // writes the current segment's result through a hidden result pointer; each
   // thunk owns a buffer of its entry's own result type (rule (56), ADR-359).
-  llvm::Type* implRet =
-      (sret || !p->isFunction) ? b_.getVoidTy() : llvmTy(p->retTy);
+  llvm::Type* implRet = (sret || !p->isFunction) ? b_.getVoidTy() : llvmTy(p->retTy);
   std::vector<HStmt*> entries;
   for (auto& st : p->body)
     if (st && st->kind == HStmt::Entry)
@@ -5991,8 +5978,7 @@ void IRGen::declareProc(HProc* p) {
     for (size_t i = 0; i < p->paramSyms.size(); ++i)
       // P6.1b (ADR-215): read-only scalar params ride by value so the
       // optimizer sees SSA arguments (const-prop folds bounded recursion).
-      pt.push_back(isByValueParam(p->paramSyms[i]) ? llvmTy(p->paramSyms[i]->ty)
-                                                   : b_.getPtrTy());
+      pt.push_back(isByValueParam(p->paramSyms[i]) ? llvmTy(p->paramSyms[i]->ty) : b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
       if (isAdjustable(s))
         pt.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
@@ -6062,8 +6048,7 @@ void IRGen::declareProc(HProc* p) {
         sig.push_back(b_.getInt64Ty()); // hidden `*` extent / CHAR(*) length args
     for (size_t i = 0; i < p->env.size(); ++i)
       sig.push_back(b_.getPtrTy()); // links
-    llvm::Type* trty =
-        sret ? b_.getVoidTy() : (valued ? llvmTy(rty) : b_.getVoidTy());
+    llvm::Type* trty = sret ? b_.getVoidTy() : (valued ? llvmTy(rty) : b_.getVoidTy());
     llvm::FunctionType* tft = llvm::FunctionType::get(trty, sig, false);
     llvm::Function* tf = llvm::Function::Create(tft, llvm::Function::InternalLinkage,
                                                 "entry.thunk." + std::to_string(thunkN++), &mod_);
@@ -6108,8 +6093,7 @@ void IRGen::declareProc(HProc* p) {
     return tf;
   };
 
-  llvm::Function* t0 = thunk(p->paramSyms, i64(0),
-                             p->isFunction ? p->retTy : Type::voidTy());
+  llvm::Function* t0 = thunk(p->paramSyms, i64(0), p->isFunction ? p->retTy : Type::voidTy());
   t0->setName(p->irName.substr(1));
   // Rule (42): the primary entry thunk of an external procedure is the
   // link-visible symbol; the shared impl stays module-private.
@@ -6301,7 +6285,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
                                  i64((long long)s->ctlSlot), hv, "ctlkey");
 
   allocaLocals(p);
-  emitInitials(p); // INITIAL attribute on AUTOMATIC variables (rule 26)
+  emitInitials(p);      // INITIAL attribute on AUTOMATIC variables (rule 26)
   emitLabelElemInits(); // rule (65) label-array prefixes
   recordDynParamUbs(p->paramSyms);
 
@@ -6600,53 +6584,45 @@ static bool hasGotoStmt(HStmt* s) {
 llvm::GlobalVariable* IRGen::escapeCodeGlobal() {
   if (auto* g = mod_.getNamedGlobal("onEscapeCode"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeCode");
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeCode");
 }
 llvm::GlobalVariable* IRGen::escapeRetKindGlobal() {
   if (auto* g = mod_.getNamedGlobal("onEscapeRetKind"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeRetKind");
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeRetKind");
 }
 llvm::GlobalVariable* IRGen::escapeRetI64Global() {
   if (auto* g = mod_.getNamedGlobal("onEscapeRetI64"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetI64");
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetI64");
 }
 llvm::GlobalVariable* IRGen::escapeRetF64Global() {
   if (auto* g = mod_.getNamedGlobal("onEscapeRetF64"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getDoubleTy(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "onEscapeRetF64");
+  return new llvm::GlobalVariable(mod_, b_.getDoubleTy(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantFP::get(b_.getDoubleTy(), 0.0), "onEscapeRetF64");
 }
 llvm::GlobalVariable* IRGen::escapeRetBufGlobal() {
   if (auto* g = mod_.getNamedGlobal("onEscapeRetBuf"))
     return g;
-  return new llvm::GlobalVariable(mod_,
-      llvm::ArrayType::get(b_.getInt8Ty(), 4096), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::Constant::getNullValue(llvm::ArrayType::get(b_.getInt8Ty(), 4096)),
-      "onEscapeRetBuf");
+  return new llvm::GlobalVariable(
+      mod_, llvm::ArrayType::get(b_.getInt8Ty(), 4096), false, llvm::GlobalValue::InternalLinkage,
+      llvm::Constant::getNullValue(llvm::ArrayType::get(b_.getInt8Ty(), 4096)), "onEscapeRetBuf");
 }
 llvm::GlobalVariable* IRGen::escapeRetSizeGlobal() {
   if (auto* g = mod_.getNamedGlobal("onEscapeRetSize"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetSize");
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeRetSize");
 }
 llvm::GlobalVariable* IRGen::escapeLabelIdxGlobal() {
   if (auto* g = mod_.getNamedGlobal("onEscapeLabelIdx"))
     return g;
-  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false,
-      llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeLabelIdx");
+  return new llvm::GlobalVariable(mod_, b_.getInt32Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeLabelIdx");
 }
 
 // B4: inside a handler unit, RETURN(value) stores the converted value in the
@@ -6659,8 +6635,7 @@ void IRGen::emitEscapeReturn(Val v) {
   // v is already converted to rty by the caller.
   if (rty.isStruct() || rty.isChar()) {
     b_.CreateStore(i32(rty.isStruct() ? 2 : 3), escapeRetKindGlobal());
-    llvm::Value* sz =
-        i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(rty)));
+    llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(rty)));
     b_.CreateStore(sz, escapeRetSizeGlobal());
     llvm::Value* dst = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(), "esc.buf");
     b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
@@ -6717,21 +6692,17 @@ void IRGen::emitEscapeGoto(HStmt* s) {
 void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
   llvm::Value* esc = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc");
   llvm::Value* none = b_.CreateICmpEQ(esc, i32(0), "esc.none");
-  llvm::BasicBlock* escBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+  llvm::BasicBlock* escBB = llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
   b_.CreateCondBr(none, resumeBB, escBB);
   b_.SetInsertPoint(escBB);
   // Switch on the escape code; default is unreachable (should not happen).
-  llvm::BasicBlock* badBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
+  llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
   unsigned numCases = hasHandlerGoto_ ? 2 : 1;
   llvm::SwitchInst* sw = b_.CreateSwitch(esc, badBB, numCases);
-  llvm::BasicBlock* retBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
+  llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
   sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
   if (hasHandlerGoto_) {
-    llvm::BasicBlock* gotoBB =
-        llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
+    llvm::BasicBlock* gotoBB = llvm::BasicBlock::Create(ctx_, "on.escape.goto", curFn_);
     sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
     b_.SetInsertPoint(gotoBB);
     emitEscapeGotoBlock();
@@ -6759,18 +6730,12 @@ void IRGen::emitEscapeReturnBlock() {
     b_.CreateUnreachable();
     return;
   }
-  llvm::Value* kind = b_.CreateLoad(b_.getInt32Ty(), escapeRetKindGlobal(),
-                                    "esc.kind");
-  llvm::BasicBlock* intBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret.int", curFn_);
-  llvm::BasicBlock* fltBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret.flt", curFn_);
-  llvm::BasicBlock* strBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret.str", curFn_);
-  llvm::BasicBlock* chrBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret.chr", curFn_);
-  llvm::BasicBlock* badBB =
-      llvm::BasicBlock::Create(ctx_, "on.escape.ret.bad", curFn_);
+  llvm::Value* kind = b_.CreateLoad(b_.getInt32Ty(), escapeRetKindGlobal(), "esc.kind");
+  llvm::BasicBlock* intBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret.int", curFn_);
+  llvm::BasicBlock* fltBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret.flt", curFn_);
+  llvm::BasicBlock* strBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret.str", curFn_);
+  llvm::BasicBlock* chrBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret.chr", curFn_);
+  llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret.bad", curFn_);
   llvm::SwitchInst* sw = b_.CreateSwitch(kind, badBB, 4);
   sw->addCase(llvm::cast<llvm::ConstantInt>(i32(0)), intBB);
   sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), fltBB);
@@ -6782,8 +6747,7 @@ void IRGen::emitEscapeReturnBlock() {
     // kind 0 = integer/pointer return.
     if (curRetTy_.isFixed() || curRetTy_.isBit() || curRetTy_.isPointer() ||
         curRetTy_.isLocator()) {
-      llvm::Value* v64 = b_.CreateLoad(b_.getInt64Ty(), escapeRetI64Global(),
-                                       "esc.v.i64");
+      llvm::Value* v64 = b_.CreateLoad(b_.getInt64Ty(), escapeRetI64Global(), "esc.v.i64");
       llvm::Type* retLLVM = llvmTy(curRetTy_);
       llvm::Value* retVal = v64;
       if (retLLVM->isIntegerTy()) {
@@ -6804,8 +6768,7 @@ void IRGen::emitEscapeReturnBlock() {
   {
     // kind 1 = float return.
     if (curRetTy_.k == TK::Float) {
-      llvm::Value* vd = b_.CreateLoad(b_.getDoubleTy(), escapeRetF64Global(),
-                                      "esc.v.f64");
+      llvm::Value* vd = b_.CreateLoad(b_.getDoubleTy(), escapeRetF64Global(), "esc.v.f64");
       llvm::Type* retLLVM = llvmTy(curRetTy_);
       llvm::Value* retVal = vd;
       if (retLLVM != b_.getDoubleTy())
@@ -6819,10 +6782,8 @@ void IRGen::emitEscapeReturnBlock() {
   {
     // kind 2 = struct return.
     if (curRetTy_.isStruct() && structRetPtr_) {
-      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
-                                      "esc.v.sz");
-      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
-                                          "esc.buf");
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(), "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(), "esc.buf");
       llvm::Value* dst = structRetPtr_;
       b_.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(), sz);
       b_.CreateRetVoid();
@@ -6835,12 +6796,9 @@ void IRGen::emitEscapeReturnBlock() {
     // kind 3 = char return.
     if (curRetTy_.isChar() && structRetPtr_) {
       // Character result: copy into the hidden result buffer, pad/truncate.
-      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(),
-                                      "esc.v.sz");
-      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(),
-                                          "esc.buf");
-      storeCharTo(structRetPtr_, curRetTy_, Val{curRetTy_, nullptr, src, sz},
-                  SourceLoc{});
+      llvm::Value* sz = b_.CreateLoad(b_.getInt64Ty(), escapeRetSizeGlobal(), "esc.v.sz");
+      llvm::Value* src = b_.CreateBitCast(escapeRetBufGlobal(), b_.getPtrTy(), "esc.buf");
+      storeCharTo(structRetPtr_, curRetTy_, Val{curRetTy_, nullptr, src, sz}, SourceLoc{});
       b_.CreateRetVoid();
     } else {
       b_.CreateUnreachable();
@@ -6856,10 +6814,8 @@ void IRGen::emitEscapeGotoBlock() {
   // Restore the handler's own depth (the unit was a block activation).
   if (curOnUnitDepth_)
     b_.CreateCall(runtimeFn("pli_on_reset_error"),
-                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_,
-                                 "onunitdepth")});
-  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(),
-                                   "esc.idx");
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
+  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(), "esc.idx");
   llvm::Value* idx64 = b_.CreateZExt(idx, b_.getInt64Ty(), "esc.idx64");
   // Build an indirect branch whose targets are every label block in this
   // procedure. A select maps the dense index to a blockaddress.
@@ -6874,8 +6830,8 @@ void IRGen::emitEscapeGotoBlock() {
   llvm::Value* target = llvm::ConstantPointerNull::get(b_.getPtrTy());
   for (size_t i = 0; i < dests.size(); ++i) {
     llvm::Value* addr = llvm::BlockAddress::get(curFn_, dests[i]);
-    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"),
-                             addr, target, "esc.addr");
+    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"), addr, target,
+                             "esc.addr");
   }
   auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
   for (llvm::BasicBlock* d : dests)
@@ -6921,7 +6877,7 @@ void IRGen::declareOnHandlers(HProgram& prog) {
     // block, eliminating call/ret overhead on the faulting path.
     if (inlineProcs())
       onHandlers_[keyId.first].back()->addFnAttr(llvm::Attribute::AlwaysInline);
-   }
+  }
 }
 
 // Fill every handler function body. A handler runs without the establishing
@@ -6964,8 +6920,7 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       // An ON unit is a block activation of its own (rule 91; ADR-350): save
       // its entry depth so a unit armed inside it ends when it returns.
       curOnUnitDepth_ = entryAlloca(b_.getInt64Ty(), "onunitdepth");
-      b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}),
-                     curOnUnitDepth_);
+      b_.CreateStore(b_.CreateCall(runtimeFn("pli_on_depth_error"), {}), curOnUnitDepth_);
       // Bind the capture context: the i-th slot holds the address of the i-th
       // collected automatic, in the same order establishment stored them.
       if (!s->onCaps.empty()) {
@@ -7118,10 +7073,8 @@ void IRGen::emitSignal(HStmt* s) {
   if (curProc_->isFunction || hasHandlerGoto_) {
     llvm::Value* escCode = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc.code");
     llvm::Value* escNone = b_.CreateICmpEQ(escCode, i32(0), "esc.none");
-    llvm::BasicBlock* normalBB =
-        llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
-    llvm::BasicBlock* escBB =
-        llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
+    llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
+    llvm::BasicBlock* escBB = llvm::BasicBlock::Create(ctx_, "on.escape", curFn_);
     b_.CreateCondBr(escNone, normalBB, escBB);
     // Normal path: reset oncode, handle overflow, resume.
     b_.SetInsertPoint(normalBB);
@@ -7308,7 +7261,7 @@ void IRGen::emitStmt(HStmt* s) {
       rv.ty = rty;
       storeGetTarget(rt, rv, s->loc);
     }
-// DISPLAY ... EVENT (rule 114): complete the named event once the display
+    // DISPLAY ... EVENT (rule 114): complete the named event once the display
     // (and any REPLY read) has finished, using the shared completion ABI.
     if (s->eventRef) {
       llvm::Value* evAddr = taskEventAddr(s->eventRef.get(), s->loc);
@@ -7411,11 +7364,11 @@ void IRGen::emitStmt(HStmt* s) {
       // then copy each dynamic member's buffer contents.
       Val v = emitExpr(s->value.get());
       llvm::Value* dst = multiEntry_ ? multiResult_ : structRetPtr_;
-      
+
       if (!curProc_->retDynMemberPaths.empty()) {
         // Deep copy with dynamic members (rule 13).
         const auto& dynPaths = curProc_->retDynMemberPaths;
-        
+
         // Helper: fieldAddr from base through relative path.
         auto fieldAddr = [&](llvm::Value* base, const Type& root,
                              const std::vector<unsigned>& rel) {
@@ -7427,34 +7380,36 @@ void IRGen::emitStmt(HStmt* s) {
           }
           return addr;
         };
-        
+
         // Save destination buffer pointers from sret buffer.
         std::vector<llvm::Value*> savedPtrs;
         savedPtrs.reserve(dynPaths.size());
         for (const auto& rel : dynPaths) {
-          llvm::LoadInst* lp = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.sv");
+          llvm::LoadInst* lp =
+              b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.sv");
           if (packedMemberPath(curRetTy_, rel))
             lp->setAlignment(llvm::Align(1));
           savedPtrs.push_back(lp);
         }
-        
+
         // Flat copy static header (including pointer fields).
         llvm::Value* sz = i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(curRetTy_)));
         b_.CreateMemCpy(dst, llvm::MaybeAlign(), v.ptr, llvm::MaybeAlign(), sz);
-        
+
         // Restore destination buffer pointers.
         for (size_t i = 0; i < dynPaths.size(); ++i) {
-          llvm::StoreInst* sp = b_.CreateStore(savedPtrs[i], fieldAddr(dst, curRetTy_, dynPaths[i]));
+          llvm::StoreInst* sp =
+              b_.CreateStore(savedPtrs[i], fieldAddr(dst, curRetTy_, dynPaths[i]));
           if (packedMemberPath(curRetTy_, dynPaths[i]))
             sp->setAlignment(llvm::Align(1));
         }
-        
+
         // Copy each dynamic member buffer.
         for (size_t i = 0; i < dynPaths.size(); ++i) {
           const auto& rel = dynPaths[i];
           const Type& arr = structPathType(curRetTy_, rel);
           const Type& el = arr.elementType();
-          
+
           // Source: from v.ptr (callee's returned structure)
           // The source structure's dynamic member bounds are in memberDyn_ keyed
           // by the source symbol and path. The source is the returned value, which
@@ -7470,10 +7425,10 @@ void IRGen::emitStmt(HStmt* s) {
             b_.CreateRetVoid();
             return;
           }
-          
+
           std::vector<unsigned> srcFull = sv->memberPath;
           srcFull.insert(srcFull.end(), rel.begin(), rel.end());
-          
+
           auto srcIt = memberDyn_.find(MemberDyn{sv->sym, srcFull});
           // For the destination, the caller recorded bounds under a synthetic symbol
           // that we don't have access to here. Since the caller and callee share the
@@ -7484,15 +7439,16 @@ void IRGen::emitStmt(HStmt* s) {
           llvm::Value* slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
           llvm::Value* dub = sub;
           llvm::Value* dlb = slb;
-          
+
           if (!dub || !sub) {
-            d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
+            d_.error(s->loc,
+                     "a whole-structure source with a dynamic member is not addressable here",
                      "(13)");
             emitCtlEpilogue();
             b_.CreateRetVoid();
             return;
           }
-          
+
           const Dim& d0 = arr.dims[0];
           llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
           llvm::Value* du = dub;
@@ -7507,7 +7463,7 @@ void IRGen::emitStmt(HStmt* s) {
             dext = b_.CreateMul(dext, i64(rest), "dcp.dall");
             sext = b_.CreateMul(sext, i64(rest), "dcp.sall");
           }
-          
+
           // Mismatched live extents would overflow the target: trap loudly
           // through the subscript path rather than silently truncating.
           std::string id = std::to_string(n_++);
@@ -7520,18 +7476,20 @@ void IRGen::emitStmt(HStmt* s) {
           b_.SetInsertPoint(abL);
           b_.CreateUnreachable();
           startBlock(okL);
-          
-          llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.dp");
-          llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "ret.dcp.sp");
+
+          llvm::LoadInst* dbuf =
+              b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, curRetTy_, rel), "ret.dcp.dp");
+          llvm::LoadInst* sbuf =
+              b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, sv->ty, rel), "ret.dcp.sp");
           if (packedMemberPath(curRetTy_, rel))
             dbuf->setAlignment(llvm::Align(1));
           if (packedMemberPath(sv->ty, rel))
             sbuf->setAlignment(llvm::Align(1));
-          llvm::Value* nbytes =
-              b_.CreateMul(sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "ret.dcp.n");
+          llvm::Value* nbytes = b_.CreateMul(
+              sext, i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "ret.dcp.n");
           b_.CreateMemCpy(dbuf, llvm::MaybeAlign(), sbuf, llvm::MaybeAlign(), nbytes);
         }
-        
+
         emitCtlEpilogue();
         b_.CreateRetVoid();
       } else {
@@ -7632,27 +7590,27 @@ void IRGen::emitStmt(HStmt* s) {
     // Rule (91) / Y33 block termination: a GO TO that leaves enclosing BEGIN
     // blocks reverts the handlers those blocks established, restoring the
     // depth saved at the outermost exited block's entry.
-      if (s->gotoTarget) {
-       Val v = emitExpr(s->gotoTarget.get());
-       llvm::Value* addr = v.reg;
-       if (!addr)
-         addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
-       if (!addr->getType()->isPointerTy())
-         addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
-       // Collect every block an indirect transfer can reach: the named labels,
-       // the alternate entry segments, and the label-array prefixes (rule (65)).
-       std::vector<llvm::BasicBlock*> dests;
-       auto addDest = [&](llvm::BasicBlock* bb) {
-         if (bb && std::find(dests.begin(), dests.end(), bb) == dests.end())
-           dests.push_back(bb);
-       };
-       for (auto& kv : labelBlocks_)
-         addDest(kv.second);
-       for (auto& kv : stmtBlocks_)
-         addDest(kv.second);
-       llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)dests.size());
-       for (llvm::BasicBlock* d : dests)
-         ib->addDestination(d);
+    if (s->gotoTarget) {
+      Val v = emitExpr(s->gotoTarget.get());
+      llvm::Value* addr = v.reg;
+      if (!addr)
+        addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
+      if (!addr->getType()->isPointerTy())
+        addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
+      // Collect every block an indirect transfer can reach: the named labels,
+      // the alternate entry segments, and the label-array prefixes (rule (65)).
+      std::vector<llvm::BasicBlock*> dests;
+      auto addDest = [&](llvm::BasicBlock* bb) {
+        if (bb && std::find(dests.begin(), dests.end(), bb) == dests.end())
+          dests.push_back(bb);
+      };
+      for (auto& kv : labelBlocks_)
+        addDest(kv.second);
+      for (auto& kv : stmtBlocks_)
+        addDest(kv.second);
+      llvm::IndirectBrInst* ib = b_.CreateIndirectBr(addr, (unsigned)dests.size());
+      for (llvm::BasicBlock* d : dests)
+        ib->addDestination(d);
     } else {
       // Direct GO TO label: jump to the named block.
       if (llvm::Value* depth = onExitDepth(s->name))
@@ -7769,10 +7727,8 @@ bool IRGen::emitSelfAppend(HStmt* s) {
       llvm::Value* stor = addressOf(ls);
       if (!stor)
         return false;
-      llvm::Value* lp =
-          b_.CreateStructGEP(llvmTy(ls->ty), stor, 0, "sa.vlenp");
-      llvm::Value* dp =
-          b_.CreateStructGEP(llvmTy(ls->ty), stor, 1, "sa.vdata");
+      llvm::Value* lp = b_.CreateStructGEP(llvmTy(ls->ty), stor, 0, "sa.vlenp");
+      llvm::Value* dp = b_.CreateStructGEP(llvmTy(ls->ty), stor, 1, "sa.vdata");
       srcp = dp;
       srclen = b_.CreateZExt(b_.CreateLoad(b_.getInt32Ty(), lp, "sa.vlen"), b_.getInt64Ty(),
                              "sa.vlen64");
@@ -8035,8 +7991,7 @@ bool IRGen::emitCombinedBitTest(HExpr* e, Val& out) {
   if (!x.ty.isBit() || x.ty.len != s1.nbits || !x.reg)
     return false;
   uint64_t maskVal = 0, wantVal = 0;
-  if (!bitLitToU64(merge.mask, s1.nbits, maskVal) ||
-      !bitLitToU64(merge.want, s1.nbits, wantVal))
+  if (!bitLitToU64(merge.mask, s1.nbits, maskVal) || !bitLitToU64(merge.want, s1.nbits, wantVal))
     return false;
   // The packed form needs the optimizer to pay off; -O0 keeps the byte-array
   // construction, which is fewer instructions unoptimized.
@@ -8091,12 +8046,12 @@ bool IRGen::emitMaskedBitTest(HExpr* e, Val& out) {
   // One side is the masked value, the other a BIT literal expectation.
   HExpr* masked = nullptr;
   HExpr* want = nullptr;
-  if (e->a && e->a->kind == HExpr::Binary && e->a->op == Tok::Amp &&
-      e->b && e->b->kind == HExpr::BitLit) {
+  if (e->a && e->a->kind == HExpr::Binary && e->a->op == Tok::Amp && e->b &&
+      e->b->kind == HExpr::BitLit) {
     masked = e->a.get();
     want = e->b.get();
-  } else if (e->b && e->b->kind == HExpr::Binary && e->b->op == Tok::Amp &&
-             e->a && e->a->kind == HExpr::BitLit) {
+  } else if (e->b && e->b->kind == HExpr::Binary && e->b->op == Tok::Amp && e->a &&
+             e->a->kind == HExpr::BitLit) {
     masked = e->b.get();
     want = e->a.get();
   } else {
@@ -8118,8 +8073,7 @@ bool IRGen::emitMaskedBitTest(HExpr* e, Val& out) {
   if (mask->ty.len != nbits || want->ty.len != nbits)
     return false;
   uint64_t maskVal = 0, wantVal = 0;
-  if (!bitLitToU64(mask->sval, nbits, maskVal) ||
-      !bitLitToU64(want->sval, nbits, wantVal))
+  if (!bitLitToU64(mask->sval, nbits, maskVal) || !bitLitToU64(want->sval, nbits, wantVal))
     return false;
   // The lowering policy wins (ADR-260): the runtime path keeps the generic
   // byte-array lowering so the differential oracle can compare the two.
@@ -8172,15 +8126,13 @@ void IRGen::emitAssign(HStmt* s) {
           llvm::Value* base =
               t->locPtr
                   ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
-                  : (arr.isDynamic()
-                         ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
-                         : memberAddr(t->sym, t->memberPath, s->loc));
+                  : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                     : memberAddr(t->sym, t->memberPath, s->loc));
           // member later axes stay constant; the slot vec is axis 0 only
-          llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc,
-                                               ub ? std::vector<llvm::Value*>{ub}
-                                                  : std::vector<llvm::Value*>(),
-                                               lb ? std::vector<llvm::Value*>{lb}
-                                                  : std::vector<llvm::Value*>());
+          llvm::Value* addr =
+              arrayElementAddr(arr, base, t->args, s->loc,
+                               ub ? std::vector<llvm::Value*>{ub} : std::vector<llvm::Value*>(),
+                               lb ? std::vector<llvm::Value*>{lb} : std::vector<llvm::Value*>());
           bool packed = packedMemberPath(t->sym->ty, t->memberPath);
           if (el.isChar())
             storeCharTo(addr, el, v, s->loc, packed);
@@ -8295,14 +8247,13 @@ void IRGen::emitAssign(HStmt* s) {
     Val rhs = emitExpr(s->value.get());
     llvm::Value* newExp = toI64(rhs);
     llvm::StructType* st = llvm::StructType::get(ctx_, {b_.getDoubleTy(), b_.getInt32Ty()});
-    llvm::Value* pair = b_.CreateCall(
-        intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}),
-        {oldVal}, "exp_decomp");
+    llvm::Value* pair = b_.CreateCall(intrinsicFn("llvm.frexp.f64.i32", st, {b_.getDoubleTy()}),
+                                      {oldVal}, "exp_decomp");
     llvm::Value* mant = b_.CreateExtractValue(pair, 0, "mant");
     llvm::Value* newExpI32 = b_.CreateTrunc(newExp, b_.getInt32Ty(), "exp_i32");
-    llvm::Value* newVal =
-        b_.CreateCall(intrinsicFn("llvm.ldexp.f64.i32", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getInt32Ty()}),
-                      {mant, newExpI32}, "exp_new");
+    llvm::Value* newVal = b_.CreateCall(
+        intrinsicFn("llvm.ldexp.f64.i32", b_.getDoubleTy(), {b_.getDoubleTy(), b_.getInt32Ty()}),
+        {mant, newExpI32}, "exp_new");
     b_.CreateStore(newVal, addr);
     return;
   }
@@ -8337,7 +8288,8 @@ void IRGen::emitAssign(HStmt* s) {
   // setter to update the source condition key of the current SIGNAL handler.
   if (s->target->kind == HExpr::VarRef && s->target->name == "ONSOURCE") {
     Val rhs = emitExpr(s->value.get());
-    b_.CreateCall(runtimeFn("pli_set_on_source"), {b_.CreateTrunc(toI64(rhs), b_.getInt32Ty(), "src32")});
+    b_.CreateCall(runtimeFn("pli_set_on_source"),
+                  {b_.CreateTrunc(toI64(rhs), b_.getInt32Ty(), "src32")});
     return;
   }
   // UNSPEC pseudo-variable (rule (123), ADR-196): UNSPEC(var) = bits copies the
@@ -8348,8 +8300,10 @@ void IRGen::emitAssign(HStmt* s) {
     Val rhs = emitExpr(s->value.get());
     if (var->kind == HExpr::VarRef && var->sym) {
       llvm::Value* addr = addressOf(var->sym);
-      unsigned dstSz = (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(var->sym->ty)).getFixedValue();
-      unsigned srcSz = (unsigned)mod_.getDataLayout().getTypeStoreSize(rhs.reg->getType()).getFixedValue();
+      unsigned dstSz =
+          (unsigned)mod_.getDataLayout().getTypeStoreSize(llvmTy(var->sym->ty)).getFixedValue();
+      unsigned srcSz =
+          (unsigned)mod_.getDataLayout().getTypeStoreSize(rhs.reg->getType()).getFixedValue();
       // Store RHS in a temp so we can pass a pointer to pli_unspec_assign.
       llvm::Value* tmp = b_.CreateAlloca(rhs.reg->getType(), nullptr, "unspec_rhs");
       b_.CreateStore(rhs.reg, tmp);
@@ -8402,16 +8356,14 @@ void IRGen::emitAssign(HStmt* s) {
       // A locator-qualified member P->S.A(i) (rules 124,126) stores through
       // the locator value, not the declared BASED pointer.
       llvm::Value* base =
-          t->locPtr
-              ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
-              : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
-                                 : memberAddr(t->sym, t->memberPath, s->loc));
+          t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                    : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, s->loc, ub, lb)
+                                       : memberAddr(t->sym, t->memberPath, s->loc));
       // member later axes stay constant; the slot vec is axis 0 only
-      llvm::Value* addr = arrayElementAddr(arr, base, t->args, s->loc,
-                                           ub ? std::vector<llvm::Value*>{ub}
-                                              : std::vector<llvm::Value*>(),
-                                           lb ? std::vector<llvm::Value*>{lb}
-                                              : std::vector<llvm::Value*>());
+      llvm::Value* addr =
+          arrayElementAddr(arr, base, t->args, s->loc,
+                           ub ? std::vector<llvm::Value*>{ub} : std::vector<llvm::Value*>(),
+                           lb ? std::vector<llvm::Value*>{lb} : std::vector<llvm::Value*>());
       bool packed = packedMemberPath(t->sym->ty, t->memberPath);
       if (el.isChar())
         storeCharTo(addr, el, v, s->loc, packed);
@@ -8469,9 +8421,11 @@ void IRGen::emitAssign(HStmt* s) {
     }
     HExpr* sv = s->value.get();
     bool srcIsCall = (sv && sv->kind == HExpr::Call);
-    if (!srcIsCall && (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr)) {
+    if (!srcIsCall &&
+        (!sv || sv->kind != HExpr::VarRef || !sv->sym || !sv->ty.isStruct() || sv->locPtr)) {
       d_.error(s->loc,
-               "a whole-structure source with a dynamic member must be a plain variable or function call here",
+               "a whole-structure source with a dynamic member must be a plain variable or "
+               "function call here",
                "(13)");
       return;
     }
@@ -8505,7 +8459,7 @@ void IRGen::emitAssign(HStmt* s) {
       const Type& el = arr.elementType();
       std::vector<unsigned> dstFull = t->memberPath;
       dstFull.insert(dstFull.end(), rel.begin(), rel.end());
-      
+
       // Source bounds: for a VarRef source, look up from memberDyn_. For a Call
       // source, the function call emission recorded bounds under a synthetic
       // symbol; we use destination bounds as proxy since both share the template.
@@ -8518,23 +8472,23 @@ void IRGen::emitAssign(HStmt* s) {
         sub = srcIt != memberDyn_.end() ? srcIt->second.ub : nullptr;
         slb = srcIt != memberDyn_.end() ? srcIt->second.lb : nullptr;
       }
-      
+
       auto dstIt = memberDyn_.find(MemberDyn{t->sym, dstFull});
       llvm::Value* dub = dstIt != memberDyn_.end() ? dstIt->second.ub : nullptr;
       llvm::Value* dlb = dstIt != memberDyn_.end() ? dstIt->second.lb : nullptr;
-      
+
       // For Call source, use destination bounds as proxy.
       if (srcIsCall) {
         sub = dub;
         slb = dlb;
       }
-      
+
       if (!dub || !sub) {
         d_.error(s->loc, "a whole-structure source with a dynamic member is not addressable here",
                  "(13)");
         return;
       }
-      
+
       const Dim& d0 = arr.dims[0];
       llvm::Value* dl = d0.lbDyn && dlb ? dlb : i64(d0.lb);
       llvm::Value* du = dub;
@@ -8564,7 +8518,8 @@ void IRGen::emitAssign(HStmt* s) {
       b_.CreateUnreachable();
       startBlock(okL);
       llvm::LoadInst* dbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(dst, t->ty, rel), "dcp.dp");
-      llvm::LoadInst* sbuf = b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, srcIsCall ? t->ty : sv->ty, rel), "dcp.sp");
+      llvm::LoadInst* sbuf =
+          b_.CreateLoad(b_.getPtrTy(), fieldAddr(v.ptr, srcIsCall ? t->ty : sv->ty, rel), "dcp.sp");
       if (packedMemberPath(t->ty, rel))
         dbuf->setAlignment(llvm::Align(1));
       if (!srcIsCall && packedMemberPath(sv->ty, rel))
@@ -8852,8 +8807,7 @@ void IRGen::emitAllocate(HStmt* s) {
     // The LLVM alloc size of the based structure (bytes) sizes the heap block.
     llvm::Value* sz = i64(mod_.getDataLayout().getTypeAllocSize(llvmTy(bsym->ty)).getFixedValue());
     const auto& bbounds = (i < s->allocBounds.size()) ? s->allocBounds[i] : noBounds;
-    if (!bsym->controlled && bsym->ty.isArray() &&
-        (bsym->ty.isDynamic() || !bbounds.empty())) {
+    if (!bsym->controlled && bsym->ty.isArray() && (bsym->ty.isDynamic() || !bbounds.empty())) {
       // A dynamic-extent BASED heap array (rules (25),(89)): size the block
       // from the live DECLARE bounds at ALLOCATE time. All dynamic axes are
       // supported; each reference reads the same live bounds through the dope
@@ -8864,7 +8818,7 @@ void IRGen::emitAllocate(HStmt* s) {
       if (elemSz <= 0)
         elemSz = 1;
       llvm::Value* total = i64(elemSz);
-// For BASED arrays with dynamic later axes (Wave 2), re-evaluate all
+      // For BASED arrays with dynamic later axes (Wave 2), re-evaluate all
       // dynamic axis bounds at ALLOCATE time so bounds checks use the current
       // values (which may have changed since procedure entry due to INIT etc.).
       std::vector<llvm::Value*> ubs;
@@ -8880,10 +8834,9 @@ void IRGen::emitAllocate(HStmt* s) {
           ub = toI64(emitExpr(bbounds[k].ub.get()), s->loc);
         else if (d.dyn && bsym->dynUbAxes.size() > k && bsym->dynUbAxes[k])
           ub = toI64(emitExpr(bsym->dynUbAxes[k]), s->loc);
-        llvm::Value* lb =
-            (d.lbDyn && bsym->dynLbAxes.size() > k && bsym->dynLbAxes[k])
-                ? toI64(emitExpr(bsym->dynLbAxes[k]), s->loc)
-                : i64(d.lb);
+        llvm::Value* lb = (d.lbDyn && bsym->dynLbAxes.size() > k && bsym->dynLbAxes[k])
+                              ? toI64(emitExpr(bsym->dynLbAxes[k]), s->loc)
+                              : i64(d.lb);
         // For BASED dynamic arrays, re-evaluate all dynamic axes at ALLOCATE time
         // so that subsequent references use the ALLOCATE-time bounds.
         if (bsym->ty.isDynamic() && d.dyn) {
@@ -9093,8 +9046,8 @@ void IRGen::emitFree(HStmt* s) {
   for (size_t i = 0; i < s->freeBase.size(); ++i) {
     Symbol* bsym = s->freeBase[i]->sym;
     if (bsym && bsym->controlled) {
-      llvm::Value* top = b_.CreateCall(runtimeFn("pli_ctl_free_addr"), {ctlKeyOf(bsym)},
-                                      "ctlafterfree");
+      llvm::Value* top =
+          b_.CreateCall(runtimeFn("pli_ctl_free_addr"), {ctlKeyOf(bsym)}, "ctlafterfree");
       ctlNoteFree(bsym, top);
       continue;
     }
@@ -9118,12 +9071,11 @@ llvm::GlobalVariable* IRGen::fileMarker(Symbol* f) {
     return it->second;
   bool ext = f->external;
   std::string extName = f->irName.size() > 1 ? f->irName.substr(1) : f->name;
-  std::string name = ext ? "pli_file_marker_" + extName
-                         : "pli_file_marker_" + std::to_string(n_++);
-  auto* gv = new llvm::GlobalVariable(
-      mod_, b_.getInt8Ty(), false,
-      ext ? llvm::GlobalValue::CommonLinkage : llvm::GlobalValue::InternalLinkage,
-      llvm::Constant::getNullValue(b_.getInt8Ty()), name);
+  std::string name = ext ? "pli_file_marker_" + extName : "pli_file_marker_" + std::to_string(n_++);
+  auto* gv = new llvm::GlobalVariable(mod_, b_.getInt8Ty(), false,
+                                      ext ? llvm::GlobalValue::CommonLinkage
+                                          : llvm::GlobalValue::InternalLinkage,
+                                      llvm::Constant::getNullValue(b_.getInt8Ty()), name);
   fileMarkers_[f] = gv;
   return gv;
 }
@@ -9159,10 +9111,9 @@ void IRGen::emitOpen(HStmt* s) {
   long long mode = s->openUpdate ? 2 : (s->openInput ? 0 : 1);
   if (s->openKeyed || s->openDirect) {
     // Keyed/direct organisation: open the data file and load the .kix sidecar.
-    b_.CreateCall(
-        runtimeFn("pli_file_open_keyed"),
-        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0), i64(1), i64(s->openExclusive ? 1 : 0)});
+    b_.CreateCall(runtimeFn("pli_file_open_keyed"),
+                  {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+                   i64(f->fileNonprint ? 1 : 0), i64(1), i64(s->openExclusive ? 1 : 0)});
     if (s->openLinesize)
       b_.CreateCall(runtimeFn("pli_file_set_linesize"),
                     {fileSlotValue(f), toI64(emitExpr(s->openLinesize.get()))});
@@ -9178,11 +9129,9 @@ void IRGen::emitOpen(HStmt* s) {
       if (!v.ptr || !v.len) {
         d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
         Val dst = charTemp(24);
-        b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                      {fileSlotValue(f), dst.ptr, dst.len});
+        b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(f), dst.ptr, dst.len});
       } else {
-        b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                      {fileSlotValue(f), v.ptr, v.len});
+        b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(f), v.ptr, v.len});
       }
     }
     // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
@@ -9190,17 +9139,15 @@ void IRGen::emitOpen(HStmt* s) {
     return;
   }
   if (s->openRecord) {
-    b_.CreateCall(
-        runtimeFn("pli_file_open_record"),
-        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0),
-         i64(s->openBuffered ? 1 : (s->openUnbuffered ? -1 : 0)),
-         i64(s->openBackwards ? 1 : 0)});
+    b_.CreateCall(runtimeFn("pli_file_open_record"),
+                  {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+                   i64(f->fileNonprint ? 1 : 0),
+                   i64(s->openBuffered ? 1 : (s->openUnbuffered ? -1 : 0)),
+                   i64(s->openBackwards ? 1 : 0)});
   } else {
-    b_.CreateCall(
-        runtimeFn("pli_file_open"),
-        {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
-         i64(f->fileNonprint ? 1 : 0)});
+    b_.CreateCall(runtimeFn("pli_file_open"),
+                  {fileSlotValue(f), name, i64((long long)s->openTitle.size()), i64(mode),
+                   i64(f->fileNonprint ? 1 : 0)});
   }
   if (s->openLinesize)
     b_.CreateCall(runtimeFn("pli_file_set_linesize"),
@@ -9217,16 +9164,14 @@ void IRGen::emitOpen(HStmt* s) {
     if (!v.ptr || !v.len) {
       d_.error(s->openIdent->loc, "internal: IDENT value missing pointer or length", "(101)");
       Val dst = charTemp(24);
-      b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                    {fileSlotValue(f), dst.ptr, dst.len});
-} else {
-        b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                      {fileSlotValue(f), v.ptr, v.len});
-      }
+      b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(f), dst.ptr, dst.len});
+    } else {
+      b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(f), v.ptr, v.len});
     }
-    // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
-    // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
   }
+  // BUFFERED/UNBUFFERED/EXCLUSIVE (rules 39,40): implementation-dependent
+  // file attributes accepted as no-ops (ADR-373). No runtime calls needed.
+}
 
 // WRITE (rules (112),(113)): append one fixed-size binary record — FIXED as 8
 // bytes, FLOAT as 8 bytes, BIT(1) as 1 byte, CHAR(n) as n raw bytes.
@@ -9235,8 +9180,7 @@ void IRGen::emitOpen(HStmt* s) {
 // `addr` (rule (113)). The runtime's per-type writers each append one
 // record's worth of bytes, so a value is written with the writer matching
 // its type.
-void IRGen::writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr,
-                              SourceLoc loc) {
+void IRGen::writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr, SourceLoc loc) {
   switch (ty.k) {
   case TK::FixedBin:
   case TK::FixedDec: {
@@ -9247,9 +9191,8 @@ void IRGen::writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* add
     // that follow the variable in memory.
     llvm::Type* storage = llvmTy(ty);
     llvm::Value* raw = b_.CreateLoad(storage, addr);
-    llvm::Value* v = storage->getIntegerBitWidth() == 64
-                          ? raw
-                          : b_.CreateSExt(raw, b_.getInt64Ty(), "locfix");
+    llvm::Value* v =
+        storage->getIntegerBitWidth() == 64 ? raw : b_.CreateSExt(raw, b_.getInt64Ty(), "locfix");
     b_.CreateCall(runtimeFn("pli_record_write_fixed"), {slot, v});
     break;
   }
@@ -9306,14 +9249,15 @@ void IRGen::emitRecordWrite(HStmt* s) {
       // For now, try to get the address of the based variable.
       buf = addressOf(locExpr->sym);
     }
-    
+
     if (!buf) {
       // Should not happen for valid based variables
       return;
     }
-    
+
     // EVENT(ev): reset before the operation.
-    llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+    llvm::Value* eventAddr =
+        s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
     if (eventAddr)
       b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9337,7 +9281,8 @@ void IRGen::emitRecordWrite(HStmt* s) {
   }
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9375,7 +9320,8 @@ void IRGen::emitRecordRewrite(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9416,7 +9362,8 @@ void IRGen::emitRecordDelete(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9437,7 +9384,8 @@ void IRGen::emitRecordWriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9449,22 +9397,18 @@ void IRGen::emitRecordWriteKeyed(HStmt* s) {
   switch (v.ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
-    b_.CreateCall(runtimeFn("pli_record_write_keyed_fixed"),
-                  {slot, k.ptr, k.len, toI64(v)});
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_fixed"), {slot, k.ptr, k.len, toI64(v)});
     break;
   case TK::Float:
-    b_.CreateCall(runtimeFn("pli_record_write_keyed_float"),
-                  {slot, k.ptr, k.len, v.reg});
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_float"), {slot, k.ptr, k.len, v.reg});
     break;
   case TK::Bit: {
     llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
-    b_.CreateCall(runtimeFn("pli_record_write_keyed_bit"),
-                  {slot, k.ptr, k.len, bit});
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_bit"), {slot, k.ptr, k.len, bit});
     break;
   }
   case TK::Char:
-    b_.CreateCall(runtimeFn("pli_record_write_keyed_char"),
-                  {slot, k.ptr, k.len, v.ptr, v.len});
+    b_.CreateCall(runtimeFn("pli_record_write_keyed_char"), {slot, k.ptr, k.len, v.ptr, v.len});
     break;
   default:
     break; // other types are diagnosed by sema
@@ -9484,7 +9428,8 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
   const Type& ty = t->ty;
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9529,8 +9474,7 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
     }
     case TK::Char: {
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
-                    {slot, buf, i64(ty.len)});
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"), {slot, buf, i64(ty.len)});
       v.ptr = buf;
       v.len = i64(ty.len);
       v.ty = ty;
@@ -9603,8 +9547,7 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
     }
     case TK::Char: {
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "rch");
-      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"),
-                    {slot, buf, i64(ty.len)});
+      b_.CreateCall(runtimeFn("pli_record_read_keyed_next_char"), {slot, buf, i64(ty.len)});
       v.ptr = buf;
       v.len = i64(ty.len);
       v.ty = ty;
@@ -9636,7 +9579,8 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9645,22 +9589,18 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   switch (v.ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
-    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_fixed"),
-                  {slot, k.ptr, k.len, toI64(v)});
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_fixed"), {slot, k.ptr, k.len, toI64(v)});
     break;
   case TK::Float:
-    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_float"),
-                  {slot, k.ptr, k.len, v.reg});
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_float"), {slot, k.ptr, k.len, v.reg});
     break;
   case TK::Bit: {
     llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "rbit");
-    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_bit"),
-                  {slot, k.ptr, k.len, bit});
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_bit"), {slot, k.ptr, k.len, bit});
     break;
   }
   case TK::Char:
-    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_char"),
-                  {slot, k.ptr, k.len, v.ptr, v.len});
+    b_.CreateCall(runtimeFn("pli_record_rewrite_keyed_char"), {slot, k.ptr, k.len, v.ptr, v.len});
     break;
   default:
     break; // other types are diagnosed by sema
@@ -9681,7 +9621,8 @@ void IRGen::emitRecordDeleteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9712,7 +9653,8 @@ void IRGen::emitRecordRead(HStmt* s) {
   }
 
   // EVENT(ev): reset before the operation.
-  llvm::Value* eventAddr = s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
+  llvm::Value* eventAddr =
+      s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
@@ -9723,9 +9665,8 @@ void IRGen::emitRecordRead(HStmt* s) {
   switch (ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
-    v.reg = b_.CreateCall(runtimeFn(backwards ? "pli_record_read_fixed_backwards"
-                                              : "pli_record_read_fixed"),
-                          {slot});
+    v.reg = b_.CreateCall(
+        runtimeFn(backwards ? "pli_record_read_fixed_backwards" : "pli_record_read_fixed"), {slot});
     v.ty = Type::fixedBin(63, 0);
     storeTo(t->sym, v, s->loc);
     break;
@@ -9782,11 +9723,9 @@ void IRGen::emitClose(HStmt* s) {
     if (!v.ptr || !v.len) {
       d_.error(s->closeIdent->loc, "internal: IDENT value missing pointer or length", "(103)");
       Val dst = charTemp(24);
-      b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                    {fileSlotValue(s->fileSym), dst.ptr, dst.len});
+      b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(s->fileSym), dst.ptr, dst.len});
     } else {
-      b_.CreateCall(runtimeFn("pli_file_set_ident"),
-                    {fileSlotValue(s->fileSym), v.ptr, v.len});
+      b_.CreateCall(runtimeFn("pli_file_set_ident"), {fileSlotValue(s->fileSym), v.ptr, v.len});
     }
   }
   b_.CreateCall(runtimeFn("pli_file_close"), {fileSlotValue(s->fileSym)});
@@ -10074,8 +10013,7 @@ void IRGen::emitDoIter(HStmt* s) {
   // against the emitted constant (sema may promote the literal to a TypeTag
   // HExpr for a wider control var, so HExpr::IntLit alone is unreliable).
   bool nonNegDo = false;
-  if (!s->byNegConst && from.reg &&
-      llvm::isa<llvm::ConstantInt>(from.reg) &&
+  if (!s->byNegConst && from.reg && llvm::isa<llvm::ConstantInt>(from.reg) &&
       !llvm::cast<llvm::ConstantInt>(from.reg)->getValue().isNegative())
     nonNegDo = true;
 
@@ -10104,13 +10042,11 @@ void IRGen::emitDoIter(HStmt* s) {
   llvm::BasicBlock* testL =
       s->to ? llvm::BasicBlock::Create(ctx_, "do.test." + id, curFn_) : nullptr;
 
-
   // P3c+P3.3: emit a preheader block before the loop header (condL). condL is the
   // loop header (target of the backedge from stepL), so the preheader runs once
   // before the first iteration — the right place for trip-count assumes and loop
   // metadata setup.
-  llvm::BasicBlock* preL =
-      llvm::BasicBlock::Create(ctx_, "do.pre." + id, curFn_);
+  llvm::BasicBlock* preL = llvm::BasicBlock::Create(ctx_, "do.pre." + id, curFn_);
   branch(preL);
   startBlock(preL);
 
@@ -10118,8 +10054,7 @@ void IRGen::emitDoIter(HStmt* s) {
   // constants — gives the optimizer an explicit trip count instead of forcing it
   // to infer from phi+icmp. Sound because PL/I DO semantics are defined: BY=0
   // is diagnosed in sema (rule (86)).
-  if (s->from && s->to &&
-      s->from->kind == HExpr::IntLit && s->to->kind == HExpr::IntLit &&
+  if (s->from && s->to && s->from->kind == HExpr::IntLit && s->to->kind == HExpr::IntLit &&
       llvm::isa<llvm::ConstantInt>(by.reg)) {
     int64_t fromVal = s->from->ival;
     int64_t toVal = s->to->ival;
@@ -10133,20 +10068,18 @@ void IRGen::emitDoIter(HStmt* s) {
       // intent: trip = ceil(|to-from| / |by|) + 1, computed from LLVM values;
       // constant-folded for const bounds, but the @llvm.assume still records
       // the trip-count bound for passes like LoopVectorize.
-      llvm::Value* span64 = b_.CreateSub(
-          b_.CreateSExt(tv.reg, b_.getInt64Ty(), "trip.tv64"),
-          b_.CreateSExt(from.reg, b_.getInt64Ty(), "trip.from64"),
-          "trip.span");
+      llvm::Value* span64 =
+          b_.CreateSub(b_.CreateSExt(tv.reg, b_.getInt64Ty(), "trip.tv64"),
+                       b_.CreateSExt(from.reg, b_.getInt64Ty(), "trip.from64"), "trip.span");
       // The step magnitude is |by| — the sign of BY, not of the span. The
       // select arms used to be swapped, which made the step always negative
       // and the assumption trivially true (trip = 1) instead of tight.
       llvm::Value* by64 = b_.CreateSExt(by.reg, b_.getInt64Ty(), "trip.by64");
-      llvm::Value* absStep = b_.CreateSelect(
-          b_.CreateICmpSGE(by64, b_.getInt64(0), "step.is"), by64,
-          b_.CreateNeg(by64, "step.abs"), "trip.step");
+      llvm::Value* absStep = b_.CreateSelect(b_.CreateICmpSGE(by64, b_.getInt64(0), "step.is"),
+                                             by64, b_.CreateNeg(by64, "step.abs"), "trip.step");
       llvm::Value* absSpan =
-          b_.CreateSelect(b_.CreateICmpSGE(span64, b_.getInt64(0), "span.pos"),
-                           span64, b_.CreateNeg(span64, "span.neg"), "trip.absspan");
+          b_.CreateSelect(b_.CreateICmpSGE(span64, b_.getInt64(0), "span.pos"), span64,
+                          b_.CreateNeg(span64, "span.neg"), "trip.absspan");
       // trip = floor(|to - from| / |by|) + 1 — the number of times the DO
       // runs, matching the maxTrip computed above. A ceiling here would
       // overshoot by one and the assumption would be false.
@@ -10182,11 +10115,9 @@ void IRGen::emitDoIter(HStmt* s) {
     // and variable-BY DO loops keep the sign-test path below.
     bool oneBranch = ct.k != TK::Float && llvm::isa<llvm::ConstantInt>(by.reg);
     if (oneBranch) {
-      bool descending = s->byNegConst ||
-                          llvm::cast<llvm::ConstantInt>(by.reg)->isNegative();
-      llvm::Value* cmp = descending
-                             ? b_.CreateICmpSGE(cv.reg, tv.reg, "docmp")
-                             : b_.CreateICmpSLE(cv.reg, tv.reg, "docmp");
+      bool descending = s->byNegConst || llvm::cast<llvm::ConstantInt>(by.reg)->isNegative();
+      llvm::Value* cmp = descending ? b_.CreateICmpSGE(cv.reg, tv.reg, "docmp")
+                                    : b_.CreateICmpSLE(cv.reg, tv.reg, "docmp");
       b_.CreateCondBr(cmp, testL, endL);
       startBlock(testL);
     } else {
@@ -10194,11 +10125,9 @@ void IRGen::emitDoIter(HStmt* s) {
       upL = llvm::BasicBlock::Create(ctx_, "do.up." + id, curFn_);
       downL = llvm::BasicBlock::Create(ctx_, "do.down." + id, curFn_);
       llvm::Value* bv = by.reg;
-      llvm::Value* zero =
-          ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
-      llvm::Value* neg =
-          ct.k == TK::Float ? b_.CreateFCmpOLT(bv, zero, "negstep")
-                            : b_.CreateICmpSLT(bv, zero, "negstep");
+      llvm::Value* zero = ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
+      llvm::Value* neg = ct.k == TK::Float ? b_.CreateFCmpOLT(bv, zero, "negstep")
+                                           : b_.CreateICmpSLT(bv, zero, "negstep");
       b_.CreateCondBr(neg, downL, upL);
 
       startBlock(upL);
@@ -10316,7 +10245,7 @@ void IRGen::emitPutDataReference(HExpr* e) {
   } else {
     Val text = charTemp((int)name.size() + 2 + 25 * (int)indices.size());
     b_.CreateMemCpy(text.ptr, llvm::MaybeAlign(), globalString(name), llvm::MaybeAlign(),
-                   (uint64_t)name.size());
+                    (uint64_t)name.size());
     llvm::Value* length = i64((long long)name.size());
     for (size_t k = 0; k < indices.size(); ++k) {
       b_.CreateStore(b_.getInt8(k == 0 ? '(' : ','),
@@ -10328,9 +10257,9 @@ void IRGen::emitPutDataReference(HExpr* e) {
       llvm::Value* digits = i64(1);
       uint64_t threshold = 10;
       for (int n = 2; n <= 19; ++n, threshold *= 10)
-        digits = b_.CreateSelect(b_.CreateICmpUGE(magnitude,
-                                    llvm::ConstantInt::get(b_.getInt64Ty(), threshold)),
-                                i64(n), digits);
+        digits = b_.CreateSelect(
+            b_.CreateICmpUGE(magnitude, llvm::ConstantInt::get(b_.getInt64Ty(), threshold)), i64(n),
+            digits);
       digits = b_.CreateAdd(digits, b_.CreateZExt(negative, b_.getInt64Ty()));
       emitCharOfFixed(b_.CreateGEP(b_.getInt8Ty(), text.ptr, length), i64(24), index);
       length = b_.CreateAdd(length, digits);
@@ -10531,8 +10460,7 @@ void IRGen::emitPut(HStmt* s) {
       if (item->kind == HExpr::PutIter) {
         // An iterative datalist (rules (72),(73),(111)) transmits one
         // value per iteration of its DO specification.
-        emitPutIter(item.get(),
-                    [this](HExpr* value) { emitPutListValue(emitExpr(value)); });
+        emitPutIter(item.get(), [this](HExpr* value) { emitPutListValue(emitExpr(value)); });
         continue;
       }
       Val v = emitExpr(item.get());
@@ -10558,76 +10486,75 @@ void IRGen::emitPut(HStmt* s) {
 // so the whole record reaches the stream under one lock (ADR-233).
 void IRGen::emitPutListValue(const Val& v) {
   switch (v.ty.k) {
-      case TK::Char:
-        deferCall("pli_put_list_char", {v.ptr, v.len});
-        break;
-      case TK::Float:
-        deferCall("pli_put_list_float", {v.reg});
-        break;
-      case TK::Bit: {
-        if (v.ty.len == 1) {
-          llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-          deferCall("pli_put_list_bit", {bit});
-        } else {
-          // BIT(n>1): v.reg is the packed byte aggregate (i8 array).
-          // Store to an alloca and pass the pointer.
-          llvm::Type* bitArrTy = llvmTy(v.ty);
-          llvm::Value* bitPtr = entryAlloca(bitArrTy, "bitarr");
-          b_.CreateStore(v.reg, bitPtr);
-          deferCall("pli_put_list_bit_string", {bitPtr, i64(v.ty.len)});
-        }
-        break;
+  case TK::Char:
+    deferCall("pli_put_list_char", {v.ptr, v.len});
+    break;
+  case TK::Float:
+    deferCall("pli_put_list_float", {v.reg});
+    break;
+  case TK::Bit: {
+    if (v.ty.len == 1) {
+      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+      deferCall("pli_put_list_bit", {bit});
+    } else {
+      // BIT(n>1): v.reg is the packed byte aggregate (i8 array).
+      // Store to an alloca and pass the pointer.
+      llvm::Type* bitArrTy = llvmTy(v.ty);
+      llvm::Value* bitPtr = entryAlloca(bitArrTy, "bitarr");
+      b_.CreateStore(v.reg, bitPtr);
+      deferCall("pli_put_list_bit_string", {bitPtr, i64(v.ty.len)});
+    }
+    break;
+  }
+  case TK::FixedBin:
+  case TK::FixedDec:
+    if (v.ty.k == TK::FixedDec && v.ty.scale != 0) {
+      if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
+        emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
+      else {
+        // The library routine does the conversion (ADR-254): the decimal output
+        // routine handles the scale factor. For negative scale, it prints
+        // the value multiplied by 10^|q| (Y33-6003-0 §4.5).
+        if (remarkLibraryCalls_)
+          d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
+        deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
       }
-      case TK::FixedBin:
-      case TK::FixedDec:
-        if (v.ty.k == TK::FixedDec && v.ty.scale != 0) {
-          if (v.ty.intBits() == 128) // ADR-191: >18 digit DECIMAL needs wide I/O
-            emitWideDecOut("pli_put_list_decfixed128", v.reg, v.ty.scale);
-          else {
-            // The library routine does the conversion (ADR-254): the decimal output
-            // routine handles the scale factor. For negative scale, it prints
-            // the value multiplied by 10^|q| (Y33-6003-0 §4.5).
-            if (remarkLibraryCalls_)
-              d_.remark(curLoc_, "the library routine does this conversion: the decimal output");
-            deferCall("pli_put_list_decfixed", {toI64(v), i64(v.ty.scale)});
-          }
-        } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-          emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
-        } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
-          // The stored integer is value*2^q; the runtime prints the point
-          // (ADR-284). Negative scale handled by runtime (Y33-6003-0 §4.5).
-          deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
-        } else {
-          deferCall("pli_put_list_fixed", {toI64(v)});
-        }
-        break;
-      case TK::Void:
-        break;
-      case TK::Struct:
-        // Whole-structure values are diagnosed in emitExpr (rule 127); a
-        // structure never reaches list-directed output as a value.
-        break;
-      case TK::Pointer:
-      case TK::Offset:
-      case TK::Area:
-      case TK::Entry:
-        d_.error(curLoc_,
-                 "a POINTER/OFFSET/AREA/ENTRY value cannot be written with PUT LIST in this stage",
-                 "(110)");
-        break;
-      case TK::Complex:
-        // Complex output (CM5): real, sign, imaginary magnitude, I.
-        deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
-                                           b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
-        break;
-      case TK::Task:
-      case TK::Event:
-        d_.error(curLoc_, "a TASK/EVENT value cannot be written with PUT LIST in this stage",
-                 "(110)");
-        break;
-      case TK::Label:
-        d_.error(curLoc_, "a LABEL value cannot be written with PUT LIST in this stage", "(110)");
-        break;
+    } else if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+      emitWideDecOut("pli_put_list_decfixed128", v.reg, 0);
+    } else if (v.ty.k == TK::FixedBin && v.ty.scale != 0) {
+      // The stored integer is value*2^q; the runtime prints the point
+      // (ADR-284). Negative scale handled by runtime (Y33-6003-0 §4.5).
+      deferCall("pli_put_list_fixed_scaled", {toI64(v), i64(v.ty.scale)});
+    } else {
+      deferCall("pli_put_list_fixed", {toI64(v)});
+    }
+    break;
+  case TK::Void:
+    break;
+  case TK::Struct:
+    // Whole-structure values are diagnosed in emitExpr (rule 127); a
+    // structure never reaches list-directed output as a value.
+    break;
+  case TK::Pointer:
+  case TK::Offset:
+  case TK::Area:
+  case TK::Entry:
+    d_.error(curLoc_,
+             "a POINTER/OFFSET/AREA/ENTRY value cannot be written with PUT LIST in this stage",
+             "(110)");
+    break;
+  case TK::Complex:
+    // Complex output (CM5): real, sign, imaginary magnitude, I.
+    deferCall("pli_put_list_complex", {b_.CreateExtractValue(v.cpxVal(), 0, "cpx.re"),
+                                       b_.CreateExtractValue(v.cpxVal(), 1, "cpx.im")});
+    break;
+  case TK::Task:
+  case TK::Event:
+    d_.error(curLoc_, "a TASK/EVENT value cannot be written with PUT LIST in this stage", "(110)");
+    break;
+  case TK::Label:
+    d_.error(curLoc_, "a LABEL value cannot be written with PUT LIST in this stage", "(110)");
+    break;
   }
 }
 
@@ -10658,10 +10585,10 @@ void IRGen::emitPutIter(HExpr* e, std::function<void(HExpr*)> emitOne) {
 
   // A runtime zero step cannot make progress. Raise ERROR and leave the
   // iterative item if an ON-unit resumes, instead of hanging forever.
-  llvm::Value* stepZero = ct.k == TK::Float
-                             ? b_.CreateFCmpOEQ(by.reg, flt(0.0), "putiter.zero")
-                             : b_.CreateICmpEQ(by.reg, llvm::Constant::getNullValue(llvmTy(ct)),
-                                              "putiter.zero");
+  llvm::Value* stepZero =
+      ct.k == TK::Float
+          ? b_.CreateFCmpOEQ(by.reg, flt(0.0), "putiter.zero")
+          : b_.CreateICmpEQ(by.reg, llvm::Constant::getNullValue(llvmTy(ct)), "putiter.zero");
   llvm::BasicBlock* badStep = llvm::BasicBlock::Create(ctx_, "putiter.badstep", curFn_);
   llvm::BasicBlock* validStep = llvm::BasicBlock::Create(ctx_, "putiter.validstep", curFn_);
   llvm::BasicBlock* condL = llvm::BasicBlock::Create(ctx_, "putiter.cond." + id, curFn_);
@@ -10682,15 +10609,12 @@ void IRGen::emitPutIter(HExpr* e, std::function<void(HExpr*)> emitOne) {
   // sign decides the direction, exactly as in a DO group (rule (72)).
   Val cv = loadSym(ctl, ct);
   llvm::Value* zero = ct.k == TK::Float ? flt(0.0) : llvm::Constant::getNullValue(llvmTy(ct));
-  llvm::Value* negStep =
-      ct.k == TK::Float ? b_.CreateFCmpOLT(by.reg, zero, "negstep")
-                        : b_.CreateICmpSLT(by.reg, zero, "negstep");
-  llvm::Value* stillGoing =
-      ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
-                        : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
-  llvm::Value* stillGoingDown =
-      ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdown")
-                        : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdown");
+  llvm::Value* negStep = ct.k == TK::Float ? b_.CreateFCmpOLT(by.reg, zero, "negstep")
+                                           : b_.CreateICmpSLT(by.reg, zero, "negstep");
+  llvm::Value* stillGoing = ct.k == TK::Float ? b_.CreateFCmpOLE(cv.reg, tv.reg, "cmpup")
+                                              : b_.CreateICmpSLE(cv.reg, tv.reg, "cmpup");
+  llvm::Value* stillGoingDown = ct.k == TK::Float ? b_.CreateFCmpOGE(cv.reg, tv.reg, "cmpdown")
+                                                  : b_.CreateICmpSGE(cv.reg, tv.reg, "cmpdown");
   // A negative step counts down, so the test flips; a zero step never
   // terminates, which sema diagnoses (rule (72)).
   llvm::Value* keep = b_.CreateSelect(negStep, stillGoingDown, stillGoing, "keep");
@@ -10772,8 +10696,7 @@ void IRGen::emitGetDataItems(HStmt* s) {
     }
     case TK::Char: {
       llvm::Value* buf = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), ty.len), "gdch");
-      llvm::Value* n = b_.CreateCall(runtimeFn("pli_get_list_char"),
-                                     {buf, i64(ty.len)}, "gdch.n");
+      llvm::Value* n = b_.CreateCall(runtimeFn("pli_get_list_char"), {buf, i64(ty.len)}, "gdch.n");
       v.ptr = buf;
       // VARYING stores the assigned length; a fixed target stays padded to len.
       v.len = ty.varying ? n : i64(ty.len);
@@ -10821,13 +10744,12 @@ void IRGen::emitGet(HStmt* s) {
     HExpr* st = s->stringTarget.get();
     // A locator-qualified source P->S.STR (rule 105) reads the block the
     // locator points at, not the structure's declared BASED pointer.
-    sdata = st->locPtr ? (st->memberPath.empty()
-                              ? emitExpr(st->locPtr.get()).reg
-                              : locatorMemberAddr(st->sym, st->memberPath,
-                                                  emitExpr(st->locPtr.get()).reg))
-                       : (st->memberPath.empty()
-                              ? addressOf(st->sym)
-                              : memberAddr(st->sym, st->memberPath, s->loc));
+    sdata = st->locPtr
+                ? (st->memberPath.empty()
+                       ? emitExpr(st->locPtr.get()).reg
+                       : locatorMemberAddr(st->sym, st->memberPath, emitExpr(st->locPtr.get()).reg))
+                : (st->memberPath.empty() ? addressOf(st->sym)
+                                          : memberAddr(st->sym, st->memberPath, s->loc));
     // GET STRING takes a NONVARYING source (rule (105)); sema diagnoses a
     // VARYING one, so the whole capacity is the read length here.
     slen = i64(st->ty.len);
@@ -11006,16 +10928,13 @@ void IRGen::storeGetTarget(HExpr* t, const Val& v, SourceLoc loc) {
       // A locator-qualified member P->S.A(i) (rules 124,126) stores through
       // the locator value, not the declared BASED pointer.
       llvm::Value* base =
-          t->locPtr
-              ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
-              : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
-                                 : memberAddr(t->sym, t->memberPath, loc));
+          t->locPtr ? locatorMemberAddr(t->sym, t->memberPath, emitExpr(t->locPtr.get()).reg)
+                    : (arr.isDynamic() ? dynamicMemberBase(t->sym, t->memberPath, loc, ub, lb)
+                                       : memberAddr(t->sym, t->memberPath, loc));
       // member later axes stay constant; the slot vec is axis 0 only
-      llvm::Value* addr = arrayElementAddr(arr, base, t->args, loc,
-                                           ub ? std::vector<llvm::Value*>{ub}
-                                              : std::vector<llvm::Value*>(),
-                                           lb ? std::vector<llvm::Value*>{lb}
-                                              : std::vector<llvm::Value*>());
+      llvm::Value* addr = arrayElementAddr(
+          arr, base, t->args, loc, ub ? std::vector<llvm::Value*>{ub} : std::vector<llvm::Value*>(),
+          lb ? std::vector<llvm::Value*>{lb} : std::vector<llvm::Value*>());
       Val cv = convert(v, ty, loc);
       if (ty.isChar())
         storeCharTo(addr, ty, cv, loc, packedMemberPath(t->sym->ty, t->memberPath));
@@ -11082,27 +11001,24 @@ void IRGen::emitPutEditItems(HStmt* s) {
 }
 
 // Emit a single edit-directed format item (rule 108).
-void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
-                            llvm::Value* defW, llvm::Value* defD,
-                            const std::vector<Val>& dataItems) {
+void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di, llvm::Value* defW,
+                            llvm::Value* defD, const std::vector<Val>& dataItems) {
   auto putRealPart = [&](llvm::Value* dbl, const HFormatItem& sub) {
     if (sub.kind == HFormatItem::P) {
       // Mixed C(real,picture) (rule (51), ADR-375): the part is truncated to an
       // integer at scale 0 and formatted through the picture runtime.
       const pli::PictureSpec spec = pli::classifyPicture(sub.pic);
       llvm::Value* iv = b_.CreateFPToSI(dbl, b_.getInt64Ty(), "cpicv");
-      llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(iv, i64(0), "cpicsgn"),
-                                          i32(-1), i32(1), "cpicst");
+      llvm::Value* sign =
+          b_.CreateSelect(b_.CreateICmpSLT(iv, i64(0), "cpicsgn"), i32(-1), i32(1), "cpicst");
       if (spec.sterling) {
         facts_.recordBuiltin("picture", "runtime", "sterling picture in C output");
         deferCall("pli_put_edit_pic_sterling",
-                  {iv, sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())});
+                  {iv, sign, globalString(spec.expanded), i64((long long)spec.expanded.size())});
       } else {
         facts_.recordBuiltin("picture", "runtime", "picture in C output");
-        deferCall("pli_put_edit_pic",
-                  {iv, i64(0), sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())});
+        deferCall("pli_put_edit_pic", {iv, i64(0), sign, globalString(spec.expanded),
+                                       i64((long long)spec.expanded.size())});
       }
       return;
     }
@@ -11150,7 +11066,8 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     llvm::Function* fn = b_.GetInsertBlock()->getParent();
     size_t savedDi = di;
     size_t avail = (savedDi < dataItems.size()) ? (dataItems.size() - savedDi) : 0;
-    if (avail == 0) break;
+    if (avail == 0)
+      break;
 
     // NEW: Dedicated pre-count block to ensure count expression is evaluated exactly once
     llvm::BasicBlock* preCountBlock = llvm::BasicBlock::Create(ctx_, "repeat.precount", fn);
@@ -11227,10 +11144,9 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     Val v = dataItems[di++];
     long long nbits = v.ty.isBit() && v.ty.len > 0 ? v.ty.len : 1;
     long long nbytes = (nbits + 7) / 8;
-    llvm::Value* tmp =
-        entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
-    llvm::Value* ptr = b_.CreateInBoundsGEP(
-        llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "pebitp");
+    llvm::Value* tmp = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "pebit");
+    llvm::Value* ptr = b_.CreateInBoundsGEP(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
+                                            tmp, {i64(0), i64(0)}, "pebitp");
     if (nbits == 1) {
       llvm::Value* one = b_.CreateZExt(v.reg, b_.getInt8Ty(), "b8");
       // BIT(1) travels as i1; the packed byte holds it in the low bit, but
@@ -11310,120 +11226,118 @@ void IRGen::emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
     break;
   }
   case HFormatItem::P: {
-      // P(picture): picture-directed output (rules (53),(146)-(148));
-      // formats a numeric value via pli_put_edit_pic against the picture string.
-      if (di >= dataItems.size())
-        break;
-      Val v = dataItems[di++];
-      const pli::PictureSpec spec = pli::classifyPicture(f.pic);
-      llvm::Value* val = nullptr;
-      llvm::Value* signSrc = nullptr;
-      bool binaryScaled = false;
-      int scale = 0;
-      if (spec.sterling) {
-        if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-          d_.error(s->loc, "wide FIXED DECIMAL output through a sterling PICTURE is not "
-                              "implemented",
-                   "(53)");
-          break;
-        }
-        if (!v.ty.isFixed() && v.ty.k != TK::Float) {
-          d_.error(s->loc, "P edit item requires a numeric value", "(53)");
-          break;
-        }
-        if (v.ty.isFixed() && v.ty.scale != 0) {
-          d_.error(s->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
-          break;
-        }
-        val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf")
-                                  : toI64(v);
-        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"),
-                                            i32(-1), i32(1), "picst");
-        facts_.recordBuiltin("picture", "runtime",
-                             "the sterling picture conversion needs the library routine");
-        if (remarkLibraryCalls_)
-          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
-        deferCall("pli_put_edit_pic_sterling",
-                  {val, sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())});
-        break;
-      }
+    // P(picture): picture-directed output (rules (53),(146)-(148));
+    // formats a numeric value via pli_put_edit_pic against the picture string.
+    if (di >= dataItems.size())
+      break;
+    Val v = dataItems[di++];
+    const pli::PictureSpec spec = pli::classifyPicture(f.pic);
+    llvm::Value* val = nullptr;
+    llvm::Value* signSrc = nullptr;
+    bool binaryScaled = false;
+    int scale = 0;
+    if (spec.sterling) {
       if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
-        // Wide DECIMAL output uses the 128-bit formatter core (B1).
-        llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
-        llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
-                                         b_.getInt64Ty(), "picw.hi");
-        llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
-                                            i32(-1), i32(1), "picwsgn");
-        facts_.recordBuiltin("picture", "runtime",
-                             "the wide picture conversion needs the library routine");
-        if (remarkLibraryCalls_)
-          d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
-        deferCall("pli_put_edit_pic_wide",
-                  {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size())});
+        d_.error(s->loc,
+                 "wide FIXED DECIMAL output through a sterling PICTURE is not "
+                 "implemented",
+                 "(53)");
         break;
       }
-      if (v.ty.isFixed()) {
-        val = toI64(v);
-        signSrc = val;
-        scale = v.ty.scale;
-        if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
-          // A binary scale holds raw/2^q; the formatter works in decimal.
-          // Truncate at the picture's fractional positions in i128 and hand
-          // the formatter that decimal value (ADR-288). The sign comes from
-          // the raw value so a negative fraction below one keeps its sign.
-          binaryScaled = true;
-          const int d = spec.valid ? spec.fracDigits : 0;
-          llvm::Type* wideTy = b_.getInt128Ty();
-          llvm::APInt p10(128, 1);
-          for (int i = 0; i < d; ++i)
-            p10 *= llvm::APInt(128, 10);
-          llvm::Value* wide = b_.CreateSExt(val, wideTy, "picw");
-          wide = b_.CreateMul(wide, llvm::ConstantInt::get(wideTy, p10), "picsc");
-          llvm::APInt pow2 = llvm::APInt(128, 1).shl(v.ty.scale);
-          wide = b_.CreateSDiv(wide, llvm::ConstantInt::get(wideTy, pow2), "picdv");
-          val = b_.CreateTrunc(wide, b_.getInt64Ty(), "picdec");
-          scale = d;
-        }
-      } else if (v.ty.k == TK::Float) {
-        // Convert float to fixed-decimal via truncation.
-        val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
-        signSrc = val;
-      } else {
+      if (!v.ty.isFixed() && v.ty.k != TK::Float) {
         d_.error(s->loc, "P edit item requires a numeric value", "(53)");
         break;
       }
-      // B4: a constant value through a foldable constant picture is formatted
-      // at compile time (rules (146)-(148)); the lowering policy still wins,
-      // so --experimental-lowering=picture:runtime keeps the interpreter and
-      // the differential oracle keeps both sides (ADR-274). A scaled binary
-      // stays on the runtime path: its sign is not recoverable from the
-      // truncated decimal value when the fraction is below one.
-      if (!binaryScaled && !runtimePath("picture") && spec.foldable) {
-        if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
-          std::string text;
-          if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
-            facts_.recordBuiltin("picture", "llvm");
-            deferCall("pli_put_edit_char", {globalString(text), i64((long long)text.size()),
-                                            i64((long long)text.size())});
-            break;
-          }
-        }
+      if (v.ty.isFixed() && v.ty.scale != 0) {
+        d_.error(s->loc, "sterling PICTURE output requires a whole-pence value", "(53)");
+        break;
       }
+      val = v.ty.k == TK::Float ? b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picsf") : toI64(v);
+      llvm::Value* sign =
+          b_.CreateSelect(b_.CreateICmpSLT(val, i64(0), "picsgn"), i32(-1), i32(1), "picst");
       facts_.recordBuiltin("picture", "runtime",
-                           "the picture conversion needs the library routine");
-      // The library-call remark (ADR-254): the picture conversion is done by
-      // the library routine, so the user is told where it happens.
+                           "the sterling picture conversion needs the library routine");
       if (remarkLibraryCalls_)
         d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
-      // sign derived from the value: -1 if negative, +1 if non-negative.
-      llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
-      llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
-      deferCall("pli_put_edit_pic",
-                {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
+      deferCall("pli_put_edit_pic_sterling",
+                {val, sign, globalString(spec.expanded), i64((long long)spec.expanded.size())});
       break;
     }
+    if (v.ty.k == TK::FixedDec && v.ty.intBits() == 128) {
+      // Wide DECIMAL output uses the 128-bit formatter core (B1).
+      llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
+      llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
+                                       b_.getInt64Ty(), "picw.hi");
+      llvm::Value* sign =
+          b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"), i32(-1), i32(1), "picwsgn");
+      facts_.recordBuiltin("picture", "runtime",
+                           "the wide picture conversion needs the library routine");
+      if (remarkLibraryCalls_)
+        d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+      deferCall("pli_put_edit_pic_wide",
+                {lo, hi, i64(v.ty.scale), sign, globalString(spec.expanded),
+                 i64((long long)spec.expanded.size())});
+      break;
+    }
+    if (v.ty.isFixed()) {
+      val = toI64(v);
+      signSrc = val;
+      scale = v.ty.scale;
+      if (v.ty.k == TK::FixedBin && v.ty.scale > 0) {
+        // A binary scale holds raw/2^q; the formatter works in decimal.
+        // Truncate at the picture's fractional positions in i128 and hand
+        // the formatter that decimal value (ADR-288). The sign comes from
+        // the raw value so a negative fraction below one keeps its sign.
+        binaryScaled = true;
+        const int d = spec.valid ? spec.fracDigits : 0;
+        llvm::Type* wideTy = b_.getInt128Ty();
+        llvm::APInt p10(128, 1);
+        for (int i = 0; i < d; ++i)
+          p10 *= llvm::APInt(128, 10);
+        llvm::Value* wide = b_.CreateSExt(val, wideTy, "picw");
+        wide = b_.CreateMul(wide, llvm::ConstantInt::get(wideTy, p10), "picsc");
+        llvm::APInt pow2 = llvm::APInt(128, 1).shl(v.ty.scale);
+        wide = b_.CreateSDiv(wide, llvm::ConstantInt::get(wideTy, pow2), "picdv");
+        val = b_.CreateTrunc(wide, b_.getInt64Ty(), "picdec");
+        scale = d;
+      }
+    } else if (v.ty.k == TK::Float) {
+      // Convert float to fixed-decimal via truncation.
+      val = b_.CreateFPToSI(v.reg, b_.getInt64Ty(), "picf");
+      signSrc = val;
+    } else {
+      d_.error(s->loc, "P edit item requires a numeric value", "(53)");
+      break;
+    }
+    // B4: a constant value through a foldable constant picture is formatted
+    // at compile time (rules (146)-(148)); the lowering policy still wins,
+    // so --experimental-lowering=picture:runtime keeps the interpreter and
+    // the differential oracle keeps both sides (ADR-274). A scaled binary
+    // stays on the runtime path: its sign is not recoverable from the
+    // truncated decimal value when the fraction is below one.
+    if (!binaryScaled && !runtimePath("picture") && spec.foldable) {
+      if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(val)) {
+        std::string text;
+        if (pli::foldPictureConversion(ci->getSExtValue(), scale, spec, text)) {
+          facts_.recordBuiltin("picture", "llvm");
+          deferCall("pli_put_edit_char",
+                    {globalString(text), i64((long long)text.size()), i64((long long)text.size())});
+          break;
+        }
+      }
+    }
+    facts_.recordBuiltin("picture", "runtime", "the picture conversion needs the library routine");
+    // The library-call remark (ADR-254): the picture conversion is done by
+    // the library routine, so the user is told where it happens.
+    if (remarkLibraryCalls_)
+      d_.remark(curLoc_, "the library routine does this conversion: the picture conversion");
+    // sign derived from the value: -1 if negative, +1 if non-negative.
+    llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
+    llvm::Value* sign = b_.CreateSelect(neg, i32(-1), i32(1), "picst");
+    deferCall("pli_put_edit_pic",
+              {val, i64(scale), sign, globalString(f.pic), i64((long long)f.pic.size())});
+    break;
+  }
   }
 }
 
@@ -11438,8 +11352,7 @@ void IRGen::emitGetEditItems(HStmt* s) {
 }
 
 // Emit a single edit-directed format item on input (rule 108).
-void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
-                            const std::vector<HExprP>& items,
+void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s, const std::vector<HExprP>& items,
                             size_t& di, llvm::Value* defW) {
   switch (f.kind) {
   case HFormatItem::X: {
@@ -11468,7 +11381,8 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
     llvm::Function* fn = b_.GetInsertBlock()->getParent();
     size_t savedDi = di;
     size_t avail = (savedDi < s->items.size()) ? (s->items.size() - savedDi) : 0;
-    if (avail == 0) break;
+    if (avail == 0)
+      break;
 
     // NEW: Dedicated pre-count block to ensure count expression is evaluated exactly once
     llvm::BasicBlock* preCountBlock = llvm::BasicBlock::Create(ctx_, "repeat.precount", fn);
@@ -11485,8 +11399,7 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
     b_.CreateCondBr(neg, negBlock, posBlock);
 
     b_.SetInsertPoint(negBlock);
-    b_.CreateCall(runtimeFn("pli_signal_error"),
-                  {globalString("negative format iteration count")});
+    b_.CreateCall(runtimeFn("pli_signal_error"), {globalString("negative format iteration count")});
     b_.CreateBr(skipBlock);
 
     b_.SetInsertPoint(posBlock);
@@ -11592,10 +11505,9 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
     SourceLoc loc = s->loc;
     long long nbits = t->ty.isBit() && t->ty.len > 0 ? t->ty.len : 1;
     long long nbytes = (nbits + 7) / 8;
-    llvm::Value* tmp =
-        entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "gebit");
-    llvm::Value* ptr = b_.CreateInBoundsGEP(
-        llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp, {i64(0), i64(0)}, "gebitp");
+    llvm::Value* tmp = entryAlloca(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), "gebit");
+    llvm::Value* ptr = b_.CreateInBoundsGEP(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
+                                            tmp, {i64(0), i64(0)}, "gebitp");
     llvm::Value* w = f.w ? toI64(emitExpr(f.w.get())) : i64(nbits);
     deferCall("pli_get_edit_bit", {ptr, i64(nbits), w}, false,
               [this, t, tmp, ptr, nbits, nbytes, loc](const std::vector<llvm::Value*>&, size_t) {
@@ -11608,8 +11520,8 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
                       b_.CreateLShr(byte, llvm::ConstantInt::get(b_.getInt8Ty(), 7), "gb7");
                   v.reg = b_.CreateTrunc(low, b_.getInt1Ty(), "gb1");
                 } else {
-                  v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes),
-                                        tmp, "gb");
+                  v.reg = b_.CreateLoad(llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)nbytes), tmp,
+                                        "gb");
                 }
                 storeGetTarget(t, v, loc);
               });
@@ -11635,8 +11547,7 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
         return toI64(emitExpr(sub.w.get()));
       if (sub.kind == HFormatItem::P) {
         const pli::PictureSpec spec = pli::classifyPicture(sub.pic);
-        return i64(spec.width +
-                   (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0));
+        return i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0));
       }
       return defW;
     };
@@ -11661,8 +11572,8 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
       }
       return dbl;
     };
-    auto storePair = [this, t, loc, p1, p2, sp1, sp2, picToDouble](
-                         const std::vector<llvm::Value*>& r, size_t i) {
+    auto storePair = [this, t, loc, p1, p2, sp1, sp2,
+                      picToDouble](const std::vector<llvm::Value*>& r, size_t i) {
       llvm::Value* re = p1 ? picToDouble(r[i - 1], sp1.fracDigits) : r[i - 1];
       llvm::Value* im = p2 ? picToDouble(r[i], sp2.fracDigits) : r[i];
       llvm::Value* cpx = llvm::UndefValue::get(llvmTy(Type::complexTy()));
@@ -11676,20 +11587,20 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
     // The two halves are read in order; the store waits for the second one.
     if (p1)
       deferCall("pli_get_edit_pic_picture",
-                {partWidth(s1), globalString(sp1.expanded),
-                 i64((long long)sp1.expanded.size()), i64(sp1.fracDigits)});
+                {partWidth(s1), globalString(sp1.expanded), i64((long long)sp1.expanded.size()),
+                 i64(sp1.fracDigits)});
     else if (s1.s)
       deferCall("pli_get_edit_num_scaled", {partWidth(s1), toI64(emitExpr(s1.s.get()))});
     else
       deferCall("pli_get_edit_num", {partWidth(s1)});
     if (p2)
       deferCall("pli_get_edit_pic_picture",
-                {partWidth(s2), globalString(sp2.expanded),
-                 i64((long long)sp2.expanded.size()), i64(sp2.fracDigits)},
+                {partWidth(s2), globalString(sp2.expanded), i64((long long)sp2.expanded.size()),
+                 i64(sp2.fracDigits)},
                 false, storePair);
     else if (s2.s)
-      deferCall("pli_get_edit_num_scaled",
-                {partWidth(s2), toI64(emitExpr(s2.s.get()))}, false, storePair);
+      deferCall("pli_get_edit_num_scaled", {partWidth(s2), toI64(emitExpr(s2.s.get()))}, false,
+                storePair);
     else
       deferCall("pli_get_edit_num", {partWidth(s2)}, false, storePair);
     break;
@@ -11708,16 +11619,16 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
       break;
     }
     if (spec.sterling) {
-      deferCall("pli_get_edit_pic_sterling",
-                {i64(spec.width), globalString(spec.expanded),
-                 i64((long long)spec.expanded.size())},
-                false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
-                  Val v;
-                  v.reg = r[i];
-                  int p = spec.intDigits > 0 ? spec.intDigits : 1;
-                  v.ty = Type::fixedDec(p, 0);
-                  storeGetTarget(t, v, loc);
-                });
+      deferCall(
+          "pli_get_edit_pic_sterling",
+          {i64(spec.width), globalString(spec.expanded), i64((long long)spec.expanded.size())},
+          false, [this, t, spec, loc](const std::vector<llvm::Value*>& r, size_t i) {
+            Val v;
+            v.reg = r[i];
+            int p = spec.intDigits > 0 ? spec.intDigits : 1;
+            v.ty = Type::fixedDec(p, 0);
+            storeGetTarget(t, v, loc);
+          });
       break;
     }
     {
@@ -11725,29 +11636,30 @@ void IRGen::emitGetEditItem(const HFormatItem& f, HStmt* s,
       if (p > 18) {
         // Wide P input writes the 128-bit value through a temp (B1).
         llvm::Value* slot = entryAlloca(b_.getInt128Ty(), "gpicw");
-        deferCall("pli_get_edit_pic_picture_wide",
-                  {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)),
-                   globalString(spec.expanded), i64((long long)spec.expanded.size()),
-                   i64(spec.fracDigits), slot},
-                  false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
-                    Val v;
-                    v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
-                    int prec = spec.intDigits + spec.fracDigits;
-                    v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
-                    storeGetTarget(t, v, loc);
-                  });
+        deferCall(
+            "pli_get_edit_pic_picture_wide",
+            {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)),
+             globalString(spec.expanded), i64((long long)spec.expanded.size()),
+             i64(spec.fracDigits), slot},
+            false, [this, t, spec, loc, slot](const std::vector<llvm::Value*>&, size_t) {
+              Val v;
+              v.reg = b_.CreateLoad(b_.getInt128Ty(), slot, "gpicwv");
+              int prec = spec.intDigits + spec.fracDigits;
+              v.ty = Type::fixedDec(prec > 0 ? prec : 1, spec.fracDigits);
+              storeGetTarget(t, v, loc);
+            });
       } else {
-        deferCall("pli_get_edit_pic_picture",
-                  {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)),
-                   globalString(spec.expanded), i64((long long)spec.expanded.size()),
-                   i64(spec.fracDigits)},
-                  false,
-                  [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
-                    Val v;
-                    v.reg = r[i];
-                    v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
-                    storeGetTarget(t, v, loc);
-                  });
+        deferCall(
+            "pli_get_edit_pic_picture",
+            {i64(spec.width + (spec.expanded.find_first_of("TIR") != std::string::npos ? 1 : 0)),
+             globalString(spec.expanded), i64((long long)spec.expanded.size()),
+             i64(spec.fracDigits)},
+            false, [this, t, spec, loc, p](const std::vector<llvm::Value*>& r, size_t i) {
+              Val v;
+              v.reg = r[i];
+              v.ty = Type::fixedDec(p > 0 ? p : 1, spec.fracDigits);
+              storeGetTarget(t, v, loc);
+            });
       }
     }
     break;
@@ -11806,26 +11718,24 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty, llvm::Type** dummyTy) {
     return dst;
   }
   bool direct = a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
-                a->memberPath.empty() && a->sym->ty.k == pty.k &&
-                a->sym->ty.len == pty.len && a->sym->ty.prec == pty.prec &&
-                a->sym->ty.varying == pty.varying;
+                a->memberPath.empty() && a->sym->ty.k == pty.k && a->sym->ty.len == pty.len &&
+                a->sym->ty.prec == pty.prec && a->sym->ty.varying == pty.varying;
   // P4.1: a member leaf with identical layout rides by reference too — same
   // type, aligned, addressable — skipping the dummy copy (rules (34),(38)).
   // Locator-qualified, DEFINED-overlay and struct leaves keep the old paths.
-  bool memberDirect =
-      !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::VarRef && a->sym &&
-      a->sym->kind != Symbol::ProcName && !a->memberPath.empty() && !a->locPtr &&
-      !a->sym->definedBase && a->ty == pty && !packedMemberPath(a->sym->ty, a->memberPath);
+  bool memberDirect = !pty.isStruct() && !(pty.isChar() && pty.starLen) &&
+                      a->kind == HExpr::VarRef && a->sym && a->sym->kind != Symbol::ProcName &&
+                      !a->memberPath.empty() && !a->locPtr && !a->sym->definedBase &&
+                      a->ty == pty && !packedMemberPath(a->sym->ty, a->memberPath);
   // P4.1 for a fixed array element (rule 4, A8): `CALL w(a(i))` passes the
   // element itself when its storage is directly addressable and its layout
   // matches the dummy exactly. Packed members, DEFINED overlays, CONTROLLED
   // and runtime-extent arrays keep the copy path; an element of a fixed
   // array of the same type needs no temporary.
-  bool elemDirect =
-      !pty.isStruct() && !(pty.isChar() && pty.starLen) && a->kind == HExpr::Subscript &&
-      a->sym && a->sym->kind != Symbol::ProcName && a->memberPath.empty() && !a->locPtr &&
-      !a->sym->definedBase && !a->sym->controlled && !a->sym->ty.isDynamic() &&
-      a->ty == pty;
+  bool elemDirect = !pty.isStruct() && !(pty.isChar() && pty.starLen) &&
+                    a->kind == HExpr::Subscript && a->sym && a->sym->kind != Symbol::ProcName &&
+                    a->memberPath.empty() && !a->locPtr && !a->sym->definedBase &&
+                    !a->sym->controlled && !a->sym->ty.isDynamic() && a->ty == pty;
   if (pty.isChar() && pty.starLen) {
     // An adjustable-length `CHAR(*)` parameter (rule (18)) takes the caller's
     // character variable directly by reference (no copy): the callee's length
@@ -11894,11 +11804,9 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty, llvm::Type** dummyTy) {
   }
   // A whole STATIC AREA array (rule (20)) rides by reference: the callee reads
   // the element slots directly, so materialise every region first.
-  if (direct && a->sym->isStatic && a->sym->ty.isArray() &&
-      a->sym->ty.elementType().isArea()) {
+  if (direct && a->sym->isStatic && a->sym->ty.isArray() && a->sym->ty.elementType().isArea()) {
     llvm::Value* base = addressOf(a->sym);
-    llvm::ArrayType* at =
-        llvm::ArrayType::get(b_.getPtrTy(), (unsigned)arrayExtent(a->sym->ty));
+    llvm::ArrayType* at = llvm::ArrayType::get(b_.getPtrTy(), (unsigned)arrayExtent(a->sym->ty));
     for (long long i = 0, n = arrayExtent(a->sym->ty); i < n; ++i) {
       llvm::Value* slot = b_.CreateInBoundsGEP(at, base, {i64(0), i64(i)}, "ar.slot");
       b_.CreateCall(runtimeFn("pli_area_lazy"), {slot, i64(a->sym->areaSize)});
@@ -11910,9 +11818,10 @@ llvm::Value* IRGen::argAddr(HExpr* a, const Type& pty, llvm::Type** dummyTy) {
   if (memberDirect)
     return memberAddr(a->sym, a->memberPath, a->loc);
   if (elemDirect) {
-    llvm::Value* elem = arrayElementAddr(a->sym->ty, addressOf(a->sym), a->args, a->loc,
-                                         dynUb_.count(a->sym) ? dynUb_[a->sym] : std::vector<llvm::Value*>(),
-                                         dynLb_.count(a->sym) ? dynLb_[a->sym] : std::vector<llvm::Value*>());
+    llvm::Value* elem =
+        arrayElementAddr(a->sym->ty, addressOf(a->sym), a->args, a->loc,
+                         dynUb_.count(a->sym) ? dynUb_[a->sym] : std::vector<llvm::Value*>(),
+                         dynLb_.count(a->sym) ? dynLb_[a->sym] : std::vector<llvm::Value*>());
     // An element of a STATIC AREA array carries its own lazily created region
     // (rule (20)), like the whole-array path above: create it before the
     // callee can allocate from it.
@@ -12114,7 +12023,9 @@ llvm::Value* IRGen::argExtent(HExpr* a) {
                                    ? dynUb_[a->sym][0]
                                    : (a->sym->dynUb ? toI64(emitExpr(a->sym->dynUb)) : i64(d.ub)))
                             : i64(d.ub);
-    llvm::Value* lb = d.lbDyn ? (dynLb_.count(a->sym) && !dynLb_[a->sym].empty() ? dynLb_[a->sym][0] : i64(d.lb)) : i64(d.lb);
+    llvm::Value* lb =
+        d.lbDyn ? (dynLb_.count(a->sym) && !dynLb_[a->sym].empty() ? dynLb_[a->sym][0] : i64(d.lb))
+                : i64(d.lb);
     // The hidden `*` extent is the first axis's extent (ub - lb + 1), not the
     // total element count: the callee stores it as dynUb_ (the upper bound of
     // axis 1) and computes DIM as extent × product of later axes. For 1-D arrays
@@ -12284,7 +12195,7 @@ void IRGen::emitCall(HStmt* s) {
   // statement discards the returned value.
   Type rty = en ? (en->entryIsFunction ? en->entryRetTy : Type::voidTy())
                 : (callee ? callee->retTy : Type::voidTy());
-  
+
   // For structure returns with dynamic members (rule 13), the caller must
   // allocate buffers for the dynamic members and store their pointers in the
   // sret buffer. The callee will deep-copy into these buffers.
@@ -12294,7 +12205,7 @@ void IRGen::emitCall(HStmt* s) {
     const HProc* calleeHProc = nullptr;
     std::string returnsStructName;
     std::vector<std::vector<unsigned>> retDynMemberPaths;
-    
+
     if (callee) {
       // Internal procedure: get HProc and returnsStructName.
       auto it = procToHProc_.find(callee);
@@ -12307,32 +12218,44 @@ void IRGen::emitCall(HStmt* s) {
       // External entry: use Symbol's recorded dynamic member paths.
       retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
     }
-    
+
     if (!retDynMemberPaths.empty()) {
       // Structure return with dynamic members: allocate sret buffer and
       // dynamic member buffers in caller's frame.
       sretBuf = entryAlloca(llvmTy(rty), "sret");
-      
+
       // Find the template structure symbol in caller's scope (for bounds).
       Symbol* tplSym = nullptr;
       if (!returnsStructName.empty()) {
         // Search in caller's accessible symbols.
         for (Symbol* sym : curProc_->localSyms)
-          if (sym->name == returnsStructName) { tplSym = sym; break; }
+          if (sym->name == returnsStructName) {
+            tplSym = sym;
+            break;
+          }
         if (!tplSym) {
           for (Symbol* sym : curProc_->paramSyms)
-            if (sym->name == returnsStructName) { tplSym = sym; break; }
+            if (sym->name == returnsStructName) {
+              tplSym = sym;
+              break;
+            }
         }
         if (!tplSym) {
           for (Symbol* sym : curProc_->directUses)
-            if (sym->name == returnsStructName) { tplSym = sym; break; }
+            if (sym->name == returnsStructName) {
+              tplSym = sym;
+              break;
+            }
         }
         if (!tplSym) {
           for (Symbol* sym : curProc_->env)
-            if (sym->name == returnsStructName) { tplSym = sym; break; }
+            if (sym->name == returnsStructName) {
+              tplSym = sym;
+              break;
+            }
         }
       }
-      
+
       // Create a synthetic symbol for the return value's dynamic member bounds.
       // We use a unique name based on the call site.
       std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
@@ -12343,12 +12266,12 @@ void IRGen::emitCall(HStmt* s) {
       retSym->irName = "%" + retSymName;
       Symbol* retSymPtr = retSym.get();
       ownedRetSyms_.push_back(std::move(retSym));
-      
+
       for (const auto& relPath : retDynMemberPaths) {
         const Type& arrTy = structPathType(rty, relPath);
         const Type& elTy = arrTy.elementType();
         llvm::Type* elLLVM = llvmTy(elTy);
-        
+
         llvm::Value* ub = nullptr;
         llvm::Value* lb = nullptr;
         if (tplSym) {
@@ -12363,16 +12286,16 @@ void IRGen::emitCall(HStmt* s) {
           ub = i64(d0.ub);
           lb = i64(d0.lb);
         }
-        
+
         llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
         long long rest = 1;
         for (size_t k = 1; k < arrTy.dims.size(); ++k)
           rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
         if (rest != 1)
           extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
-        
+
         llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
-        
+
         llvm::Value* fieldPtr = sretBuf;
         const Type* curTy = &rty;
         for (size_t i = 0; i < relPath.size(); ++i) {
@@ -12383,14 +12306,14 @@ void IRGen::emitCall(HStmt* s) {
         llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
         if (packedMemberPath(rty, relPath))
           sp->setAlignment(llvm::Align(1));
-        
+
         memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
       }
     } else {
       sretBuf = entryAlloca(llvmTy(rty), "sret");
     }
   }
-  
+
   if (rty.isStruct() || rty.isChar()) {
     if (!sretBuf)
       sretBuf = rty.isChar() ? sretAlloc(rty) : entryAlloca(llvmTy(rty), "sret");
@@ -12490,8 +12413,7 @@ void IRGen::emitCall(HStmt* s) {
     if (lb != labelBlocks_.end())
       b_.CreateBr(lb->second);
     else
-      d_.error(s->loc,
-               "an ABNORMAL entry can only be called from the procedure that declares it",
+      d_.error(s->loc, "an ABNORMAL entry can only be called from the procedure that declares it",
                "(38)");
   }
 }
@@ -12637,8 +12559,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
 
 /* The common tail of emitAsyncCall: build the context layout, the per-site
  * wrapper, and spawn the task (with priority if PRIORITY was given). */
-void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
-                           std::vector<llvm::Value*> callArgs,
+void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF, std::vector<llvm::Value*> callArgs,
                            const std::vector<llvm::Type*>& dummyTys) {
   // PRIORITY (rule 79, ADR-298): evaluated and passed to the spawn
   // function so the task starts with that priority. A bare CALL (no
@@ -12660,8 +12581,7 @@ void IRGen::emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
   // pointer into the caller's frame.
   std::vector<llvm::Type*> fields = {b_.getPtrTy()};
   for (size_t k = 0; k < callArgs.size(); ++k)
-    fields.push_back(k < dummyTys.size() && dummyTys[k] ? dummyTys[k]
-                                                        : callArgs[k]->getType());
+    fields.push_back(k < dummyTys.size() && dummyTys[k] ? dummyTys[k] : callArgs[k]->getType());
   llvm::StructType* ctxTy = llvm::StructType::get(ctx_, fields);
 
   // Per-site wrapper: unpack the context, call the procedure, free the
@@ -12821,9 +12741,9 @@ long long IRGen::arrayExtent(const Type& arr) {
 // Each index is 1-based (or lb-based); the generated flat offset is
 //   sum_k (i_k - lb_k) * stride_k,  stride_k = product of extents of later axes.
 llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
-                                      const std::vector<HExprP>& idxs, SourceLoc,
-                                      const std::vector<llvm::Value*>& dynUbs,
-                                      const std::vector<llvm::Value*>& dynLbs) {
+                                     const std::vector<HExprP>& idxs, SourceLoc,
+                                     const std::vector<llvm::Value*>& dynUbs,
+                                     const std::vector<llvm::Value*>& dynLbs) {
   const Type& el = arr.elementType();
   const size_t nAxes = arr.dims.size();
 
@@ -12839,12 +12759,10 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     for (size_t k = nAxes; k-- > 0;) {
       const Dim& dk = arr.dims[k];
       llvm::Value* i = toI64(emitExpr(idxs[k].get()));
-      llvm::Value* lb = dk.lbDyn
-                            ? (k < dynLbs.size() && dynLbs[k] ? dynLbs[k] : i64(dk.lb))
-                            : i64(dk.lb);
-      llvm::Value* ub = dk.dyn
-                            ? (k < dynUbs.size() && dynUbs[k] ? dynUbs[k] : i64(dk.ub))
-                            : i64(dk.ub);
+      llvm::Value* lb =
+          dk.lbDyn ? (k < dynLbs.size() && dynLbs[k] ? dynLbs[k] : i64(dk.lb)) : i64(dk.lb);
+      llvm::Value* ub =
+          dk.dyn ? (k < dynUbs.size() && dynUbs[k] ? dynUbs[k] : i64(dk.ub)) : i64(dk.ub);
       // Bounds-check comparisons (lo/hi/oob) are dead when SUBSCRIPTRANGE
       // is off — emit none. ClampIndex is the slip resume (rule 94).
       llvm::Value* idx = i;
@@ -12900,8 +12818,7 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
     // intent: row-major flat offset = sum_k (idx_k - lb_k) * stride_k
     llvm::Value* off = b_.CreateSub(idx, i64(lb), "off");
     // skipMul: stride 1 needs no multiply (strength reduction P1.2)
-    llvm::Value* contrib = (stride == 1) ? off
-        : b_.CreateMul(off, i64(stride), "scaled");
+    llvm::Value* contrib = (stride == 1) ? off : b_.CreateMul(off, i64(stride), "scaled");
     // skipAdd: initial accumulator is 0 — skip the add (strength reduction)
     if (flatIsZero) {
       flat = contrib;
@@ -12930,7 +12847,8 @@ llvm::Value* IRGen::arrayElementAddr(const Type& arr, llvm::Value* base,
 // GEP to a struct member at field index `f` in struct type `cur`. For a UNION
 // (ADR-202), all members share offset 0 — returns `addr` unchanged. For regular
 // structs, emits CreateStructGEP to the sequential field offset.
-llvm::Value* IRGen::structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f, const char* name) {
+llvm::Value* IRGen::structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f,
+                                    const char* name) {
   if (cur.isUnion)
     return addr; // union member: offset 0 (ADR-202)
   return b_.CreateStructGEP(llvmTy(cur), addr, f, name);
@@ -12975,7 +12893,7 @@ llvm::Value* IRGen::locatorMemberAddr(Symbol* base, const std::vector<unsigned>&
   llvm::Value* addr = baseAddr;
   const Type* cur = &base->ty;
   for (unsigned f : path) {
-     addr = structMemberGEP(*cur, addr, f, "lmem");
+    addr = structMemberGEP(*cur, addr, f, "lmem");
     cur = &cur->members[f]->ty;
   }
   return addr;
@@ -13026,9 +12944,9 @@ void IRGen::emitByNameCopy(llvm::Value* dstBase, llvm::Value* srcBase, const Typ
     if (j == (size_t)-1)
       continue; // name absent from the source: skipped
     const Member& sm = *src.members[j];
-     // For UNION (ADR-202), all members are at offset 0
-     llvm::Value* d = structMemberGEP(dst, dstBase, (unsigned)i, "bnm.d");
-     llvm::Value* s = structMemberGEP(src, srcBase, (unsigned)j, "bnm.s");
+    // For UNION (ADR-202), all members are at offset 0
+    llvm::Value* d = structMemberGEP(dst, dstBase, (unsigned)i, "bnm.d");
+    llvm::Value* s = structMemberGEP(src, srcBase, (unsigned)j, "bnm.s");
     if (dm.ty.isStruct() && sm.ty.isStruct()) {
       std::vector<unsigned> dp = dstPrefix;
       dp.push_back((unsigned)i);
@@ -13118,7 +13036,7 @@ void IRGen::emitStructInitValues(llvm::Value* base, const Type& ty, const std::v
                                  size_t& idx, SourceLoc loc) {
   for (size_t i = 0; i < ty.members.size(); ++i) {
     const Member& m = *ty.members[i];
-     llvm::Value* mem = structMemberGEP(ty, base, (unsigned)i, "init.mem");
+    llvm::Value* mem = structMemberGEP(ty, base, (unsigned)i, "init.mem");
     if (m.ty.isStruct()) {
       emitStructInitValues(mem, m.ty, vals, idx, loc);
     } else if (m.ty.isArray()) {
@@ -13258,7 +13176,7 @@ Val IRGen::loadSym(Symbol* sym, const Type& ty) {
     }
     return v;
   }
-   llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
+  llvm::LoadInst* r = b_.CreateLoad(llvmTy(ty), addr, "ld");
   annotateAlias(r, sym);
   stampFixedBinRange(r, ty, sym);
   if (ty.isComplex()) {
@@ -13602,9 +13520,9 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
     // element's bytes. A VARYING element is a struct { i32 len, [N x i8] data }.
     if (el.varying) {
       llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-      llvm::Value* elemAddr =
-          arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
-                           dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
+      llvm::Value* elemAddr = arrayElementAddr(
+          sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+          dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
       // Load the length prefix (index 0 of the struct)
       llvm::Value* lenPtr = b_.CreateStructGEP(llvmTy(el), elemAddr, 0, "vlen");
       llvm::Value* len = b_.CreateLoad(b_.getInt32Ty(), lenPtr, "vlen");
@@ -13614,7 +13532,8 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
       return v;
     }
     llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-    v.ptr = arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+    v.ptr = arrayElementAddr(sym->ty, base, idxs, loc,
+                             dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
                              dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
     v.len = i64(el.len);
     return v;
@@ -13640,17 +13559,17 @@ Val IRGen::loadArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, Source
   // A locator-qualified subscript P->X(i) (rules 124,126) addresses off the
   // locator value, not the declared BASED pointer.
   llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-  llvm::Value* addr =
-      arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
-                       dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
-     llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
-     stampFixedBinRange(cast<llvm::LoadInst>(r), el, sym);
-     if (el.isBit() && el.len == 1)
-       v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
-     else
-       v.reg = r;
-      return v;
-   }
+  llvm::Value* addr = arrayElementAddr(
+      sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+      dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
+  llvm::Value* r = b_.CreateLoad(llvmTy(el), addr, "ald");
+  stampFixedBinRange(cast<llvm::LoadInst>(r), el, sym);
+  if (el.isBit() && el.len == 1)
+    v.reg = b_.CreateTrunc(r, b_.getInt1Ty(), "b1");
+  else
+    v.reg = r;
+  return v;
+}
 
 // Store one array element (rule 126): convert to the element type, then store
 // through the bounds-checked element address.
@@ -13662,9 +13581,9 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
     // into the element's bytes. A VARYING element uses pli_assign_varying.
     if (el.varying) {
       llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-      llvm::Value* elemAddr =
-          arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
-                           dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
+      llvm::Value* elemAddr = arrayElementAddr(
+          sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+          dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
       // Get the data pointer (index 1 of the struct)
       llvm::Value* dp = b_.CreateStructGEP(llvmTy(el), elemAddr, 1, "vdata");
       // Get the length prefix pointer (index 0 of the struct)
@@ -13677,9 +13596,9 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
       return;
     }
     llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-    llvm::Value* addr =
-        arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
-                         dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
+    llvm::Value* addr = arrayElementAddr(
+        sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+        dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
     storeCharTo(addr, el, src, loc);
     return;
   }
@@ -13698,9 +13617,9 @@ void IRGen::storeArrayElement(Symbol* sym, const std::vector<HExprP>& idxs, cons
   // A locator-qualified target P->X(i) = e (rules 124,126) stores off the
   // locator value, not the declared BASED pointer.
   llvm::Value* base = locPtr ? emitExpr(locPtr).reg : addressOf(sym);
-  llvm::Value* addr =
-      arrayElementAddr(sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
-                       dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
+  llvm::Value* addr = arrayElementAddr(
+      sym->ty, base, idxs, loc, dynUb_.count(sym) ? dynUb_[sym] : std::vector<llvm::Value*>(),
+      dynLb_.count(sym) ? dynLb_[sym] : std::vector<llvm::Value*>());
   Val cv = convert(src, el, loc);
   storeScalarTo(addr, el, cv);
 }
@@ -13727,16 +13646,13 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
     bool packed = false;
   };
   // Helper: live extent of axis k for array `arr` (runtime for dyn, const otherwise).
-  auto liveExtent = [&](const Type& arr, size_t k,
-                        const std::vector<llvm::Value*>& dynUbs,
+  auto liveExtent = [&](const Type& arr, size_t k, const std::vector<llvm::Value*>& dynUbs,
                         const std::vector<llvm::Value*>& dynLbs) -> llvm::Value* {
     const Dim& dk = arr.dims[k];
-    llvm::Value* lb = dk.lbDyn
-                          ? (k < dynLbs.size() && dynLbs[k] ? dynLbs[k] : i64(dk.lb))
-                          : i64(dk.lb);
-    llvm::Value* ub = dk.dyn
-                          ? (k < dynUbs.size() && dynUbs[k] ? dynUbs[k] : i64(dk.ub))
-                          : i64(dk.ub);
+    llvm::Value* lb =
+        dk.lbDyn ? (k < dynLbs.size() && dynLbs[k] ? dynLbs[k] : i64(dk.lb)) : i64(dk.lb);
+    llvm::Value* ub =
+        dk.dyn ? (k < dynUbs.size() && dynUbs[k] ? dynUbs[k] : i64(dk.ub)) : i64(dk.ub);
     return b_.CreateAdd(b_.CreateSub(ub, lb, "e"), i64(1), "ext");
   };
   auto build = [&](HExpr* e) -> View {
@@ -13771,12 +13687,8 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
       llvm::Value* iv = toI64(emitExpr(e->args[k].get()));
       // Use live bounds for dynamic axes, constant bounds otherwise.
       const Dim& dk = v.arr->dims[k];
-      llvm::Value* lb = dk.lbDyn
-                          ? (k < lbs.size() && lbs[k] ? lbs[k] : i64(dk.lb))
-                          : i64(dk.lb);
-      llvm::Value* ub = dk.dyn
-                          ? (k < ubs.size() && ubs[k] ? ubs[k] : i64(dk.ub))
-                          : i64(dk.ub);
+      llvm::Value* lb = dk.lbDyn ? (k < lbs.size() && lbs[k] ? lbs[k] : i64(dk.lb)) : i64(dk.lb);
+      llvm::Value* ub = dk.dyn ? (k < ubs.size() && ubs[k] ? ubs[k] : i64(dk.ub)) : i64(dk.ub);
       llvm::Value* oob =
           b_.CreateOr(b_.CreateICmpSLT(iv, lb, "lo"), b_.CreateICmpSGT(iv, ub, "hi"), "oob");
       llvm::Value* civ = subChecks() ? clampIndex(iv, lb, ub) : iv;
@@ -13790,8 +13702,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
         startBlock(okL);
       }
       v.fixedFlat = b_.CreateAdd(
-          v.fixedFlat, b_.CreateMul(b_.CreateSub(civ, lb, "off"), v.stride[k], "scaled"),
-          "ff");
+          v.fixedFlat, b_.CreateMul(b_.CreateSub(civ, lb, "off"), v.stride[k], "scaled"), "ff");
     }
     return v;
   };
@@ -13806,8 +13717,9 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   for (long long j = (long long)m - 1; j >= 0; --j) {
     rstride[j] = rtotal;
     size_t ks = tv.stars[j];
-    llvm::Value* extk = liveExtent(*tv.arr, ks, dynUb_.count(t->sym) ? dynUb_[t->sym] : std::vector<llvm::Value*>(),
-                                                          dynLb_.count(t->sym) ? dynLb_[t->sym] : std::vector<llvm::Value*>());
+    llvm::Value* extk =
+        liveExtent(*tv.arr, ks, dynUb_.count(t->sym) ? dynUb_[t->sym] : std::vector<llvm::Value*>(),
+                   dynLb_.count(t->sym) ? dynLb_[t->sym] : std::vector<llvm::Value*>());
     rtotal = b_.CreateMul(rtotal, extk, "rext");
   }
   llvm::Value* total = tv.total;
@@ -13841,19 +13753,18 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
   };
   // Fast path for static arrays: compare compile-time star totals.
   long long tvTotal = 1, svTotal = 1;
-  for (size_t ks : tv.stars) tvTotal *= (tv.arr->dims[ks].ub - tv.arr->dims[ks].lb + 1);
-  for (size_t ks : sv.stars) svTotal *= (sv.arr->dims[ks].ub - sv.arr->dims[ks].lb + 1);
-  if (!broadcast && !tv.arr->isDynamic() && !sv.arr->isDynamic() &&
-      tvTotal == svTotal && tv.stars.size() == sv.stars.size() &&
-      suffixRun(tv) && suffixRun(sv) && sv.arr->elementType() == el && !el.isChar() &&
-      !el.isStruct() && !tv.packed && !sv.packed && !t->locPtr && !x->locPtr && t->sym && x->sym &&
-      !t->sym->controlled && !x->sym->controlled) {
+  for (size_t ks : tv.stars)
+    tvTotal *= (tv.arr->dims[ks].ub - tv.arr->dims[ks].lb + 1);
+  for (size_t ks : sv.stars)
+    svTotal *= (sv.arr->dims[ks].ub - sv.arr->dims[ks].lb + 1);
+  if (!broadcast && !tv.arr->isDynamic() && !sv.arr->isDynamic() && tvTotal == svTotal &&
+      tv.stars.size() == sv.stars.size() && suffixRun(tv) && suffixRun(sv) &&
+      sv.arr->elementType() == el && !el.isChar() && !el.isStruct() && !tv.packed && !sv.packed &&
+      !t->locPtr && !x->locPtr && t->sym && x->sym && !t->sym->controlled && !x->sym->controlled) {
     // Compile-time star total (both sides static here).
     long long constTotal = tvTotal;
-    llvm::Value* dstPtr =
-        b_.CreateInBoundsGEP(tgtArrTy, tv.base, {i64(0), tv.fixedFlat}, "csd");
-    llvm::Value* srcPtr =
-        b_.CreateInBoundsGEP(srcArrTy, sv.base, {i64(0), sv.fixedFlat}, "css");
+    llvm::Value* dstPtr = b_.CreateInBoundsGEP(tgtArrTy, tv.base, {i64(0), tv.fixedFlat}, "csd");
+    llvm::Value* srcPtr = b_.CreateInBoundsGEP(srcArrTy, sv.base, {i64(0), sv.fixedFlat}, "css");
     llvm::Value* nbytes = b_.CreateMul(
         i64(constTotal), i64(mod_.getDataLayout().getTypeStoreSize(llvmTy(el))), "csn");
     b_.CreateMemMove(dstPtr, llvm::MaybeAlign(), srcPtr, llvm::MaybeAlign(), nbytes);
@@ -13892,8 +13803,7 @@ void IRGen::emitCrossSectionAssign(HExpr* t, HExpr* x, SourceLoc loc) {
     for (size_t j = 0; j < m; ++j) {
       llvm::Value* coord = b_.CreateUDiv(srem, rstride[j], "cssc");
       srem = b_.CreateURem(srem, rstride[j], "cssr");
-      srcFlat =
-          b_.CreateAdd(srcFlat, b_.CreateMul(coord, sv.stride[sv.stars[j]], "csms"), "csss");
+      srcFlat = b_.CreateAdd(srcFlat, b_.CreateMul(coord, sv.stride[sv.stars[j]], "csms"), "csss");
     }
     llvm::Value* saddr = b_.CreateInBoundsGEP(srcArrTy, sv.base, {i64(0), srcFlat}, "csrc");
     llvm::LoadInst* lr = b_.CreateLoad(llvmTy(el), saddr, "csl");
@@ -13950,8 +13860,7 @@ llvm::Value* IRGen::definedConstAddr(Symbol* sym) {
   long long stride = 1;
   for (size_t k = n; k-- > 0;) {
     flat = b_.CreateAdd(
-        flat,
-        b_.CreateMul(b_.CreateSub(idx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
+        flat, b_.CreateMul(b_.CreateSub(idx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
@@ -13985,9 +13894,8 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
     }
     const Dim& dd = bty.dims[k];
     const int ilb = dd.lb, iub = dd.ub;
-    llvm::Value* raw =
-        b_.CreateAdd(b_.CreateMul(yidx[(size_t)j], i64(y->definedSlotMult[k]), "m"),
-                     i64(y->definedSlotAdd[k]), "c");
+    llvm::Value* raw = b_.CreateAdd(b_.CreateMul(yidx[(size_t)j], i64(y->definedSlotMult[k]), "m"),
+                                    i64(y->definedSlotAdd[k]), "c");
     llvm::Value* oob = b_.CreateOr(b_.CreateICmpSLT(raw, i64(ilb), "lo"),
                                    b_.CreateICmpSGT(raw, i64(iub), "hi"), "oob");
     // A handled slip resumes with the base index clamped into range (rule 94);
@@ -14007,8 +13915,7 @@ llvm::Value* IRGen::definedSubElementAddr(Symbol* y, const std::vector<HExprP>& 
   long long stride = 1;
   for (size_t k = n; k-- > 0;) {
     flat = b_.CreateAdd(
-        flat,
-        b_.CreateMul(b_.CreateSub(bidx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
+        flat, b_.CreateMul(b_.CreateSub(bidx[k], i64(bty.dims[k].lb), "o"), i64(stride), "s"), "f");
     stride *= (bty.dims[k].ub - bty.dims[k].lb + 1);
   }
   llvm::Type* arrTy = llvm::ArrayType::get(llvmTy(bty.elementType()), (unsigned)arrayExtent(bty));
@@ -14166,43 +14073,43 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
       out.reg = unpackBitValueWide(iv, dst.len, loc);
     return out;
   }
-   if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
-     llvm::Value* iv = nullptr;
-     llvm::Type* ivTy = nullptr;
-     if (v.ty.len == 1) {
-       iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
-       ivTy = b_.getInt64Ty();
-     } else if (v.ty.len <= 64) {
-       iv = packBitValue(v.reg, v.ty.len, loc);
-       ivTy = b_.getInt64Ty();
-     } else if (v.ty.len <= 128) {
-       iv = packBitValueWide(v.reg, v.ty.len, loc);
-       ivTy = b_.getInt128Ty();
-     } else {
-       d_.error(loc,
-                "conversion of a BIT string longer than 128 bits to a number is not implemented "
-                "in this stage",
-                "(86)");
-       out.reg = i64(0);
-       return out;
-     }
-     if (dstFloat) {
-       out.reg = b_.CreateUIToFP(iv, b_.getDoubleTy(), "cvt");
-     } else if (llvmTy(dst)->getIntegerBitWidth() <= 64) {
-       out.reg = ivTy == b_.getInt128Ty()
-                     ? b_.CreateTrunc(iv, llvmTy(dst), "cvt")
-                     : (llvmTy(dst)->getIntegerBitWidth() == 64 ? iv
-                                                                : b_.CreateTrunc(iv, llvmTy(dst), "cvt"));
-     } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
-       out.reg = ivTy == b_.getInt128Ty() ? iv : b_.CreateZExt(iv, llvmTy(dst), "cvt");
-     } else {
-       out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
-     }
-     // A BINARY target narrower than its slot checks the declared precision.
-     if (!dstFloat && dst.k == TK::FixedBin)
-       out.reg = fixedBinPrecTrap(out.reg, dst.prec);
-     return out;
-   }
+  if (srcBit) { // BIT -> arithmetic takes the binary value, big-endian
+    llvm::Value* iv = nullptr;
+    llvm::Type* ivTy = nullptr;
+    if (v.ty.len == 1) {
+      iv = b_.CreateZExt(v.reg, b_.getInt64Ty(), "biv");
+      ivTy = b_.getInt64Ty();
+    } else if (v.ty.len <= 64) {
+      iv = packBitValue(v.reg, v.ty.len, loc);
+      ivTy = b_.getInt64Ty();
+    } else if (v.ty.len <= 128) {
+      iv = packBitValueWide(v.reg, v.ty.len, loc);
+      ivTy = b_.getInt128Ty();
+    } else {
+      d_.error(loc,
+               "conversion of a BIT string longer than 128 bits to a number is not implemented "
+               "in this stage",
+               "(86)");
+      out.reg = i64(0);
+      return out;
+    }
+    if (dstFloat) {
+      out.reg = b_.CreateUIToFP(iv, b_.getDoubleTy(), "cvt");
+    } else if (llvmTy(dst)->getIntegerBitWidth() <= 64) {
+      out.reg = ivTy == b_.getInt128Ty() ? b_.CreateTrunc(iv, llvmTy(dst), "cvt")
+                                         : (llvmTy(dst)->getIntegerBitWidth() == 64
+                                                ? iv
+                                                : b_.CreateTrunc(iv, llvmTy(dst), "cvt"));
+    } else if (llvmTy(dst)->getIntegerBitWidth() == 128) {
+      out.reg = ivTy == b_.getInt128Ty() ? iv : b_.CreateZExt(iv, llvmTy(dst), "cvt");
+    } else {
+      out.reg = b_.CreateTrunc(iv, llvmTy(dst), "cvt");
+    }
+    // A BINARY target narrower than its slot checks the declared precision.
+    if (!dstFloat && dst.k == TK::FixedBin)
+      out.reg = fixedBinPrecTrap(out.reg, dst.prec);
+    return out;
+  }
   if (srcFloat && dstFloat)
     return v;
   if (srcFloat && !dstFloat) { // FLOAT -> FIXED truncates toward zero
@@ -14210,8 +14117,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     // FIXED BINARY target by 2^q (ADR-284), so scale the float up first.
     llvm::Value* f = v.reg;
     if (dst.k == TK::FixedDec && dst.scale > 0) {
-      double sc = dst.scale <= 18 ? (double)pliPow10(dst.scale)
-                                  : pli_to_double(pliPow10_128(dst.scale));
+      double sc =
+          dst.scale <= 18 ? (double)pliPow10(dst.scale) : pli_to_double(pliPow10_128(dst.scale));
       f = b_.CreateFMul(f, flt(sc), "fsc");
     } else if (dst.k == TK::FixedBin && dst.scale > 0)
       f = b_.CreateFMul(f, flt((double)(1LL << dst.scale)), "fsc");
@@ -14296,8 +14203,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
     // Same-base same-scale copies only need a width change and a precision
     // check; every other pair goes through the rescale path.
     bool rescale = (srcDec && dstDec && v.ty.scale != dst.scale) ||
-                   (srcBin && dstBin && v.ty.scale != dst.scale) ||
-                   (srcDec && dstBin) || (srcBin && dstDec);
+                   (srcBin && dstBin && v.ty.scale != dst.scale) || (srcDec && dstBin) ||
+                   (srcBin && dstDec);
     int dqDec = (srcDec && dstDec) ? dst.scale - v.ty.scale : 0;
     bool decFits = srcDec && v.ty.prec + std::max(dqDec, 0) <= dst.prec;
     bool needDec = dstDec && dst.prec <= 18 && !decFits;
@@ -14363,7 +14270,7 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         else if (v.ty.scale < 0)
           r = b_.CreateMul(r, intPowConst(wide, 10, -v.ty.scale), "res");
         r = fixedBinPrecTrap(r, dst.prec);
-          out.reg = fitFixed(r);
+        out.reg = fitFixed(r);
         return out;
       }
       // value*2^q: a non-wide DECIMAL's raw integer times 2^q fits i128
@@ -14396,16 +14303,16 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         int q = v.ty.scale;
         if (q > 0) {
           llvm::Value* div = intPowConst(wide, 2, q);
-          llvm::Value* sign = b_.CreateSelect(
-              b_.CreateICmpSLT(r, llvm::ConstantInt::get(wide, 0), "sgn"),
-              llvm::ConstantInt::get(wide, -1), llvm::ConstantInt::get(wide, 1));
+          llvm::Value* sign =
+              b_.CreateSelect(b_.CreateICmpSLT(r, llvm::ConstantInt::get(wide, 0), "sgn"),
+                              llvm::ConstantInt::get(wide, -1), llvm::ConstantInt::get(wide, 1));
           llvm::Value* adj = b_.CreateMul(intPowConst(wide, 2, q - 1), sign, "adj");
           r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
         } else if (q < 0) {
           r = b_.CreateMul(r, intPowConst(wide, 2, -q), "res");
         }
         wideMagTrap(r, dst.prec);
-          out.reg = fitFixed(r);
+        out.reg = fitFixed(r);
         return out;
       }
       // value*10^s = raw*10^s/2^q; the target rounds half away from zero
@@ -14429,8 +14336,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         magTrap(r, limit);
       out.reg = fitFixed(r);
       return out;
-}
-    
+    }
+
     // DECIMAL -> DECIMAL. dq > 0 multiplies by 10^dq; dq < 0 rounds half
     // away from zero (ADR-006), EXCEPT when the destination has negative scale
     // (Y33-6003-0 §4.5): truncation is used for negative scale.
@@ -14452,7 +14359,8 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         // Normal case: round half away from zero (ADR-006)
         if (wide) {
           llvm::Value* div = i128(pliPow10_128(k));
-          llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
+          llvm::Value* sign =
+              b_.CreateSelect(b_.CreateICmpSLT(r, i128(0), "sgn"), i128(-1), i128(1));
           llvm::Value* adj = b_.CreateMul(i128(pliPow10_128(k - 1) * 5), sign, "adj");
           r = b_.CreateSDiv(b_.CreateAdd(r, adj, "rn"), div, "res");
         } else {
@@ -14463,8 +14371,9 @@ Val IRGen::convert(const Val& v, const Type& dst, SourceLoc loc) {
         }
       }
     }
-    if (needDec)
+    if (needDec) {
       magTrap(r, limit);
+    }
     out.reg = fitFixed(r);
     return out;
   }
@@ -14495,8 +14404,8 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     }
     // A wide DECIMAL is edited by the 128-bit formatter core (B1).
     llvm::Value* lo = b_.CreateTrunc(v.reg, b_.getInt64Ty(), "picw.lo");
-    llvm::Value* hi = b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"),
-                                     b_.getInt64Ty(), "picw.hi");
+    llvm::Value* hi =
+        b_.CreateTrunc(b_.CreateLShr(v.reg, (uint64_t)64, "picw.shr"), b_.getInt64Ty(), "picw.hi");
     llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(v.reg, i128(0), "picwneg"),
                                         b_.getInt32(-1), b_.getInt32(1), "picwsgn");
     b_.CreateCall(runtimeFn("pli_pic_format_wide"),
@@ -14516,8 +14425,9 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
       // at the picture's decimal positions (ADR-288's P rule).
       const int d = spec.fracDigits;
       if (d > 18) {
-        d_.error(loc, "a scaled FIXED BINARY PICTURE assignment supports at most 18 "
-                      "fractional positions",
+        d_.error(loc,
+                 "a scaled FIXED BINARY PICTURE assignment supports at most 18 "
+                 "fractional positions",
                  "(53)");
         return out;
       }
@@ -14543,8 +14453,8 @@ Val IRGen::convertToPicture(const Val& v, const Type& dst, SourceLoc loc) {
     llvm::Value* sign = b_.CreateSelect(b_.CreateICmpSLT(signSrc, i64(0), "picsgn"),
                                         b_.getInt32(-1), b_.getInt32(1), "picst");
     b_.CreateCall(runtimeFn("pli_pic_format_sterling"),
-                  {val, sign, globalString(spec.expanded),
-                   i64((long long)spec.expanded.size()), out.ptr, out.len});
+                  {val, sign, globalString(spec.expanded), i64((long long)spec.expanded.size()),
+                   out.ptr, out.len});
     return out;
   }
   llvm::Value* neg = b_.CreateICmpSLT(signSrc, i64(0), "picsign");
@@ -14848,16 +14758,14 @@ Val IRGen::emitExpr(HExpr* e) {
       // A locator-qualified member P->S.A(i) (rules 124,126) addresses the
       // array through the locator value, not the declared BASED pointer.
       llvm::Value* base =
-          e->locPtr
-              ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
-              : (arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
-                                 : memberAddr(e->sym, e->memberPath, e->loc));
+          e->locPtr ? locatorMemberAddr(e->sym, e->memberPath, emitExpr(e->locPtr.get()).reg)
+                    : (arr.isDynamic() ? dynamicMemberBase(e->sym, e->memberPath, e->loc, ub, lb)
+                                       : memberAddr(e->sym, e->memberPath, e->loc));
       // member later axes stay constant; the slot vec is axis 0 only
-      llvm::Value* addr = arrayElementAddr(arr, base, e->args, e->loc,
-                                           ub ? std::vector<llvm::Value*>{ub}
-                                              : std::vector<llvm::Value*>(),
-                                           lb ? std::vector<llvm::Value*>{lb}
-                                              : std::vector<llvm::Value*>());
+      llvm::Value* addr =
+          arrayElementAddr(arr, base, e->args, e->loc,
+                           ub ? std::vector<llvm::Value*>{ub} : std::vector<llvm::Value*>(),
+                           lb ? std::vector<llvm::Value*>{lb} : std::vector<llvm::Value*>());
       bool packed = packedMemberPath(e->sym->ty, e->memberPath);
       v.ty = el;
       if (el.isChar()) {
@@ -15113,13 +15021,13 @@ Val IRGen::emitExpr(HExpr* e) {
     std::vector<Symbol*> calleeParams = en ? en->entryParamSyms : callee->paramSyms;
     std::vector<llvm::Value*> args;
     llvm::Value* sretPtr = nullptr;
-    
+
     // Detect dynamic member paths in callee's return type (rule 13).
     const HProc* calleeHProc = nullptr;
     std::string returnsStructName;
     std::vector<std::vector<unsigned>> retDynMemberPaths;
     Symbol* calleeSym = e->sym;
-    
+
     if (callee) {
       // Internal procedure call.
       auto it = procToHProc_.find(callee);
@@ -15132,7 +15040,7 @@ Val IRGen::emitExpr(HExpr* e) {
       // External entry call.
       retDynMemberPaths = calleeSym->entryRetDynMemberPaths;
     }
-    
+
     if (rty.isStruct() || rty.isChar()) {
       // Hidden-buffer result (rules 127 and (34),(37)): the caller allocates
       // the result buffer and passes its address as the first argument.
@@ -15141,26 +15049,38 @@ Val IRGen::emitExpr(HExpr* e) {
       if (rty.isStruct() && !retDynMemberPaths.empty()) {
         // Allocate sret buffer and dynamic member buffers.
         sretPtr = entryAlloca(llvmTy(rty), "sret");
-        
+
         // Find template structure symbol in caller's scope.
         Symbol* tplSym = nullptr;
         if (!returnsStructName.empty()) {
           for (Symbol* sym : curProc_->localSyms)
-            if (sym->name == returnsStructName) { tplSym = sym; break; }
+            if (sym->name == returnsStructName) {
+              tplSym = sym;
+              break;
+            }
           if (!tplSym) {
             for (Symbol* sym : curProc_->paramSyms)
-              if (sym->name == returnsStructName) { tplSym = sym; break; }
+              if (sym->name == returnsStructName) {
+                tplSym = sym;
+                break;
+              }
           }
           if (!tplSym) {
             for (Symbol* sym : curProc_->directUses)
-              if (sym->name == returnsStructName) { tplSym = sym; break; }
+              if (sym->name == returnsStructName) {
+                tplSym = sym;
+                break;
+              }
           }
           if (!tplSym) {
             for (Symbol* sym : curProc_->env)
-              if (sym->name == returnsStructName) { tplSym = sym; break; }
+              if (sym->name == returnsStructName) {
+                tplSym = sym;
+                break;
+              }
           }
         }
-        
+
         // Create synthetic symbol for return value bounds.
         std::string retSymName = "__ret_dyn_" + std::to_string(n_++);
         auto retSym = std::make_unique<Symbol>();
@@ -15170,12 +15090,12 @@ Val IRGen::emitExpr(HExpr* e) {
         retSym->irName = "%" + retSymName;
         Symbol* retSymPtr = retSym.get();
         ownedRetSyms_.push_back(std::move(retSym));
-        
+
         for (const auto& relPath : retDynMemberPaths) {
           const Type& arrTy = structPathType(rty, relPath);
           const Type& elTy = arrTy.elementType();
           llvm::Type* elLLVM = llvmTy(elTy);
-          
+
           llvm::Value* ub = nullptr;
           llvm::Value* lb = nullptr;
           if (tplSym) {
@@ -15190,16 +15110,16 @@ Val IRGen::emitExpr(HExpr* e) {
             ub = i64(d0.ub);
             lb = i64(d0.lb);
           }
-          
+
           llvm::Value* extent = b_.CreateAdd(b_.CreateSub(ub, lb, "ret.me1"), i64(1), "ret.mext");
           long long rest = 1;
           for (size_t k = 1; k < arrTy.dims.size(); ++k)
             rest *= (arrTy.dims[k].ub - arrTy.dims[k].lb + 1);
           if (rest != 1)
             extent = b_.CreateMul(extent, i64(rest), "ret.mextall");
-          
+
           llvm::Value* buf = b_.CreateAlloca(elLLVM, extent, retSymName + ".dyn");
-          
+
           llvm::Value* fieldPtr = sretPtr;
           const Type* curTy = &rty;
           for (size_t i = 0; i < relPath.size(); ++i) {
@@ -15210,7 +15130,7 @@ Val IRGen::emitExpr(HExpr* e) {
           llvm::StoreInst* sp = b_.CreateStore(buf, fieldPtr);
           if (packedMemberPath(rty, relPath))
             sp->setAlignment(llvm::Align(1));
-          
+
           memberDyn_[MemberDyn{retSymPtr, relPath}] = MemberBounds{ub, lb};
         }
       } else {
@@ -15459,8 +15379,7 @@ Val IRGen::emitExpr(HExpr* e) {
   Val a = emitExpr(e->a.get());
   Val b = emitExpr(e->b.get());
 
-  if (isCmp && a.ty.isBit() && b.ty.isBit() &&
-      (a.ty.len > 64 || b.ty.len > 64)) {
+  if (isCmp && a.ty.isBit() && b.ty.isBit() && (a.ty.len > 64 || b.ty.len > 64)) {
     // Value-width-independent BIT comparison for wide operands: right-justify
     // each operand into N = max(na, nb) bits (zero-pad on the left) so operands
     // of differing widths compare by numeric value, then ask the runtime
@@ -15479,9 +15398,11 @@ Val IRGen::emitExpr(HExpr* e) {
         llvm::Value* byte = b_.getInt8(0);
         for (int t = 0; t < 8; ++t) {
           const int L = j * 8 + t - S; // original local bit index
-          if (L < 0 || L >= nx) continue;
+          if (L < 0 || L >= nx)
+            continue;
           const int bi = L / 8;
-          if (bi >= Bx) continue;
+          if (bi >= Bx)
+            continue;
           llvm::Value* srcByte = b_.CreateExtractValue(x.reg, (unsigned)bi, "norm.x");
           if (bi == Bx - 1) {
             const int keep = nx - 8 * (Bx - 1);
@@ -15507,8 +15428,8 @@ Val IRGen::emitExpr(HExpr* e) {
     llvm::Type* normTy = llvm::ArrayType::get(b_.getInt8Ty(), (unsigned)((N + 7) / 8));
     llvm::Value* pa = slotFor(normalize(a, na), normTy);
     llvm::Value* pb = slotFor(normalize(b, nb), normTy);
-    llvm::Value* cmp = b_.CreateCall(runtimeFn("pli_bit_cmp"),
-                                     {pa, pb, i64((long long)N)}, "bitcmp");
+    llvm::Value* cmp =
+        b_.CreateCall(runtimeFn("pli_bit_cmp"), {pa, pb, i64((long long)N)}, "bitcmp");
     llvm::Value* r = nullptr;
     switch (op) {
     case Tok::Eq:
@@ -15619,8 +15540,7 @@ Val IRGen::emitExpr(HExpr* e) {
   if (!isCmp && op == Tok::Power && !common.isComplex())
     common = Type::flt(e->ty.prec);
   Val av, bv;
-  const bool fixedDiv =
-      op == Tok::Slash && common.isFixed() && a.ty.isFixed() && b.ty.isFixed();
+  const bool fixedDiv = op == Tok::Slash && common.isFixed() && a.ty.isFixed() && b.ty.isFixed();
   if (fixedDiv) {
     // Exact FIXED division (ADR-361/362): keep each operand's own scale so the
     // raw integers divide directly. Rescaling both to the result scale first
@@ -15629,12 +15549,10 @@ Val IRGen::emitExpr(HExpr* e) {
     // Appendix 1), so the quotient is computed from the converted values.
     Type wa = common, wb = common;
     const bool mixed = a.ty.k != b.ty.k;
-    wa.scale = a.ty.k == TK::FixedDec && mixed
-                   ? std::min(62, decToBinScale(a.ty.scale))
-                   : a.ty.scale;
-    wb.scale = b.ty.k == TK::FixedDec && mixed
-                   ? std::min(62, decToBinScale(b.ty.scale))
-                   : b.ty.scale;
+    wa.scale =
+        a.ty.k == TK::FixedDec && mixed ? std::min(62, decToBinScale(a.ty.scale)) : a.ty.scale;
+    wb.scale =
+        b.ty.k == TK::FixedDec && mixed ? std::min(62, decToBinScale(b.ty.scale)) : b.ty.scale;
     if (mixed) {
       // The converted DECIMAL side is a BIN(p',q'); the binary side keeps its
       // own declared precision, so the formula can use p1 below.
@@ -15914,9 +15832,7 @@ Val IRGen::emitExpr(HExpr* e) {
   // to exact zero counts as underflow too.
   if (flt && !isCmp) {
     const bool mulDiv = op == Tok::Star || op == Tok::Slash || op == Tok::Power;
-    r = applyUnderflow(Val{common, r}, mulDiv ? av.reg : nullptr,
-                       mulDiv ? bv.reg : nullptr)
-            .reg;
+    r = applyUnderflow(Val{common, r}, mulDiv ? av.reg : nullptr, mulDiv ? bv.reg : nullptr).reg;
     r = applyOverflow(Val{common, r}).reg;
   }
   v.ty = common;
@@ -15982,9 +15898,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // MINVAL the smallest positive normalized double (Fortran TINY).
   if (e->name == "EPSILON" || e->name == "MAXVAL" || e->name == "MINVAL") {
     v.ty = e->ty;
-    v.reg = flt(e->name == "EPSILON" ? DBL_EPSILON
-                : e->name == "MAXVAL" ? DBL_MAX
-                                      : DBL_MIN);
+    v.reg = flt(e->name == "EPSILON" ? DBL_EPSILON : e->name == "MAXVAL" ? DBL_MAX : DBL_MIN);
     result = v;
     return true;
   }
@@ -15993,8 +15907,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // i8 GEP and the distance is a pointer-to-integer subtraction. The count
   // converts through the ordinary numeric path to FIXED BIN(31,0), so a
   // scaled decimal reconciles its scale before it is used as a byte count.
-  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
-      e->name == "OFFSETDIFF") {
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" || e->name == "OFFSETDIFF") {
     llvm::Value* x = emitExpr(e->args[0].get()).reg;
     if (e->name == "OFFSETDIFF") {
       llvm::Value* y = emitExpr(e->args[1].get()).reg;
@@ -16025,20 +15938,20 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     result = v;
     return true;
   }
-   if (e->name == "ADDR") {
-     HExpr* a = e->args[0].get();
-      if (a->kind == HExpr::VarRef && a->isLabel) {
-        v.ty = e->ty;
-        llvm::BasicBlock* bb = lookupLabelBlock(a->name);
-        if (!bb || !curFn_) {
-          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
-        } else {
-          v.reg = llvm::BlockAddress::get(curFn_, bb);
-        }
-        result = v;
-        return true;
+  if (e->name == "ADDR") {
+    HExpr* a = e->args[0].get();
+    if (a->kind == HExpr::VarRef && a->isLabel) {
+      v.ty = e->ty;
+      llvm::BasicBlock* bb = lookupLabelBlock(a->name);
+      if (!bb || !curFn_) {
+        v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
+      } else {
+        v.reg = llvm::BlockAddress::get(curFn_, bb);
       }
-     if (a->kind == HExpr::VarRef && a->sym) {
+      result = v;
+      return true;
+    }
+    if (a->kind == HExpr::VarRef && a->sym) {
       v.ty = e->ty;
       // A qualified member S.A.B GEPs off the base; a locator P->X
       // addresses off the locator value instead of the own base.
@@ -16066,9 +15979,10 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       // then GEP through the member path from that element address.
       if (!a->memberPath.empty() && a->sym->ty.isArray()) {
         llvm::Value* base = a->locPtr ? emitExpr(a->locPtr.get()).reg : addressOf(a->sym);
-        llvm::Value* elem = arrayElementAddr(a->sym->ty, base, a->args, a->loc,
-                                             dynUb_.count(a->sym) ? dynUb_[a->sym] : std::vector<llvm::Value*>(),
-                                             dynLb_.count(a->sym) ? dynLb_[a->sym] : std::vector<llvm::Value*>());
+        llvm::Value* elem =
+            arrayElementAddr(a->sym->ty, base, a->args, a->loc,
+                             dynUb_.count(a->sym) ? dynUb_[a->sym] : std::vector<llvm::Value*>(),
+                             dynLb_.count(a->sym) ? dynLb_[a->sym] : std::vector<llvm::Value*>());
         v.reg = elementMemberAddr(a->sym, a->memberPath, elem);
         result = v;
         return true;
@@ -16078,17 +15992,14 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         // ADDR of a locator-qualified member array served (rule 124).
         const Type& arr = memberType(a->sym, a->memberPath);
         llvm::Value *ub = nullptr, *lb = nullptr;
-        llvm::Value* base = a->locPtr
-                                ? locatorMemberAddr(a->sym, a->memberPath, emitExpr(a->locPtr.get()).reg)
-                                : (arr.isDynamic()
-                                       ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
-                                       : memberAddr(a->sym, a->memberPath, a->loc));
+        llvm::Value* base =
+            a->locPtr ? locatorMemberAddr(a->sym, a->memberPath, emitExpr(a->locPtr.get()).reg)
+                      : (arr.isDynamic() ? dynamicMemberBase(a->sym, a->memberPath, a->loc, ub, lb)
+                                         : memberAddr(a->sym, a->memberPath, a->loc));
         // member later axes stay constant; the slot vec is axis 0 only
         v.reg = arrayElementAddr(arr, base, a->args, a->loc,
-                                 ub ? std::vector<llvm::Value*>{ub}
-                                    : std::vector<llvm::Value*>(),
-                                 lb ? std::vector<llvm::Value*>{lb}
-                                    : std::vector<llvm::Value*>());
+                                 ub ? std::vector<llvm::Value*>{ub} : std::vector<llvm::Value*>(),
+                                 lb ? std::vector<llvm::Value*>{lb} : std::vector<llvm::Value*>());
         result = v;
         return true;
       }
@@ -16511,12 +16422,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             llvm::Value* nz = b_.CreateICmpNE(r, i64(0), "modnz");
             // Adjust when remainder is nonzero and sign(r) != sign(divisor).
             bool bNeg = cv.isNegative();
-            llvm::Value* needAdj =
-                bNeg ? b_.CreateICmpUGE(r, i64(0), "modpos") : b_.CreateICmpSLT(r, i64(0), "modneg");
+            llvm::Value* needAdj = bNeg ? b_.CreateICmpUGE(r, i64(0), "modpos")
+                                        : b_.CreateICmpSLT(r, i64(0), "modneg");
             m = b_.CreateSelect(nz, b_.CreateSelect(needAdj, adj, r), r, "mods");
           }
         }
-        } else {
+      } else {
         // General path: pli_mod_ll is AlwaysInline (Task 5), so LLVM can
         // inline and fold the body when the divisor is known at -O2+.
         llvm::Value* bi = toI64(bv);
@@ -16555,9 +16466,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // FIXED overflow (QR1.2): like Binary `*`, a wrapped product traps; a
     // FIXED DECIMAL product longer than 31 digits raises FIXEDOVERFLOW.
     llvm::Value* r = common.k == TK::Float ? b_.CreateFMul(av.reg, bv.reg, "mul")
-                     : common.isFixed()    ? checkedArith(Tok::Star, av.reg, bv.reg,
-                                                          common.k == TK::FixedDec)
-                                           : b_.CreateMul(av.reg, bv.reg, "mul");
+                     : common.isFixed()
+                         ? checkedArith(Tok::Star, av.reg, bv.reg, common.k == TK::FixedDec)
+                         : b_.CreateMul(av.reg, bv.reg, "mul");
     v.ty = common;
     v.reg = r;
     if (common.k == TK::Float) {
@@ -16832,8 +16743,9 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   }
   if (e->name == "DATE" || e->name == "TIME" || e->name == "DATETIME") {
     Val out = charTemp(e->ty.len);
-    std::string fn = e->name == "DATE" ? "pli_date"
-                    : e->name == "TIME" ? "pli_time" : "pli_datetime";
+    std::string fn = e->name == "DATE"   ? "pli_date"
+                     : e->name == "TIME" ? "pli_time"
+                                         : "pli_datetime";
     b_.CreateCall(runtimeFn(fn), {out.ptr, out.len});
     out.len = i64(e->ty.len);
     result = out;
@@ -16914,8 +16826,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   // parse fractional character text directly (CONVERSION trap, ADR-170);
   // numeric input goes through convert(), which already handles float->fixed
   // scaling (ADR-006) and fixed->float back-scaling.
-  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT" ||
-      e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
+  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT" || e->name == "FIXEDBIN" ||
+      e->name == "FIXEDDEC") {
     Val a = emitExpr(e->args[0].get());
     if (a.ty.isChar()) {
       // Fixed targets parse a decimal point and rescale directly.
@@ -17091,28 +17003,30 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       return true;
     }
     // A per-axis request against a dynamic axis uses the live bounds.
-    if (sel >= 0 && arr.isArray() && (size_t)sel < arr.dims.size() &&
-        arr.isDynamic() && (arr.dims[(size_t)sel].dyn || arr.dims[(size_t)sel].lbDyn) &&
-        a->sym && a->memberPath.empty()) {
+    if (sel >= 0 && arr.isArray() && (size_t)sel < arr.dims.size() && arr.isDynamic() &&
+        (arr.dims[(size_t)sel].dyn || arr.dims[(size_t)sel].lbDyn) && a->sym &&
+        a->memberPath.empty()) {
       size_t ks = (size_t)sel;
       const Dim& dk = arr.dims[ks];
       HExpr* ue = (ks < a->sym->dynUbAxes.size()) ? a->sym->dynUbAxes[ks]
-                : (ks == 0 ? a->sym->dynUb : nullptr);
+                                                  : (ks == 0 ? a->sym->dynUb : nullptr);
       HExpr* le = (ks < a->sym->dynLbAxes.size()) ? a->sym->dynLbAxes[ks]
-                : (ks == 0 ? a->sym->dynLb : nullptr);
-      llvm::Value* lb = dk.lbDyn
-                            ? ((!dynLb_.count(a->sym) || dynLb_[a->sym].size() <= ks || !dynLb_[a->sym][ks])
-                                   ? (le ? toI64(emitExpr(le)) : i64(dk.lb))
-                                   : dynLb_[a->sym][ks])
-                            : i64(dk.lb);
-      if (dk.lbDyn && (!dynLb_.count(a->sym) || dynLb_[a->sym].size() <= ks || !dynLb_[a->sym][ks]) && le)
+                                                  : (ks == 0 ? a->sym->dynLb : nullptr);
+      llvm::Value* lb =
+          dk.lbDyn ? ((!dynLb_.count(a->sym) || dynLb_[a->sym].size() <= ks || !dynLb_[a->sym][ks])
+                          ? (le ? toI64(emitExpr(le)) : i64(dk.lb))
+                          : dynLb_[a->sym][ks])
+                   : i64(dk.lb);
+      if (dk.lbDyn &&
+          (!dynLb_.count(a->sym) || dynLb_[a->sym].size() <= ks || !dynLb_[a->sym][ks]) && le)
         lb = toI64(emitExpr(le));
-      llvm::Value* ub = dk.dyn
-                            ? ((!dynUb_.count(a->sym) || dynUb_[a->sym].size() <= ks || !dynUb_[a->sym][ks])
-                                   ? (ue ? toI64(emitExpr(ue)) : i64(dk.ub))
-                                   : dynUb_[a->sym][ks])
-                            : i64(dk.ub);
-      if (dk.dyn && (!dynUb_.count(a->sym) || dynUb_[a->sym].size() <= ks || !dynUb_[a->sym][ks]) && ue)
+      llvm::Value* ub =
+          dk.dyn ? ((!dynUb_.count(a->sym) || dynUb_[a->sym].size() <= ks || !dynUb_[a->sym][ks])
+                        ? (ue ? toI64(emitExpr(ue)) : i64(dk.ub))
+                        : dynUb_[a->sym][ks])
+                 : i64(dk.ub);
+      if (dk.dyn && (!dynUb_.count(a->sym) || dynUb_[a->sym].size() <= ks || !dynUb_[a->sym][ks]) &&
+          ue)
         ub = toI64(emitExpr(ue));
       llvm::Value* raw = e->name == "LBOUND" ? lb
                          : e->name == "HBOUND"
@@ -17149,39 +17063,44 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         lb = d0.lbDyn ? (mulb ? mulb : i64(d0.lb)) : i64(d0.lb);
         ub = muub ? muub : i64(d0.ub);
       } else {
-        lb = d0.lbDyn ? ((!dynLb_.count(a->sym) || dynLb_[a->sym].empty()) ? i64(d0.lb) : dynLb_[a->sym][0]) : i64(d0.lb);
+        lb = d0.lbDyn ? ((!dynLb_.count(a->sym) || dynLb_[a->sym].empty()) ? i64(d0.lb)
+                                                                           : dynLb_[a->sym][0])
+                      : i64(d0.lb);
         ub = (!dynUb_.count(a->sym) || dynUb_[a->sym].empty()) ? i64(d0.ub) : dynUb_[a->sym][0];
       }
       // DIM of a dynamic multi-axis array is the product of every axis's
       // live extent (later axes may themselves be dynamic in this stage).
-      llvm::Value* raw = e->name == "LBOUND" ? lb
-                         : e->name == "HBOUND"
-                             ? ub
-                             : [&] {
-                                 llvm::Value* dim = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
-                                 for (size_t k = 1; k < arr.dims.size(); ++k) {
-                                   const Dim& dk = arr.dims[k];
-                                   llvm::Value* lbk = i64(dk.lb);
-                                   llvm::Value* ubk = i64(dk.ub);
-                                   if (dk.lbDyn || dk.dyn) {
-                                     if (!a->memberPath.empty()) {
-                                       // member: only first axis stored; later const
-                                     } else {
-                                       if (dk.lbDyn && dynLb_.count(a->sym) && dynLb_[a->sym].size() > k && dynLb_[a->sym][k])
-                                         lbk = dynLb_[a->sym][k];
-                                       else if (dk.lbDyn && k < a->sym->dynLbAxes.size() && a->sym->dynLbAxes[k])
-                                         lbk = toI64(emitExpr(a->sym->dynLbAxes[k]));
-                                       if (dk.dyn && dynUb_.count(a->sym) && dynUb_[a->sym].size() > k && dynUb_[a->sym][k])
-                                         ubk = dynUb_[a->sym][k];
-                                       else if (dk.dyn && k < a->sym->dynUbAxes.size() && a->sym->dynUbAxes[k])
-                                         ubk = toI64(emitExpr(a->sym->dynUbAxes[k]));
-                                     }
-                                   }
-                                   llvm::Value* extk = b_.CreateAdd(b_.CreateSub(ubk, lbk, "e"), i64(1), "ext");
-                                   dim = b_.CreateMul(dim, extk, "extall");
-                                 }
-                                 return dim;
-                               }();
+      llvm::Value* raw =
+          e->name == "LBOUND" ? lb
+          : e->name == "HBOUND"
+              ? ub
+              : [&] {
+                  llvm::Value* dim = b_.CreateAdd(b_.CreateSub(ub, lb, "e1"), i64(1), "ext");
+                  for (size_t k = 1; k < arr.dims.size(); ++k) {
+                    const Dim& dk = arr.dims[k];
+                    llvm::Value* lbk = i64(dk.lb);
+                    llvm::Value* ubk = i64(dk.ub);
+                    if (dk.lbDyn || dk.dyn) {
+                      if (!a->memberPath.empty()) {
+                        // member: only first axis stored; later const
+                      } else {
+                        if (dk.lbDyn && dynLb_.count(a->sym) && dynLb_[a->sym].size() > k &&
+                            dynLb_[a->sym][k])
+                          lbk = dynLb_[a->sym][k];
+                        else if (dk.lbDyn && k < a->sym->dynLbAxes.size() && a->sym->dynLbAxes[k])
+                          lbk = toI64(emitExpr(a->sym->dynLbAxes[k]));
+                        if (dk.dyn && dynUb_.count(a->sym) && dynUb_[a->sym].size() > k &&
+                            dynUb_[a->sym][k])
+                          ubk = dynUb_[a->sym][k];
+                        else if (dk.dyn && k < a->sym->dynUbAxes.size() && a->sym->dynUbAxes[k])
+                          ubk = toI64(emitExpr(a->sym->dynUbAxes[k]));
+                      }
+                    }
+                    llvm::Value* extk = b_.CreateAdd(b_.CreateSub(ubk, lbk, "e"), i64(1), "ext");
+                    dim = b_.CreateMul(dim, extk, "extall");
+                  }
+                  return dim;
+                }();
       Val src;
       src.ty = Type::fixedBin(63, 0);
       src.reg = raw;
@@ -17216,8 +17135,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     const bool isMember = !a->memberPath.empty();
     const Type& arr = isMember ? memberType(a->sym, a->memberPath) : a->sym->ty;
     const Type& el = arr.elementType();
-    const bool isBit = e->name == "ANY" || e->name == "ALL" ||
-                       e->name == "EVERY" || e->name == "SOME";
+    const bool isBit =
+        e->name == "ANY" || e->name == "ALL" || e->name == "EVERY" || e->name == "SOME";
     const bool isFloat = !isBit && el.k == TK::Float;
     llvm::Value *ub = nullptr, *lb = nullptr;
     llvm::Value* base =
@@ -17241,12 +17160,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         mub = it != memberDyn_.end() ? it->second.ub : nullptr;
         mlb = it != memberDyn_.end() ? it->second.lb : nullptr;
       }
-      llvm::Value* rlb = d0.lbDyn
-                             ? (isMember ? (mlb ? mlb : i64(d0.lb))
-                                         : ((!dynLb_.count(a->sym) || dynLb_[a->sym].empty()) ? i64(d0.lb) : dynLb_[a->sym][0]))
-                             : i64(d0.lb);
-      llvm::Value* rub = isMember ? (mub ? mub : i64(d0.ub))
-                                  : ((!dynUb_.count(a->sym) || dynUb_[a->sym].empty()) ? i64(d0.ub) : dynUb_[a->sym][0]);
+      llvm::Value* rlb =
+          d0.lbDyn
+              ? (isMember ? (mlb ? mlb : i64(d0.lb))
+                          : ((!dynLb_.count(a->sym) || dynLb_[a->sym].empty()) ? i64(d0.lb)
+                                                                               : dynLb_[a->sym][0]))
+              : i64(d0.lb);
+      llvm::Value* rub =
+          isMember ? (mub ? mub : i64(d0.ub))
+                   : ((!dynUb_.count(a->sym) || dynUb_[a->sym].empty()) ? i64(d0.ub)
+                                                                        : dynUb_[a->sym][0]);
       n = b_.CreateAdd(b_.CreateSub(rub, rlb, "e1"), i64(1), "rdn");
       long long rest = 1;
       for (size_t k = 1; k < arr.dims.size(); ++k)
@@ -17261,7 +17184,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     std::string id = std::to_string(n_++);
     // Accumulator identity: 0 for SUM, 1 for PROD, false for ANY, true for ALL.
     llvm::Value* accInit;
-     if (e->name == "SUM")
+    if (e->name == "SUM")
       accInit = llvm::Constant::getNullValue(llvmTy(e->ty));
     else if (e->name == "PROD")
       accInit = isFloat ? flt(1.0) : llvm::ConstantInt::get(llvmTy(e->ty), 1, true);
@@ -17403,8 +17326,8 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
   if (e->name == "ONKEY") {
     v.ty = e->ty;
     // pli_onkey returns i32 (ABI), PL/I BIT(1) is i1 — truncate.
-    v.reg = b_.CreateTrunc(b_.CreateCall(runtimeFn("pli_onkey"), {}, "onkey"),
-                           llvmTy(v.ty), "onkey1");
+    v.reg =
+        b_.CreateTrunc(b_.CreateCall(runtimeFn("pli_onkey"), {}, "onkey"), llvmTy(v.ty), "onkey1");
     result = v;
     return true;
   }
@@ -17434,15 +17357,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     // One element-pair comparison between two addresses of element type el:
     // character elements compare with blank extension (rule (117)), wide BIT
     // byte by byte (packed big-endian), COMPLEX part-wise, FLOAT ordered.
-    auto eqElem = [&](llvm::Value* epA, llvm::Value* epB, const Type& el,
-                      bool packA, bool packB) -> llvm::Value* {
+    auto eqElem = [&](llvm::Value* epA, llvm::Value* epB, const Type& el, bool packA,
+                      bool packB) -> llvm::Value* {
       if (el.isChar()) {
-        llvm::Value* spA =
-            b_.CreateBitCast(epA, llvm::PointerType::get(ctx_, 0), "ideq.ca");
-        llvm::Value* spB =
-            b_.CreateBitCast(epB, llvm::PointerType::get(ctx_, 0), "ideq.cb");
-        return b_.CreateICmpEQ(emitCmpChar(spA, i64(el.len), spB, i64(el.len)), i32(0),
-                               "ideq.c");
+        llvm::Value* spA = b_.CreateBitCast(epA, llvm::PointerType::get(ctx_, 0), "ideq.ca");
+        llvm::Value* spB = b_.CreateBitCast(epB, llvm::PointerType::get(ctx_, 0), "ideq.cb");
+        return b_.CreateICmpEQ(emitCmpChar(spA, i64(el.len), spB, i64(el.len)), i32(0), "ideq.c");
       }
       llvm::LoadInst* rlA = b_.CreateLoad(llvmTy(el), epA, "ideql.a");
       llvm::LoadInst* rlB = b_.CreateLoad(llvmTy(el), epB, "ideql.b");
@@ -17472,12 +17392,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
         return w;
       }
       if (el.isComplex()) {
-        llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                        b_.CreateExtractValue(rlA, 0, "ideq.ar"),
-                                        b_.CreateExtractValue(rlB, 0, "ideq.br"), "ideq.er");
-        llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                        b_.CreateExtractValue(rlA, 1, "ideq.ai"),
-                                        b_.CreateExtractValue(rlB, 1, "ideq.bi"), "ideq.ei");
+        llvm::Value* er =
+            b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(rlA, 0, "ideq.ar"),
+                          b_.CreateExtractValue(rlB, 0, "ideq.br"), "ideq.er");
+        llvm::Value* ei =
+            b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(rlA, 1, "ideq.ai"),
+                          b_.CreateExtractValue(rlB, 1, "ideq.bi"), "ideq.ei");
         return b_.CreateAnd(er, ei, "ideq.cx");
       }
       if (el.k == TK::Float)
@@ -17521,12 +17441,13 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       const Type& arrB = mB ? memberType(B->sym, B->memberPath) : B->sym->ty;
       const Type& el = arrA.elementType();
       // Resolve one side's storage base, element count, and layout.
-      auto side = [&](HExpr* X, const Type& arr, bool isMember, llvm::Value*& base,
-                      llvm::Value*& n, llvm::Type*& arrTy, bool& dyn, bool& packed) {
+      auto side = [&](HExpr* X, const Type& arr, bool isMember, llvm::Value*& base, llvm::Value*& n,
+                      llvm::Type*& arrTy, bool& dyn, bool& packed) {
         llvm::Value *ub = nullptr, *lb = nullptr;
-        base = isMember ? (arr.isDynamic() ? dynamicMemberBase(X->sym, X->memberPath, e->loc, ub, lb)
-                                           : memberAddr(X->sym, X->memberPath, e->loc))
-                        : addressOf(X->sym);
+        base = isMember
+                   ? (arr.isDynamic() ? dynamicMemberBase(X->sym, X->memberPath, e->loc, ub, lb)
+                                      : memberAddr(X->sym, X->memberPath, e->loc))
+                   : addressOf(X->sym);
         dyn = arr.isArray() && arr.isDynamic();
         packed = isMember && !dyn && packedMemberPath(X->sym->ty, X->memberPath);
         arrTy = nullptr;
@@ -17538,11 +17459,16 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             mub = it != memberDyn_.end() ? it->second.ub : nullptr;
             mlb = it != memberDyn_.end() ? it->second.lb : nullptr;
           }
-          llvm::Value* rlb = d0.lbDyn ? (isMember ? (mlb ? mlb : i64(d0.lb))
-                                                   : ((!dynLb_.count(X->sym) || dynLb_[X->sym].empty()) ? i64(d0.lb) : dynLb_[X->sym][0]))
-                                      : i64(d0.lb);
-          llvm::Value* rub = isMember ? (mub ? mub : i64(d0.ub))
-                                      : ((!dynUb_.count(X->sym) || dynUb_[X->sym].empty()) ? i64(d0.ub) : dynUb_[X->sym][0]);
+          llvm::Value* rlb = d0.lbDyn
+                                 ? (isMember ? (mlb ? mlb : i64(d0.lb))
+                                             : ((!dynLb_.count(X->sym) || dynLb_[X->sym].empty())
+                                                    ? i64(d0.lb)
+                                                    : dynLb_[X->sym][0]))
+                                 : i64(d0.lb);
+          llvm::Value* rub =
+              isMember ? (mub ? mub : i64(d0.ub))
+                       : ((!dynUb_.count(X->sym) || dynUb_[X->sym].empty()) ? i64(d0.ub)
+                                                                            : dynUb_[X->sym][0]);
           n = b_.CreateAdd(b_.CreateSub(rub, rlb, "idn1"), i64(1), "idn");
           long long rest = 1;
           for (size_t k = 1; k < arr.dims.size(); ++k)
@@ -17561,8 +17487,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       side(B, arrB, mB, baseB, nB, arrTyB, dynB, packB);
       std::string id = std::to_string(n_++);
       llvm::Value* sizeEq = b_.CreateICmpEQ(nA, nB, "ideq.n");
-      llvm::Value* bound =
-          b_.CreateSelect(b_.CreateICmpSLT(nA, nB, "ideq.min"), nA, nB, "ideq.b");
+      llvm::Value* bound = b_.CreateSelect(b_.CreateICmpSLT(nA, nB, "ideq.min"), nA, nB, "ideq.b");
       llvm::AllocaInst* acc = entryAlloca(b_.getInt1Ty(), "ideq.acc." + id);
       b_.CreateStore(sizeEq, acc);
       countedLoop(bound, "ideq", [&](llvm::Value* c) {
@@ -17599,8 +17524,7 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       // Recursive member fold; paths stay absolute from each side's root so
       // packed (UNALIGNED) loads use align 1 (ADR-169).
       auto fold = [&](auto&& self, llvm::Value* pA, llvm::Value* pB, const Type& ty,
-                      std::vector<unsigned>& pathA,
-                      std::vector<unsigned>& pathB) -> void {
+                      std::vector<unsigned>& pathA, std::vector<unsigned>& pathB) -> void {
         for (unsigned i = 0; i < ty.members.size(); ++i) {
           const Type& mt = ty.members[i]->ty;
           llvm::Value* fA = structMemberGEP(ty, pA, i, "ideq.fa");
@@ -17613,15 +17537,12 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
             // Fixed array members compare element-wise (anything else nested
             // is diagnosed in sema).
             const Type& mel = mt.elementType();
-            llvm::ArrayType* elArrTy =
-                llvm::ArrayType::get(llvmTy(mel), (unsigned)arrayExtent(mt));
+            llvm::ArrayType* elArrTy = llvm::ArrayType::get(llvmTy(mel), (unsigned)arrayExtent(mt));
             bool pkA = packedMemberPath(rootA, pathA);
             bool pkB = packedMemberPath(rootB, pathB);
             countedLoop(i64(arrayExtent(mt)), "ideq.m", [&](llvm::Value* c) {
-              llvm::Value* qA =
-                  b_.CreateInBoundsGEP(elArrTy, fA, {i64(0), c}, "ideq.qa");
-              llvm::Value* qB =
-                  b_.CreateInBoundsGEP(elArrTy, fB, {i64(0), c}, "ideq.qb");
+              llvm::Value* qA = b_.CreateInBoundsGEP(elArrTy, fA, {i64(0), c}, "ideq.qa");
+              llvm::Value* qB = b_.CreateInBoundsGEP(elArrTy, fB, {i64(0), c}, "ideq.qb");
               b_.CreateStore(b_.CreateAnd(b_.CreateLoad(b_.getInt1Ty(), acc, "ideqmacc"),
                                           eqElem(qA, qB, mel, pkA, pkB), "ideq.ma"),
                              acc);
@@ -17654,32 +17575,33 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
     } else if (a.ty.isComplex() || b.ty.isComplex()) {
       Val ac = convert(a, Type::complexTy(), e->loc);
       Val bc = convert(b, Type::complexTy(), e->loc);
-      llvm::Value* er = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpxVal(), 0, "ideq.cr"),
-                                      b_.CreateExtractValue(bc.cpxVal(), 0, "ideq.cr"), "ideq.er");
-      llvm::Value* ei = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ,
-                                      b_.CreateExtractValue(ac.cpxVal(), 1, "ideq.ci"),
-                                      b_.CreateExtractValue(bc.cpxVal(), 1, "ideq.ci"), "ideq.ei");
+      llvm::Value* er =
+          b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 0, "ideq.cr"),
+                        b_.CreateExtractValue(bc.cpxVal(), 0, "ideq.cr"), "ideq.er");
+      llvm::Value* ei =
+          b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, b_.CreateExtractValue(ac.cpxVal(), 1, "ideq.ci"),
+                        b_.CreateExtractValue(bc.cpxVal(), 1, "ideq.ci"), "ideq.ei");
       v.reg = b_.CreateAnd(er, ei, "ideq.cx");
     } else if (a.ty.isBit() && b.ty.isBit() && a.ty.len > 1) {
       // Wide BIT scalars compare byte by byte (packed big-endian).
       int nBytes = bitBytes(a.ty.len);
       llvm::Value* eq = b_.getInt1(true);
       for (int k = 0; k < nBytes; ++k)
-        eq = b_.CreateAnd(eq, b_.CreateICmpEQ(b_.CreateExtractValue(a.reg, (unsigned)k, "ideq.wa"),
-                                             b_.CreateExtractValue(b.reg, (unsigned)k, "ideq.wb"),
-                                             "ideq.wk"),
+        eq = b_.CreateAnd(eq,
+                          b_.CreateICmpEQ(b_.CreateExtractValue(a.reg, (unsigned)k, "ideq.wa"),
+                                          b_.CreateExtractValue(b.reg, (unsigned)k, "ideq.wb"),
+                                          "ideq.wk"),
                           "ideq.w");
       v.reg = eq;
     } else if (a.ty.k == TK::Float || b.ty.k == TK::Float) {
       Type common = arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
-                                   b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
+                                    b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
       Val av = convert(a, common, e->loc);
       Val bv = convert(b, common, e->loc);
       v.reg = b_.CreateFCmp(llvm::CmpInst::FCMP_OEQ, av.reg, bv.reg, "ideq.f");
     } else {
       Type common = arithResultType(a.ty.isBit() ? Type::fixedBin(31, 0) : a.ty,
-                                   b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
+                                    b.ty.isBit() ? Type::fixedBin(31, 0) : b.ty);
       Val av = convert(a, common, e->loc);
       Val bv = convert(b, common, e->loc);
       v.reg = b_.CreateICmpEQ(av.reg, bv.reg, "ideq.i");

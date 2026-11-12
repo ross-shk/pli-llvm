@@ -321,9 +321,11 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
       hd.sym->dynUbAxes.assign(hd.dynBounds.size(), nullptr);
       hd.sym->dynLbAxes.assign(hd.dynLbBounds.size(), nullptr);
       for (size_t k = 0; k < hd.dynBounds.size(); ++k)
-        if (hd.dynBounds[k]) hd.sym->dynUbAxes[k] = hd.dynBounds[k].get();
+        if (hd.dynBounds[k])
+          hd.sym->dynUbAxes[k] = hd.dynBounds[k].get();
       for (size_t k = 0; k < hd.dynLbBounds.size(); ++k)
-        if (hd.dynLbBounds[k]) hd.sym->dynLbAxes[k] = hd.dynLbBounds[k].get();
+        if (hd.dynLbBounds[k])
+          hd.sym->dynLbAxes[k] = hd.dynLbBounds[k].get();
       if (!hd.sym->dynUbAxes.empty())
         hd.sym->dynUb = hd.sym->dynUbAxes[0];
       if (!hd.sym->dynLbAxes.empty())
@@ -419,7 +421,8 @@ HStmtP lowerStmt(const Stmt* s, const Proc* owner) {
   h->data = s->data;
 
   // Helper to recursively lower a FormatItem to HFormatItem.
-  std::function<HFormatItem(const FormatItem&)> lowerFormatItem = [&](const FormatItem& f) -> HFormatItem {
+  std::function<HFormatItem(const FormatItem&)> lowerFormatItem =
+      [&](const FormatItem& f) -> HFormatItem {
     HFormatItem hf;
     hf.kind = static_cast<HFormatItem::Kind>(f.kind);
     hf.w = lowerExpr(f.w.get());
@@ -642,15 +645,15 @@ void printExpr(std::ostream& os, const HExpr* e, int ind) {
   }
   (void)ind;
   switch (e->kind) {
-    case HExpr::IntLit:
-      // A genuinely wide integer constant prints its full value (ADR-191).
-      if (e->ty.intBits() == 128)
-        os << "IntLit(" << wideToString(e->wideIval) << ":";
-      else
-        os << "IntLit(" << e->ival << ":";
-      printType(os, e->ty);
-      os << ")";
-      break;
+  case HExpr::IntLit:
+    // A genuinely wide integer constant prints its full value (ADR-191).
+    if (e->ty.intBits() == 128)
+      os << "IntLit(" << wideToString(e->wideIval) << ":";
+    else
+      os << "IntLit(" << e->ival << ":";
+    printType(os, e->ty);
+    os << ")";
+    break;
   case HExpr::DecLit:
     os << "DecLit(" << wideToString(e->wideIval) << ",q" << e->decScale << ":";
     printType(os, e->ty);
@@ -995,30 +998,57 @@ void printStmt(std::ostream& os, const HStmt* s, int ind) {
   case HStmt::Read:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " into=";
     printExpr(os, s->target.get(), ind);
-    if (s->ignoreCount) { os << " ignore="; printExpr(os, s->ignoreCount.get(), ind); }
-    if (s->setTarget) { os << " set="; printExpr(os, s->setTarget.get(), ind); }
-    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
-    if (s->keyNoLock) os << " nolock";
-    if (s->unlockOpt) os << " unlock";
+    if (s->ignoreCount) {
+      os << " ignore=";
+      printExpr(os, s->ignoreCount.get(), ind);
+    }
+    if (s->setTarget) {
+      os << " set=";
+      printExpr(os, s->setTarget.get(), ind);
+    }
+    if (s->recordEventTarget) {
+      os << " event=";
+      printExpr(os, s->recordEventTarget.get(), ind);
+    }
+    if (s->keyNoLock)
+      os << " nolock";
+    if (s->unlockOpt)
+      os << " unlock";
     break;
   case HStmt::Write:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
     printExpr(os, s->value.get(), ind);
-    if (s->locateVar) { os << " locate="; printExpr(os, s->locateVar.get(), ind); }
-    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
-    if (s->keyNoLock) os << " nolock";
+    if (s->locateVar) {
+      os << " locate=";
+      printExpr(os, s->locateVar.get(), ind);
+    }
+    if (s->recordEventTarget) {
+      os << " event=";
+      printExpr(os, s->recordEventTarget.get(), ind);
+    }
+    if (s->keyNoLock)
+      os << " nolock";
     break;
   case HStmt::Rewrite:
     os << " " << (s->fileSym ? s->fileSym->name : s->name) << " from=";
     printExpr(os, s->value.get(), ind);
-    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
-    if (s->keyNoLock) os << " nolock";
-    if (s->unlockOpt) os << " unlock";
+    if (s->recordEventTarget) {
+      os << " event=";
+      printExpr(os, s->recordEventTarget.get(), ind);
+    }
+    if (s->keyNoLock)
+      os << " nolock";
+    if (s->unlockOpt)
+      os << " unlock";
     break;
   case HStmt::Delete:
     os << " " << (s->fileSym ? s->fileSym->name : s->name);
-    if (s->recordEventTarget) { os << " event="; printExpr(os, s->recordEventTarget.get(), ind); }
-    if (s->keyNoLock) os << " nolock";
+    if (s->recordEventTarget) {
+      os << " event=";
+      printExpr(os, s->recordEventTarget.get(), ind);
+    }
+    if (s->keyNoLock)
+      os << " nolock";
     break;
   case HStmt::Allocate:
     for (size_t i = 0; i < s->allocBase.size(); ++i) {

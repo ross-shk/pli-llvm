@@ -18,28 +18,28 @@ struct Symbol {
   Type ty{};
   SourceLoc loc{};
   enum Kind { Var, Param, ProcName, Generic } kind = Var;
-  bool isStatic = false;   // STATIC storage: an LLVM global
-  bool external = false;   // EXTERNAL (rule (42)): shared across translation units
-  bool implicit = false;   // created by the implicit-declaration rule
-  bool isEntry = false;    // external C entry (DECLARE ... ENTRY): no body
-  bool isEntryVar = false; // ENTRY ... VARIABLE (IBM extension, ADR-171): procedure value
-  bool isValue = false;    // VALUE named constant (extension, ADR-108): reassignment diagnosed
-  bool isOptional = false; // OPTIONAL parameter (extension): may be omitted at a call
-  bool isCond = false;     // DECLARE name CONDITION; (rule 9) programmer-named condition
-  bool fileAttr = false;   // FILE variable (rules 39,40): a named file
-  bool fileNonprint = false; // NONPRINT (ADR-204): stream writes to this file discarded
-  bool filePrint = false;    // PRINT (rule 40): stream file with page/line formatting
-  int fileSlot = -1;       // runtime slot index for a FILE variable (100-103)
-  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
-  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
-  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
+  bool isStatic = false;      // STATIC storage: an LLVM global
+  bool external = false;      // EXTERNAL (rule (42)): shared across translation units
+  bool implicit = false;      // created by the implicit-declaration rule
+  bool isEntry = false;       // external C entry (DECLARE ... ENTRY): no body
+  bool isEntryVar = false;    // ENTRY ... VARIABLE (IBM extension, ADR-171): procedure value
+  bool isValue = false;       // VALUE named constant (extension, ADR-108): reassignment diagnosed
+  bool isOptional = false;    // OPTIONAL parameter (extension): may be omitted at a call
+  bool isCond = false;        // DECLARE name CONDITION; (rule 9) programmer-named condition
+  bool fileAttr = false;      // FILE variable (rules 39,40): a named file
+  bool fileNonprint = false;  // NONPRINT (ADR-204): stream writes to this file discarded
+  bool filePrint = false;     // PRINT (rule 40): stream file with page/line formatting
+  int fileSlot = -1;          // runtime slot index for a FILE variable (100-103)
+  bool openRecord = false;    // OPEN ... RECORD SEQUENTIAL (rules (101),(112))
+  bool openKeyed = false;     // OPEN ... RECORD KEYED (rules (100),(101),(112),(113))
+  bool openDirect = false;    // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113))
   bool openBackwards = false; // OPEN ... BACKWARDS (rule 101): read in reverse
   std::vector<Type> entryParams; // ENTRY(...) descriptor, for codegen
   bool entryIsFunction = false;  // ENTRY ... RETURNS(...): an external function entry
   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
   // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
   std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
-  bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
+  bool entryByValue = false;          // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34))
   std::vector<std::string> entryUses; // USES(...) interface metadata (rules (34),(38))
   std::vector<std::string> entrySets; // SETS(...) interface metadata (rules (34),(38))
   // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute (rule (34)): an
@@ -449,7 +449,7 @@ private:
 
   Diags& d_;
   Program* prog_ = nullptr;
-  std::string sysparm_; // SYSPARM option value (rule (123)): SYSPARM() returns it
+  std::string sysparm_;    // SYSPARM option value (rule (123)): SYSPARM() returns it
   bool warnUnset_ = false; // --warn-unset: run the WS-A5 check (ADR-266)
   std::vector<std::unique_ptr<Symbol>> owned_;
   std::vector<std::unique_ptr<Scope>> scopes_;

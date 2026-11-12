@@ -16,20 +16,20 @@
 // _x86_64_pc_windows_gnu, _aarch64_pc_windows_gnu (full triple names with - replaced by _)
 // The actual includes are added by CMake based on PLI_TARGETS.
 #ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
-#include "embedded_runtime_x86_64_unknown_linux_gnu.inc"
 #include "embedded_rtplat_x86_64_unknown_linux_gnu.inc"
+#include "embedded_runtime_x86_64_unknown_linux_gnu.inc"
 #endif
 #ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
-#include "embedded_runtime_aarch64_unknown_linux_gnu.inc"
 #include "embedded_rtplat_aarch64_unknown_linux_gnu.inc"
+#include "embedded_runtime_aarch64_unknown_linux_gnu.inc"
 #endif
 #ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
-#include "embedded_runtime_x86_64_pc_windows_gnu.inc"
 #include "embedded_rtplat_x86_64_pc_windows_gnu.inc"
+#include "embedded_runtime_x86_64_pc_windows_gnu.inc"
 #endif
 #ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
-#include "embedded_runtime_aarch64_pc_windows_gnu.inc"
 #include "embedded_rtplat_aarch64_pc_windows_gnu.inc"
+#include "embedded_runtime_aarch64_pc_windows_gnu.inc"
 #endif
 
 namespace pli {
@@ -96,13 +96,11 @@ const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t) {
 std::vector<RuntimeBlob> getEmbeddedPlatformBlobs() {
   std::vector<RuntimeBlob> blobs;
   // Default (host) platform blob - always present
-  addBlobIfDefined(blobs, pli_embedded_rtplat_bc, pli_embedded_rtplat_bc_len,
-                   PLI_TARGET_TRIPLE);
+  addBlobIfDefined(blobs, pli_embedded_rtplat_bc, pli_embedded_rtplat_bc_len, PLI_TARGET_TRIPLE);
   // Per-target platform blobs (conditionally compiled like the runtime ones)
 #ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_x86_64_unknown_linux_gnu,
-                   pli_embedded_rtplat_bc_x86_64_unknown_linux_gnu_len,
-                   "x86_64-unknown-linux-gnu");
+                   pli_embedded_rtplat_bc_x86_64_unknown_linux_gnu_len, "x86_64-unknown-linux-gnu");
 #endif
 #ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_aarch64_unknown_linux_gnu,

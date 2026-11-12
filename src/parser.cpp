@@ -39,9 +39,7 @@ static int boundedInt(const std::string& text, SourceLoc loc, Diags& d, const ch
 // 64-bit bound truncated to int silently declared a zero-element array. The
 // bound itself may be negative (a(-3:3) is a valid axis); only the range
 // matters.
-static bool dimBoundFits(long long v) {
-  return v >= INT_MIN && v <= INT_MAX;
-}
+static bool dimBoundFits(long long v) { return v >= INT_MIN && v <= INT_MAX; }
 
 // Parse an integer literal (rule 135): a digit string with no point or
 // exponent. Sets ival via strtoll (saturating, as before — narrow paths keep
@@ -236,8 +234,7 @@ static int precOf(Tok op) {
 // The five enquiry built-ins (Phase F, ADR-206/207/208) are the only calls
 // whose argument list may hold a ': ... :' designator.
 static bool isEnquiryName(const std::string& w) {
-  return w == "NULL" || w == "DECLARESIZE" || w == "EPSILON" || w == "MAXVAL" ||
-         w == "MINVAL";
+  return w == "NULL" || w == "DECLARESIZE" || w == "EPSILON" || w == "MAXVAL" || w == "MINVAL";
 }
 
 bool Parser::expect(Tok k, const char* rule) {
@@ -790,14 +787,37 @@ bool Parser::parseCondPrefixes(Stmt* st) {
     auto setCond = [&](int which, int state) {
       for (int c = (which < 0 ? 0 : which); c <= (which < 0 ? 7 : which); ++c) {
         switch (c) {
-        case 0: st->noSize = state < 0; st->chkSize = state > 0; break;
-        case 1: st->noSub = state < 0; st->chkSub = state > 0; break;
-        case 2: st->noZdiv = state < 0; st->chkZdiv = state > 0; break;
-        case 3: st->noConv = state < 0; st->chkConv = state > 0; break;
-        case 4: st->noUnder = state < 0; st->chkUnder = state > 0; break;
-        case 5: st->strRange = state; break;
-        case 6: st->noOver = state < 0; st->chkOver = state > 0; break;
-        default: st->noFOver = state < 0; st->chkFOver = state > 0; break;
+        case 0:
+          st->noSize = state < 0;
+          st->chkSize = state > 0;
+          break;
+        case 1:
+          st->noSub = state < 0;
+          st->chkSub = state > 0;
+          break;
+        case 2:
+          st->noZdiv = state < 0;
+          st->chkZdiv = state > 0;
+          break;
+        case 3:
+          st->noConv = state < 0;
+          st->chkConv = state > 0;
+          break;
+        case 4:
+          st->noUnder = state < 0;
+          st->chkUnder = state > 0;
+          break;
+        case 5:
+          st->strRange = state;
+          break;
+        case 6:
+          st->noOver = state < 0;
+          st->chkOver = state > 0;
+          break;
+        default:
+          st->noFOver = state < 0;
+          st->chkFOver = state > 0;
+          break;
         }
       }
     };
@@ -820,9 +840,9 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       }
       // Classify the word: a condition name, its NO... form, or ALL.
       int state = 0;
-      if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" ||
-          w == "NOCONVERSION" || w == "NOSTRINGRANGE" || w == "NOUNDERFLOW" ||
-          w == "NOOVERFLOW" || w == "NOFIXEDOVERFLOW") {
+      if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" || w == "NOCONVERSION" ||
+          w == "NOSTRINGRANGE" || w == "NOUNDERFLOW" || w == "NOOVERFLOW" ||
+          w == "NOFIXEDOVERFLOW") {
         w = w.substr(2);
         state = -1;
       }
@@ -978,8 +998,7 @@ StmtP Parser::parseStatement(Proc* owner) {
   // group, so a GO TO jumps out of a loop instead of re-entering its body.
   if (!st->labels.empty() && atStmtKeyword("END")) {
     if (!st->labelElems.empty())
-      d_.error(st->loc, "a label array on an END clause is not implemented in this stage",
-               "(7)");
+      d_.error(st->loc, "a label array on an END clause is not implemented in this stage", "(7)");
     EndInfo e;
     e.present = true;
     e.loc = cur().loc;
@@ -1018,7 +1037,7 @@ StmtP Parser::parseStatement(Proc* owner) {
     ProcCondGuard condGuard(procCond_, *st);
     parseProcBody(p);
     procStrRange_ = outerStr;
-    return nullptr;   // procedures are hoisted into Program::procs
+    return nullptr; // procedures are hoisted into Program::procs
   }
 
   // ENTRY statement                                     rule (56)
@@ -1259,35 +1278,35 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     advance(); // GO
     advance(); // TO
     st->kind = Stmt::Goto;
-       if (at(Tok::Word)) {
-       st->name = cur().text;
-       advance();
-     } else if (at(Tok::LParen)) {
-       // GO TO ( expr ) — indirect jump through a LABEL variable (rule (77),
-       // rule (21)): the operand is a label variable holding a block address.
-       advance(); // (
-       st->gotoTarget = parseExprOrPlaceholder();
-       expect(Tok::RParen, "(77)");
-     } else
-       d_.error(cur().loc, "expected a label after GO TO", "(77)");
-   expect(Tok::Semi, "(77)");
-   return st;
- }
- if (kw("GOTO")) {
-   // GOTO label ;   (one-word spelling)                  rule (77)
-   auto st = std::make_unique<Stmt>();
-   st->loc = cur().loc;
-   advance();
-   st->kind = Stmt::Goto;
-   if (at(Tok::Word)) {
-     st->name = cur().text;
-     advance();
-   } else if (at(Tok::LParen)) {
-     advance(); // (
-     st->gotoTarget = parseExprOrPlaceholder();
-     expect(Tok::RParen, "(77)");
-   } else
-     d_.error(cur().loc, "expected a label after GOTO", "(77)");
+    if (at(Tok::Word)) {
+      st->name = cur().text;
+      advance();
+    } else if (at(Tok::LParen)) {
+      // GO TO ( expr ) — indirect jump through a LABEL variable (rule (77),
+      // rule (21)): the operand is a label variable holding a block address.
+      advance(); // (
+      st->gotoTarget = parseExprOrPlaceholder();
+      expect(Tok::RParen, "(77)");
+    } else
+      d_.error(cur().loc, "expected a label after GO TO", "(77)");
+    expect(Tok::Semi, "(77)");
+    return st;
+  }
+  if (kw("GOTO")) {
+    // GOTO label ;   (one-word spelling)                  rule (77)
+    auto st = std::make_unique<Stmt>();
+    st->loc = cur().loc;
+    advance();
+    st->kind = Stmt::Goto;
+    if (at(Tok::Word)) {
+      st->name = cur().text;
+      advance();
+    } else if (at(Tok::LParen)) {
+      advance(); // (
+      st->gotoTarget = parseExprOrPlaceholder();
+      expect(Tok::RParen, "(77)");
+    } else
+      d_.error(cur().loc, "expected a label after GOTO", "(77)");
     expect(Tok::Semi, "(77)");
     return st;
   }
@@ -1415,9 +1434,8 @@ std::string Parser::parseCondition(std::string* fileArg) {
     if (!expect(Tok::RParen, "(99)"))
       return "";
     if (name == "ERROR" || name == "SIZE" || name == "SUBSCRIPTRANGE" || name == "ZERODIVIDE" ||
-        name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" ||
-        name == "AREA" || name == "UNDERFLOW" || name == "OVERFLOW" ||
-        name == "FIXEDOVERFLOW") {
+        name == "CONVERSION" || name == "STRINGRANGE" || name == "FINISH" || name == "AREA" ||
+        name == "UNDERFLOW" || name == "OVERFLOW" || name == "FIXEDOVERFLOW") {
       d_.error(nl, name + " is not a valid programmer-named condition", "(99)");
       return "";
     }
@@ -1459,8 +1477,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     }
     return "ENDPAGE";
   }
-  if (w == "KEY" || w == "NAME" ||
-      w == "RECORD" || w == "TRANSMIT") {
+  if (w == "KEY" || w == "NAME" || w == "RECORD" || w == "TRANSMIT") {
     advance();
     if (at(Tok::LParen))
       skipParen("(97)");
@@ -1604,7 +1621,8 @@ StmtP Parser::parseDeclare() {
         // Consume comma before members (if present)
         eat(Tok::Comma);
         if (!base.dynBounds.empty())
-          d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
+          d_.error(floc,
+                   "dynamic bounds in a factored declaration are not implemented in this stage",
                    "(13)");
         // Now parse member declarations (level+1, level+2, ...) until we hit
         // a declaration at the same or lower level, or end of DECLARE.
@@ -1770,7 +1788,8 @@ StmtP Parser::parseDeclare() {
       if (isFactoredStructure) {
         // Factored structure declaration: DECLARE <level> (N1, N2) [attrs] ...
         if (!base.dynBounds.empty())
-          d_.error(floc, "dynamic bounds in a factored declaration are not implemented in this stage",
+          d_.error(floc,
+                   "dynamic bounds in a factored declaration are not implemented in this stage",
                    "(13)");
         // Now parse member declarations (level+1, level+2, ...) until we hit
         // a declaration at the same or lower level, or end of DECLARE.
@@ -1895,7 +1914,7 @@ StmtP Parser::parseDeclare() {
       }
       for (size_t idx = 0; idx < names.size(); ++idx) {
         const auto& [n, nl] = names[idx];
-        DeclItem item = cloneDeclItem(base);  // deep clone per name
+        DeclItem item = cloneDeclItem(base); // deep clone per name
         item.name = n;
         item.loc = nl;
         // Distribute initItems if applicable
@@ -1908,10 +1927,8 @@ StmtP Parser::parseDeclare() {
           const auto& distributed = item.initItems[0];
           if (distributed.kind == InitItem::Value && distributed.value) {
             item.init = cloneExpr(distributed.value.get());
-          } else if (distributed.kind == InitItem::Group &&
-                     distributed.items.size() == 1 &&
-                     distributed.items[0].kind == InitItem::Value &&
-                     distributed.items[0].value) {
+          } else if (distributed.kind == InitItem::Group && distributed.items.size() == 1 &&
+                     distributed.items[0].kind == InitItem::Value && distributed.items[0].value) {
             item.init = cloneExpr(distributed.items[0].value.get());
           }
         }
@@ -1988,7 +2005,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
         return false;
       }
       bool neg = eat(Tok::Minus);
-      eat(Tok::Plus);  // consume optional '+' if present
+      eat(Tok::Plus); // consume optional '+' if present
       if (at(Tok::Number)) {
         n2 = boundedInt(cur().text, cur().loc, d_, "scale factor", rule);
         if (neg)
@@ -2197,8 +2214,8 @@ bool Parser::parseWhenType(Type& out) {
     }
   }
   // At least one data class must be present.
-  if (!fixed && !floating && !character && !bit && !pointer && !complex && !entry &&
-      !area && !offset && !label && !task && !event) {
+  if (!fixed && !floating && !character && !bit && !pointer && !complex && !entry && !area &&
+      !offset && !label && !task && !event) {
     d_.error(cur().loc, "expected a data attribute in a GENERIC WHEN selector", "(41)");
     return false;
   }
@@ -2206,8 +2223,7 @@ bool Parser::parseWhenType(Type& out) {
   // FIXED+BINARY/DECIMAL and FLOAT+BINARY/DECIMAL are valid combos (scale+base),
   // so only mutually-exclusive pairs conflict — not any multi-word selector.
   if ((fixed && floating) || (binary && decimal) || (character && bit) ||
-      (complex && (character || bit || pointer)) || (area && offset) ||
-      (task && event)) {
+      (complex && (character || bit || pointer)) || (area && offset) || (task && event)) {
     d_.error(cur().loc, "conflicting attributes in a GENERIC WHEN selector", "(15)");
     return false;
   }
@@ -2527,16 +2543,14 @@ void Parser::parseDeclTail(DeclItem& item) {
               if (!ref)
                 break;
               if (ref->kind != Expr::VarRef || ref->locPtr) {
-                d_.error(ref->loc, "a USES/SETS item must be an unsubscripted reference",
-                         "(38)");
+                d_.error(ref->loc, "a USES/SETS item must be an unsubscripted reference", "(38)");
               } else {
                 text = ref->name;
                 for (const std::string& q : ref->path)
                   text += "." + q;
               }
             } else {
-              d_.error(cur().loc, "expected a name, a level number, or '*' in USES/SETS",
-                       "(38)");
+              d_.error(cur().loc, "expected a name, a level number, or '*' in USES/SETS", "(38)");
               break;
             }
             if (!text.empty())
@@ -2636,9 +2650,8 @@ void Parser::parseDeclTail(DeclItem& item) {
                 }
                 return neg ? -v : v;
               };
-              bool isubForm =
-                  at(Tok::Isub) ||
-                  (at(Tok::Number) && peek(1).kind == Tok::Star && peek(2).kind == Tok::Isub);
+              bool isubForm = at(Tok::Isub) || (at(Tok::Number) && peek(1).kind == Tok::Star &&
+                                                peek(2).kind == Tok::Isub);
               if (isubForm) {
                 // The optional multiplier of an affine `m * kSUB` dummy.
                 if (at(Tok::Number)) {
@@ -2713,7 +2726,8 @@ void Parser::parseDeclTail(DeclItem& item) {
         // is skipped and has no runtime effect (ADR-373).
         advance();
         bag.file = true;
-        if (at(Tok::LParen)) skipParen("(39)");
+        if (at(Tok::LParen))
+          skipParen("(39)");
         continue;
       }
       if (w == "BUFFERED") {
@@ -2841,7 +2855,8 @@ void Parser::parseDeclTail(DeclItem& item) {
             bag.picture = true;
             advance();
           } else {
-            d_.error(cur().loc, "PICTURE requires a character-string literal in parentheses", "(19)");
+            d_.error(cur().loc, "PICTURE requires a character-string literal in parentheses",
+                     "(19)");
           }
           expect(Tok::RParen, "(19)");
         } else {
@@ -2876,21 +2891,26 @@ void Parser::parseDeclTail(DeclItem& item) {
               d_.error(cur().loc, "expected WHEN after entry name in GENERIC", "(41)");
               break;
             }
-            if (!expect(Tok::LParen, "(41)")) break;
+            if (!expect(Tok::LParen, "(41)"))
+              break;
             Type whenTy;
             if (!parseWhenType(whenTy)) {
               // skip to the matching ')' so the rest of the list can continue
               int depth = 0;
               do {
-                if (at(Tok::LParen)) ++depth;
-                else if (at(Tok::RParen)) --depth;
+                if (at(Tok::LParen))
+                  ++depth;
+                else if (at(Tok::RParen))
+                  --depth;
                 advance();
               } while (depth > 0 && !at(Tok::Eof));
-              if (at(Tok::RParen)) advance();
+              if (at(Tok::RParen))
+                advance();
             }
             expect(Tok::RParen, "(41)");
             item.genericEntries.push_back({entryName, whenTy});
-            if (!eat(Tok::Comma)) break;
+            if (!eat(Tok::Comma))
+              break;
           }
           expect(Tok::RParen, "(41)");
         }
@@ -2900,9 +2920,8 @@ void Parser::parseDeclTail(DeclItem& item) {
         // BUILTIN is not a Subset-G attribute; SECONDARY is listed in TR
         // 25.084 rule (15), but IBM Enterprise PL/I defines no such data
         // attribute. Both cases are diagnosed with the attribute rule number.
-        std::string why = w == "SECONDARY"
-                                  ? "attribute SECONDARY is not supported"
-                                  : "attribute BUILTIN is not a Subset-G attribute";
+        std::string why = w == "SECONDARY" ? "attribute SECONDARY is not supported"
+                                           : "attribute BUILTIN is not a Subset-G attribute";
         d_.error(cur().loc, why, "(15)");
         advance();
         if (at(Tok::LParen)) {
@@ -2990,10 +3009,9 @@ void Parser::parseDeclTail(DeclItem& item) {
     d_.error(item.loc, "string and arithmetic attributes cannot be combined", "(15)");
   // PICTURE (rules (19),(146)-(148)) defines the item's own CHARACTER type:
   // it cannot share the declaration with another data attribute.
-  if (bag.picture &&
-      (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character || bag.bit ||
-       bag.pointer || bag.complex || bag.file || bag.task || bag.event || bag.area ||
-       bag.offset || bag.varying))
+  if (bag.picture && (bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character ||
+                      bag.bit || bag.pointer || bag.complex || bag.file || bag.task || bag.event ||
+                      bag.area || bag.offset || bag.varying))
     d_.error(item.loc, "PICTURE cannot be combined with another data attribute", "(19)");
   if (bag.picture && (!item.like.empty() || !item.typeRef.empty()))
     d_.error(item.loc, "PICTURE cannot be combined with LIKE or TYPE", "(19)");
@@ -3035,12 +3053,11 @@ void Parser::parseDeclTail(DeclItem& item) {
 
   // Remember whether a data attribute was actually given: item.ty defaults to
   // FIXED BINARY even when none was written, so the type alone cannot tell.
-  item.dataAttr = bag.fixed || bag.floating || bag.binary || bag.decimal ||
-                  bag.character || bag.bit || bag.pointer || bag.complex ||
-                  bag.file || bag.task || bag.event || bag.area || bag.offset ||
-                  item.labelAttr || bag.picture || !item.like.empty() ||
-                  !item.typeRef.empty() || item.controlled ||
-                  !item.basedBase.empty() || item.basedNoPtr || item.imaginary;
+  item.dataAttr = bag.fixed || bag.floating || bag.binary || bag.decimal || bag.character ||
+                  bag.bit || bag.pointer || bag.complex || bag.file || bag.task || bag.event ||
+                  bag.area || bag.offset || item.labelAttr || bag.picture || !item.like.empty() ||
+                  !item.typeRef.empty() || item.controlled || !item.basedBase.empty() ||
+                  item.basedNoPtr || item.imaginary;
 
   if (bag.task) {
     // A TASK name (rules (15),(79), QR2.8): an opaque handle for CALL TASK.
@@ -3237,10 +3254,9 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
            w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
            w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" ||
-           w == "PICTURE" || w == "PIC" || w == "LABEL" || w == "COMPLEX" ||
-           w == "CPLX" || w == "REAL" || w == "LIKE" || w == "FILE" || w == "ENTRY" ||
-           w == "DEFINED" || w == "DEF";
+           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" || w == "PICTURE" ||
+           w == "PIC" || w == "LABEL" || w == "COMPLEX" || w == "CPLX" || w == "REAL" ||
+           w == "LIKE" || w == "FILE" || w == "ENTRY" || w == "DEFINED" || w == "DEF";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -3570,48 +3586,48 @@ bool Parser::parseEntryParams(std::vector<Type>& params) {
 }
 
 // Deep copy of a parsed expression for SELECT value lists (extension,
- // ADR-104): each WHEN value compares against its own copy of the SELECT
- // expression. Only parse-time state is copied; sema resolves the copies.
- ExprP Parser::cloneExpr(const Expr* e) {
-   if (!e)
-     return nullptr;
-   auto c = std::make_unique<Expr>();
-   c->kind = e->kind;
-   c->loc = e->loc;
-   c->ty = e->ty;
-   c->ival = e->ival;
-   c->wideIval = e->wideIval;
-   c->fval = e->fval;
-   c->decScale = e->decScale;
-   c->decPrec = e->decPrec;
-   c->sval = e->sval;
-   c->name = e->name;
-   c->path = e->path;
-   c->memberPath = e->memberPath;
-   c->op = e->op;
-   c->a = cloneExpr(e->a.get());
-   c->b = cloneExpr(e->b.get());
-   c->locPtr = cloneExpr(e->locPtr.get());
-   for (auto& a : e->args)
-     c->args.push_back(cloneExpr(a.get()));
-   return c;
- }
+// ADR-104): each WHEN value compares against its own copy of the SELECT
+// expression. Only parse-time state is copied; sema resolves the copies.
+ExprP Parser::cloneExpr(const Expr* e) {
+  if (!e)
+    return nullptr;
+  auto c = std::make_unique<Expr>();
+  c->kind = e->kind;
+  c->loc = e->loc;
+  c->ty = e->ty;
+  c->ival = e->ival;
+  c->wideIval = e->wideIval;
+  c->fval = e->fval;
+  c->decScale = e->decScale;
+  c->decPrec = e->decPrec;
+  c->sval = e->sval;
+  c->name = e->name;
+  c->path = e->path;
+  c->memberPath = e->memberPath;
+  c->op = e->op;
+  c->a = cloneExpr(e->a.get());
+  c->b = cloneExpr(e->b.get());
+  c->locPtr = cloneExpr(e->locPtr.get());
+  for (auto& a : e->args)
+    c->args.push_back(cloneExpr(a.get()));
+  return c;
+}
 
- // Deep copy of an InitItem vector for factored INITIAL: each factored
- // name gets its own copy of the initializer list with cloned expressions.
- std::vector<InitItem> Parser::cloneInitItems(const std::vector<InitItem>& src) {
-   std::vector<InitItem> dst;
-   dst.reserve(src.size());
-   for (const auto& item : src) {
-     InitItem c;
-     c.kind = item.kind;
-     c.value = cloneExpr(item.value.get());
-     c.factor = item.factor;
-     c.items = cloneInitItems(item.items);
-     dst.push_back(std::move(c));
-   }
-   return dst;
- }
+// Deep copy of an InitItem vector for factored INITIAL: each factored
+// name gets its own copy of the initializer list with cloned expressions.
+std::vector<InitItem> Parser::cloneInitItems(const std::vector<InitItem>& src) {
+  std::vector<InitItem> dst;
+  dst.reserve(src.size());
+  for (const auto& item : src) {
+    InitItem c;
+    c.kind = item.kind;
+    c.value = cloneExpr(item.value.get());
+    c.factor = item.factor;
+    c.items = cloneInitItems(item.items);
+    dst.push_back(std::move(c));
+  }
+  return dst;
+}
 
 // select-statement (extension, ADR-104): SELECT [( expr )]; WHEN ...; END;
 // desugars in the parser to an IF-chain, so sema and codegen are untouched:
@@ -3883,8 +3899,7 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
     st->kind = Stmt::DoWhile;
     st->forever = true;
     if (atWord("WHILE") || atWord("UNTIL")) {
-      d_.error(cur().loc, "DO FOREVER cannot be combined with WHILE/UNTIL (ADR-370)",
-               "");
+      d_.error(cur().loc, "DO FOREVER cannot be combined with WHILE/UNTIL (ADR-370)", "");
       resync();
       return nullptr;
     }
@@ -3931,8 +3946,7 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
       }
       if (atWord("FOREVER")) {
         d_.error(cur().loc,
-                 "DO FOREVER cannot be combined with an iterative specification (ADR-370)",
-                 "");
+                 "DO FOREVER cannot be combined with an iterative specification (ADR-370)", "");
         resync();
         return nullptr;
       }
@@ -5109,185 +5123,187 @@ StmtP Parser::parseFree() {
 }
 
 // read-statement ::= READ FILE ( f ) INTO ( reference ) ;    rules (112),(113)
- // write-statement ::= WRITE FILE ( f ) FROM ( expression ) ; sequential slice:
- // one fixed-size binary record per statement on a RECORD SEQUENTIAL file.
- // IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/EVENT stay diagnosed with rule (113).
- StmtP Parser::parseRecordIO() {
-   auto st = std::make_unique<Stmt>();
-   st->loc = cur().loc;
-   const bool isRead = atWord("READ");
-   const bool isRewrite = atWord("REWRITE");
-   const bool isDelete = atWord("DELETE");
-   advance(); // READ / WRITE / REWRITE / DELETE
-   st->kind = isRead ? Stmt::Read
-                     : isRewrite ? Stmt::Rewrite : isDelete ? Stmt::Delete : Stmt::Write;
-   while (!at(Tok::Semi) && !at(Tok::Eof)) {
-     if (atWord("FILE")) {
-       // FILE ( f ): the file variable.
-       advance();
-       if (eat(Tok::LParen)) {
-         if (at(Tok::Word)) {
-           st->fileIdent = cur().text;
-           advance();
-         } else {
-           d_.error(cur().loc, "expected a FILE variable after FILE(", "(113)");
-         }
-         expect(Tok::RParen, "(113)");
-       } else {
-         d_.error(cur().loc, "expected '(' after FILE", "(113)");
-       }
-       continue;
-     }
-     if (atWord("INTO")) {
-       // INTO( reference ): the target for READ.
-       if (!isRead) {
-         d_.error(cur().loc, "INTO is valid only on READ", "(113)");
-         advance();
-         continue;
-       }
-       advance();
-       if (eat(Tok::LParen)) {
-         st->target = parseExpr();
-         expect(Tok::RParen, "(113)");
-       } else {
-         d_.error(cur().loc, "expected '(' after INTO", "(113)");
-       }
-       continue;
-     }
-     if (atWord("FROM")) {
-       // FROM( expression ): the source for WRITE/REWRITE.
-       if (isRead || isDelete) {
-         d_.error(cur().loc, "FROM is valid only on WRITE/REWRITE", "(113)");
-         advance();
-         continue;
-       }
-       advance();
-       if (eat(Tok::LParen)) {
-         st->value = parseExpr();
-         expect(Tok::RParen, "(113)");
-       } else {
-         d_.error(cur().loc, "expected '(' after FROM", "(113)");
-       }
-       continue;
-     }
-     if (atWord("KEY")) {
-       // KEY( expression ): the record key (rules (112),(113)).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after KEY", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->keyOpt = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("KEYTO")) {
-       // KEYTO( reference ): receives the key of the record read (READ).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after KEYTO", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->keyToOpt = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("KEYFROM")) {
-       // KEYFROM( expression ): key of the record to rewrite/delete.
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after KEYFROM", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->keyFromOpt = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("NOLOCK")) {
-       // NOLOCK: accepted syntactically (rules (112),(113)).
-       st->keyNoLock = true;
-       advance();
-       continue;
-     }
-     if (atWord("SET")) {
-       // SET( ref ): store record buffer address into a POINTER (READ, LOCATE).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after SET", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->setTarget = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("IGNORE")) {
-       // IGNORE( n ): skip n records without transferring data (READ).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after IGNORE", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->ignoreCount = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("LOCATE")) {
-       // LOCATE( var ): set BASED variable's pointer to a buffer (WRITE).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after LOCATE", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->locateVar = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     if (atWord("UNLOCK")) {
-       // UNLOCK: release the current record's lock on a keyed/direct file (READ/REWRITE).
-       st->unlockOpt = true;
-       advance();
-       continue;
-     }
-     if (atWord("EVENT")) {
-       // EVENT( ev ): event variable completed after the operation (READ/WRITE/REWRITE/DELETE/LOCATE).
-       advance();
-       if (!eat(Tok::LParen)) {
-         d_.error(cur().loc, "expected '(' after EVENT", "(113)");
-         resync();
-         return nullptr;
-       }
-       st->recordEventTarget = parseExpr();
-       expect(Tok::RParen, "(113)");
-       continue;
-     }
-     d_.error(cur().loc,
-              "record option '" +
-                  (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
-                  "' is not implemented in this stage",
-              "(113)");
-     resync();
-     return nullptr;
-   }
-   expect(Tok::Semi, "(113)");
-   // DELETE removes the current record and takes no data clause; READ needs a
-   // receiver and WRITE/REWRITE a source.
-   if (!isDelete && !st->target && !st->value && !st->locateVar) {
-     const char* want = isRead ? "INTO" : "FROM";
-     d_.error(st->loc,
-              std::string(isRead
-                              ? "READ requires an INTO ( reference ) option; "
-                              : "WRITE/REWRITE require a FROM ( expression ) option; ") +
-                  "it is not implemented otherwise in this stage",
-              "(113)");
-   }
-   return st;
- }
+// write-statement ::= WRITE FILE ( f ) FROM ( expression ) ; sequential slice:
+// one fixed-size binary record per statement on a RECORD SEQUENTIAL file.
+// IGNORE/KEYTO/KEY/NOLOCK/SET/KEYFROM/EVENT stay diagnosed with rule (113).
+StmtP Parser::parseRecordIO() {
+  auto st = std::make_unique<Stmt>();
+  st->loc = cur().loc;
+  const bool isRead = atWord("READ");
+  const bool isRewrite = atWord("REWRITE");
+  const bool isDelete = atWord("DELETE");
+  advance(); // READ / WRITE / REWRITE / DELETE
+  st->kind = isRead      ? Stmt::Read
+             : isRewrite ? Stmt::Rewrite
+             : isDelete  ? Stmt::Delete
+                         : Stmt::Write;
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("FILE")) {
+      // FILE ( f ): the file variable.
+      advance();
+      if (eat(Tok::LParen)) {
+        if (at(Tok::Word)) {
+          st->fileIdent = cur().text;
+          advance();
+        } else {
+          d_.error(cur().loc, "expected a FILE variable after FILE(", "(113)");
+        }
+        expect(Tok::RParen, "(113)");
+      } else {
+        d_.error(cur().loc, "expected '(' after FILE", "(113)");
+      }
+      continue;
+    }
+    if (atWord("INTO")) {
+      // INTO( reference ): the target for READ.
+      if (!isRead) {
+        d_.error(cur().loc, "INTO is valid only on READ", "(113)");
+        advance();
+        continue;
+      }
+      advance();
+      if (eat(Tok::LParen)) {
+        st->target = parseExpr();
+        expect(Tok::RParen, "(113)");
+      } else {
+        d_.error(cur().loc, "expected '(' after INTO", "(113)");
+      }
+      continue;
+    }
+    if (atWord("FROM")) {
+      // FROM( expression ): the source for WRITE/REWRITE.
+      if (isRead || isDelete) {
+        d_.error(cur().loc, "FROM is valid only on WRITE/REWRITE", "(113)");
+        advance();
+        continue;
+      }
+      advance();
+      if (eat(Tok::LParen)) {
+        st->value = parseExpr();
+        expect(Tok::RParen, "(113)");
+      } else {
+        d_.error(cur().loc, "expected '(' after FROM", "(113)");
+      }
+      continue;
+    }
+    if (atWord("KEY")) {
+      // KEY( expression ): the record key (rules (112),(113)).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEY", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("KEYTO")) {
+      // KEYTO( reference ): receives the key of the record read (READ).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEYTO", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyToOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("KEYFROM")) {
+      // KEYFROM( expression ): key of the record to rewrite/delete.
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after KEYFROM", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->keyFromOpt = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("NOLOCK")) {
+      // NOLOCK: accepted syntactically (rules (112),(113)).
+      st->keyNoLock = true;
+      advance();
+      continue;
+    }
+    if (atWord("SET")) {
+      // SET( ref ): store record buffer address into a POINTER (READ, LOCATE).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after SET", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->setTarget = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("IGNORE")) {
+      // IGNORE( n ): skip n records without transferring data (READ).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after IGNORE", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->ignoreCount = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("LOCATE")) {
+      // LOCATE( var ): set BASED variable's pointer to a buffer (WRITE).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after LOCATE", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->locateVar = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    if (atWord("UNLOCK")) {
+      // UNLOCK: release the current record's lock on a keyed/direct file (READ/REWRITE).
+      st->unlockOpt = true;
+      advance();
+      continue;
+    }
+    if (atWord("EVENT")) {
+      // EVENT( ev ): event variable completed after the operation
+      // (READ/WRITE/REWRITE/DELETE/LOCATE).
+      advance();
+      if (!eat(Tok::LParen)) {
+        d_.error(cur().loc, "expected '(' after EVENT", "(113)");
+        resync();
+        return nullptr;
+      }
+      st->recordEventTarget = parseExpr();
+      expect(Tok::RParen, "(113)");
+      continue;
+    }
+    d_.error(cur().loc,
+             "record option '" +
+                 (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) +
+                 "' is not implemented in this stage",
+             "(113)");
+    resync();
+    return nullptr;
+  }
+  expect(Tok::Semi, "(113)");
+  // DELETE removes the current record and takes no data clause; READ needs a
+  // receiver and WRITE/REWRITE a source.
+  if (!isDelete && !st->target && !st->value && !st->locateVar) {
+    const char* want = isRead ? "INTO" : "FROM";
+    d_.error(st->loc,
+             std::string(isRead ? "READ requires an INTO ( reference ) option; "
+                                : "WRITE/REWRITE require a FROM ( expression ) option; ") +
+                 "it is not implemented otherwise in this stage",
+             "(113)");
+  }
+  return st;
+}
 
 // open-statement ::= OPEN {, open-optionslist};    rules (100),(101)
 // This stage serves the stream forms: FILE ( f ) plus TITLE ('name') and the
@@ -5445,7 +5461,8 @@ StmtP Parser::parseOpen() {
       // and diagnosed below.
       advance();
       st->openEnvironment = true;
-      if (at(Tok::LParen)) skipParen("(101)");
+      if (at(Tok::LParen))
+        skipParen("(101)");
       continue;
     }
     if (atWord("BUFFERED")) {
@@ -5482,8 +5499,7 @@ StmtP Parser::parseOpen() {
   if (st->openRecord && sawStream)
     d_.error(st->loc, "OPEN cannot combine RECORD with STREAM/PRINT in this stage", "(101)");
   if (st->openUpdate && (!st->openRecord || sawStream))
-    d_.error(st->loc,
-             "OPEN ... UPDATE requires the RECORD SEQUENTIAL organisation in this stage",
+    d_.error(st->loc, "OPEN ... UPDATE requires the RECORD SEQUENTIAL organisation in this stage",
              "(101)");
   else if (st->openUpdate && st->openInput)
     d_.error(st->loc, "OPEN cannot combine INPUT with UPDATE", "(101)");
@@ -5944,7 +5960,8 @@ InitItem Parser::parseInitialItem(bool topLevel) {
                             (peek(3).kind == Tok::LParen || valueStart(peek(3).kind)));
     // At top level of INITIAL itemlist, '(n)' is a Group (per-name itemlist),
     // not a parenthesized constant.
-    bool parenConst = !topLevel && !iterHex && peek().kind == Tok::Number && peek(2).kind == Tok::RParen &&
+    bool parenConst = !topLevel && !iterHex && peek().kind == Tok::Number &&
+                      peek(2).kind == Tok::RParen &&
                       (peek(3).kind == Tok::Comma || peek(3).kind == Tok::RParen);
     advance(); // (
     if (iter) {
@@ -5954,7 +5971,8 @@ InitItem Parser::parseInitialItem(bool topLevel) {
       InitItem it;
       it.kind = InitItem::Iter;
       it.value = std::move(factorExpr);
-      // If the factor is a constant integer literal, also store it in factor for compile-time expansion
+      // If the factor is a constant integer literal, also store it in factor for compile-time
+      // expansion
       if (it.value && it.value->kind == Expr::IntLit) {
         it.factor = it.value->ival;
       } else {

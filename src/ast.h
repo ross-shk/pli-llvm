@@ -41,8 +41,9 @@ struct Expr {
   Type ty{}; // assigned by sema
 
   long long ival = 0;
-  PliI128 wideIval = 0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
-                        // IntLit: full value when the digits exceed i64 (rule 135); ival is strtoll (saturating)
+  PliI128 wideIval =
+      0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
+         // IntLit: full value when the digits exceed i64 (rule 135); ival is strtoll (saturating)
   double fval = 0;
   int decScale = 0; // DecLit: fraction digits q (the 10^q scaling of ival)
   int decPrec = 0;  // DecLit: total significant digits p
@@ -65,11 +66,11 @@ struct Expr {
   ExprP a, b;
   std::vector<ExprP> args; // Call
   // PutIter (PUT LIST iteration): fields for the DO specification
-  ExprP putIterExpr;   // the expression to evaluate each iteration
+  ExprP putIterExpr;      // the expression to evaluate each iteration
   std::string putIterVar; // control variable name
-  ExprP putIterFrom;   // starting value
-  ExprP putIterTo;     // ending value
-  ExprP putIterBy;     // step value (null = 1)
+  ExprP putIterFrom;      // starting value
+  ExprP putIterTo;        // ending value
+  ExprP putIterBy;        // step value (null = 1)
 };
 
 struct Stmt;
@@ -112,12 +113,12 @@ struct DefinedSub {
 // diagnosed, rule 47).
 struct FormatItem {
   enum Kind { A, B, C, F, E, X, Skip, Page, Line, Column, Remote, P, Repeat } kind = A;
-  ExprP w;                       // field width
-  ExprP d;                       // F/E: fractional digits
-  ExprP s;                       // F/E: scale factor p (rule (50)); null = absent
-  std::string remote;            // R: FORMAT statement label (rule (55)); empty = none
-  std::string pic;               // P: picture string (rules (53),(146)-(148)); empty = none
-  std::vector<FormatItem> subs;  // C: 1-2 inner real (F/E/P) formats (rule (51))
+  ExprP w;                      // field width
+  ExprP d;                      // F/E: fractional digits
+  ExprP s;                      // F/E: scale factor p (rule (50)); null = absent
+  std::string remote;           // R: FORMAT statement label (rule (55)); empty = none
+  std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
+  std::vector<FormatItem> subs; // C: 1-2 inner real (F/E/P) formats (rule (51))
   // Repeat (rule 47):
   ExprP count;                   // repetition count expression
   std::vector<FormatItem> items; // nested format group
@@ -144,8 +145,8 @@ struct DeclItem {
   std::string typeRef;                 // TYPE <alias> (extension, ADR-114); empty = none
   std::string definedBase;             // DEFINED <reference> base name (rule 24); empty = none
   std::vector<DefinedSub> definedSubs; // base subscript list; empty = whole base
-  bool hasPos = false; // DEFINED base POSITION(n) (rule 24): the 1-based position
-  long long pos = 1;   // in the base at which the defined item starts
+  bool hasPos = false;                 // DEFINED base POSITION(n) (rule 24): the 1-based position
+  long long pos = 1;                   // in the base at which the defined item starts
   std::string basedBase;               // BASED( <pointer-name> ) base (rule 25); empty = none
   bool basedNoPtr = false;             // bare BASED (rule 25): no locator, refs must qualify
   bool controlled = false;             // CONTROLLED generation-stack storage (rule (15), ADR-140)
@@ -173,45 +174,45 @@ struct DeclItem {
   bool isCondition = false;      // DECLARE name CONDITION; (rule 9)
   bool fileAttr = false;         // DECLARE name FILE (rules 39,40): a named file
   std::vector<Type> entryParams; // ENTRY ( ... ) descriptor
-   bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
-   Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
-   // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
-   std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
-   std::string returnsStructName; // rule 127: a bare structure name naming the
-                                  // structure whose shape this entry returns;
-                                  // resolved to a deep copy in sema
-   std::string extName;           // EXTERNAL('name') case-sensitive C symbol
-   bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
-   bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
-                                  // scalar/pointer params marshal by value (C ABI)
-   std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
-   std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
-   int reducible = 0;             // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute
-                                  // (rule (34)): an optimization hint, metadata only
-   std::string abnormalLabel;     // ABNORMAL(label) entry-name-attribute (rule (38))
-   bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
-   std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
-   bool reserved = false;         // RESERVED (ADR-203): no init
-    bool unionAttr = false;        // UNION (ADR-202): overlay with next member
-    bool labelAttr = false;        // LABEL (rule (21)): label variable
-    bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
-    bool printAttr = false;        // PRINT (rule 40): stream file with page/line formatting
-    bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
-    // File modifiers (rules 39,40): implementation-dependent, no runtime effect
-    bool buffered = false;         // BUFFERED
-    bool unbuffered = false;       // UNBUFFERED
-    bool exclusive = false;        // EXCLUSIVE
-    bool dataAttr = false;         // a computational/string data attribute was given
-                                   // on this item (used to validate GENERIC)
-    // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
-    std::vector<std::pair<std::string, Type>> genericEntries;
-  };
+  bool entryIsFunction = false;  // ENTRY ... RETURNS(...) (rule (34)): returns a value
+  Type entryRetTy;               // the RETURNS(...) result type of an ENTRY declaration
+  // Dynamic member paths (rule 13) for the ENTRY's RETURNS structure.
+  std::vector<std::vector<unsigned>> entryRetDynMemberPaths;
+  std::string returnsStructName; // rule 127: a bare structure name naming the
+                                 // structure whose shape this entry returns;
+                                 // resolved to a deep copy in sema
+  std::string extName;           // EXTERNAL('name') case-sensitive C symbol
+  bool external = false;         // EXTERNAL variable (rule (42)): module-wide storage
+  bool entryByValue = false;     // ENTRY OPTIONS(LINKAGE(SYSTEM)/BYVALUE) (rule (34)):
+                                 // scalar/pointer params marshal by value (C ABI)
+  std::vector<std::string> uses; // USES( ... ) entry-name-attribute (rules (34),(38))
+  std::vector<std::string> sets; // SETS( ... ) entry-name-attribute (rules (34),(38))
+  int reducible = 0;             // REDUCIBLE (1) / IRREDUCIBLE (-1) entry-name attribute
+                                 // (rule (34)): an optimization hint, metadata only
+  std::string abnormalLabel;     // ABNORMAL(label) entry-name-attribute (rule (38))
+  bool normal = false;           // NORMAL entry-name-attribute (rule (38)): no ABNORMAL
+  std::string picture;           // PICTURE 'fmt' attribute (rules (19),(146)-(148))
+  bool reserved = false;         // RESERVED (ADR-203): no init
+  bool unionAttr = false;        // UNION (ADR-202): overlay with next member
+  bool labelAttr = false;        // LABEL (rule (21)): label variable
+  bool nonprint = false;         // NONPRINT (ADR-204): stream output suppressed
+  bool printAttr = false;        // PRINT (rule 40): stream file with page/line formatting
+  bool imaginary = false;        // IMAGINARY attribute: COMPLEX storage with zero real part
+  // File modifiers (rules 39,40): implementation-dependent, no runtime effect
+  bool buffered = false;   // BUFFERED
+  bool unbuffered = false; // UNBUFFERED
+  bool exclusive = false;  // EXCLUSIVE
+  bool dataAttr = false;   // a computational/string data attribute was given
+                           // on this item (used to validate GENERIC)
+  // GENERIC dispatch matrix (rule 41): entry name → WHEN attribute-class type.
+  std::vector<std::pair<std::string, Type>> genericEntries;
+};
 
-  // Deep-clone helpers for factored declarations (rule 11): each name gets its
-  // own copy of INITIAL expressions, dynamic bounds, and initItems.
-  ExprP cloneExpr(const Expr& e);
-  inline InitItem cloneInitItem(const InitItem& it);
-  inline DeclItem cloneDeclItem(const DeclItem& base);
+// Deep-clone helpers for factored declarations (rule 11): each name gets its
+// own copy of INITIAL expressions, dynamic bounds, and initItems.
+ExprP cloneExpr(const Expr& e);
+inline InitItem cloneInitItem(const InitItem& it);
+inline DeclItem cloneDeclItem(const DeclItem& base);
 
 // Rule (65) initial-label: an element of a label array named by a statement
 // prefix (AR(1): ...). The subscripts are optionally signed integer constants;
@@ -224,41 +225,41 @@ struct LabelElem {
 
 struct Stmt {
   enum Kind {
-    Null,        // rule (67)
-    Declare,     // rule (9)
-    Assign,      // rule (86)
-    If,          // rule (74)
-    Group,       // rule (70)  DO; ... END;
-    Begin,       // rule (68)  BEGIN; ... END; — a block with its own scope
-    DoWhile,     // rule (71)  DO WHILE(e);
-    DoIter,      // rule (71)+(72)+(73)
-    Put,         // rules (104)-(109)
-    Get,         // rules (104)-(109)
-    CallS,       // rule (78)
-    Return,      // rule (81)
-    Stop,        // rule (85)
-    Goto,        // rule (77)  GO TO label — local, within a procedure (M1)
-    Entry,       // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
-                 //            an alternate entry point into this procedure
-    Allocate,    // rule (87)  ALLOCATE based-allocate-item{,...}
-    Free,        // rule (90)  FREE ( [reference ->] identifier ){,...}
-    Open,        // rule (100) OPEN open-optionslist{,...};
-    Close,       // rule (102) CLOSE close-optionslist{,...};
-    Leave,       // extension (ADR-105): LEAVE [label]; exits an iterative group
-    Iterate,     // extension (ADR-105): ITERATE [label]; continues one (`name` = target)
-    On,          // rule (91)  ON condition [SNAP] (unit | SYSTEM)
-    Revert,      // rule (92)  REVERT condition
-    Signal,      // rule (93)  SIGNAL condition
-    Display,     // rule (114) DISPLAY (expression) — one scalar value
-    Read,        // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
-    Write,       // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
-    Rewrite,     // rule (112) REWRITE FILE ( f ) FROM ( reference ) — replace the current record
-    Delete,      // rule (112) DELETE FILE ( f ) — remove the current record
-    Wait,        // rule (82) WAIT(ev,...)[(count)] — suspend until events complete (QR2.8)
-    Delay,       // rule (83) DELAY(expr) — suspend for N milliseconds (QR2.8)
-    Format,      // rule (44) FORMAT(formatlist); — remote format repository for R(ref)
-    DefineAlias, // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
-                 // dropped in lowering after sema registers the type)
+    Null,           // rule (67)
+    Declare,        // rule (9)
+    Assign,         // rule (86)
+    If,             // rule (74)
+    Group,          // rule (70)  DO; ... END;
+    Begin,          // rule (68)  BEGIN; ... END; — a block with its own scope
+    DoWhile,        // rule (71)  DO WHILE(e);
+    DoIter,         // rule (71)+(72)+(73)
+    Put,            // rules (104)-(109)
+    Get,            // rules (104)-(109)
+    CallS,          // rule (78)
+    Return,         // rule (81)
+    Stop,           // rule (85)
+    Goto,           // rule (77)  GO TO label — local, within a procedure (M1)
+    Entry,          // rule (56)  label: ENTRY [(params)] [RETURNS(...)] —
+                    //            an alternate entry point into this procedure
+    Allocate,       // rule (87)  ALLOCATE based-allocate-item{,...}
+    Free,           // rule (90)  FREE ( [reference ->] identifier ){,...}
+    Open,           // rule (100) OPEN open-optionslist{,...};
+    Close,          // rule (102) CLOSE close-optionslist{,...};
+    Leave,          // extension (ADR-105): LEAVE [label]; exits an iterative group
+    Iterate,        // extension (ADR-105): ITERATE [label]; continues one (`name` = target)
+    On,             // rule (91)  ON condition [SNAP] (unit | SYSTEM)
+    Revert,         // rule (92)  REVERT condition
+    Signal,         // rule (93)  SIGNAL condition
+    Display,        // rule (114) DISPLAY (expression) — one scalar value
+    Read,           // rule (112) READ FILE ( f ) INTO ( reference ) — sequential slice
+    Write,          // rule (112) WRITE FILE ( f ) FROM ( reference ) — sequential slice
+    Rewrite,        // rule (112) REWRITE FILE ( f ) FROM ( reference ) — replace the current record
+    Delete,         // rule (112) DELETE FILE ( f ) — remove the current record
+    Wait,           // rule (82) WAIT(ev,...)[(count)] — suspend until events complete (QR2.8)
+    Delay,          // rule (83) DELAY(expr) — suspend for N milliseconds (QR2.8)
+    Format,         // rule (44) FORMAT(formatlist); — remote format repository for R(ref)
+    DefineAlias,    // extension (ADR-114): DEFINE ALIAS name attrs (no HIR twin;
+                    // dropped in lowering after sema registers the type)
     DefineConstant, // extension (ADR-205): DEFINE CONSTANT name const (lowers
                     // to a Declare carrying the symbol, so inits emit)
   } kind = Null;
@@ -315,10 +316,10 @@ struct Stmt {
 
   // PUT/GET stream statement options (rules (104),(105))
   bool skip = false, page = false;
-  bool copy = false;              // COPY stream option (rule 105)
-  bool line = false;              // LINE(n) stream option (rule 105)
+  bool copy = false; // COPY stream option (rule 105)
+  bool line = false; // LINE(n) stream option (rule 105)
   ExprP skipCount;
-  ExprP lineCount;                // LINE(n) expression
+  ExprP lineCount; // LINE(n) expression
   std::vector<ExprP> items;
   // Edit-directed transmission (rule (108)): when true, the data items are
   // written/read through the paired format list instead of list-directed.
@@ -338,22 +339,22 @@ struct Stmt {
   Symbol* fileSym = nullptr;
   std::string openTitle;
   bool openInput = false;
-  bool openUpdate = false; // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
-                           // read and write in place (REWRITE/DELETE)
-  bool openRecord = false; // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
-                           // file; READ/WRITE transfer fixed-size binary records
-  bool openKeyed = false;  // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
-                           // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
-                           // KEYTO/KEYFROM to address records by key
-  bool openDirect = false; // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
-                           // direct organisation; same keyed access as KEYED
-  bool openStream = false; // OPEN ... STREAM: an unformatted stream file
-  bool openPrint = false;  // OPEN ... PRINT: a stream file with page/line
-                           // formatting
-  bool openBackwards = false; // OPEN ... BACKWARDS (rule (101)): a sequential
-                              // record file is read from the last record first
+  bool openUpdate = false;      // OPEN ... RECORD SEQUENTIAL UPDATE (rules (101),(112)):
+                                // read and write in place (REWRITE/DELETE)
+  bool openRecord = false;      // OPEN ... RECORD SEQUENTIAL (rules (101),(112)): a record
+                                // file; READ/WRITE transfer fixed-size binary records
+  bool openKeyed = false;       // OPEN ... RECORD KEYED (rules (100),(101),(112),(113)):
+                                // keyed organisation; READ/WRITE/REWRITE/DELETE use KEY/
+                                // KEYTO/KEYFROM to address records by key
+  bool openDirect = false;      // OPEN ... RECORD DIRECT (rules (100),(101),(112),(113)):
+                                // direct organisation; same keyed access as KEYED
+  bool openStream = false;      // OPEN ... STREAM: an unformatted stream file
+  bool openPrint = false;       // OPEN ... PRINT: a stream file with page/line
+                                // formatting
+  bool openBackwards = false;   // OPEN ... BACKWARDS (rule (101)): a sequential
+                                // record file is read from the last record first
   bool openEnvironment = false; // OPEN ... ENVIRONMENT: not an OPEN option
-                                 // (rule (101)); diagnosed on OPEN
+                                // (rule (101)); diagnosed on OPEN
   // OPEN options (rule (101)): IDENT/LINESIZE/PAGESIZE expressions.
   ExprP openIdent = nullptr;    // IDENT ( expression )
   ExprP openLinesize = nullptr; // LINESIZE ( expression )
@@ -362,31 +363,31 @@ struct Stmt {
   // parsed for side effects with no runtime effect.
   std::vector<ExprP> openRecordSizeNoops;
   // File modifiers (rules 39,40): implementation-dependent, no runtime effect
-  bool openBuffered = false;    // BUFFERED
-  bool openUnbuffered = false;  // UNBUFFERED
-  bool openExclusive = false;   // EXCLUSIVE
+  bool openBuffered = false;   // BUFFERED
+  bool openUnbuffered = false; // UNBUFFERED
+  bool openExclusive = false;  // EXCLUSIVE
   // CLOSE options (rule (103))
-  ExprP closeIdent = nullptr;   // IDENT ( expression )
-// Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
-// record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
-// KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
-  ExprP keyOpt = nullptr;    // KEY( expression )
-  ExprP keyToOpt = nullptr;  // KEYTO( variable )
-  ExprP keyFromOpt = nullptr;// KEYFROM( expression )
+  ExprP closeIdent = nullptr; // IDENT ( expression )
+  // Key options on record I/O statements (rules (112),(113)): KEY( ) supplies the
+  // record key (WRITE/READ/REWRITE/DELETE), KEYTO( ) receives the key read (READ),
+  // KEYFROM( ) supplies the key to rewrite/delete (REWRITE/DELETE).
+  ExprP keyOpt = nullptr;     // KEY( expression )
+  ExprP keyToOpt = nullptr;   // KEYTO( variable )
+  ExprP keyFromOpt = nullptr; // KEYFROM( expression )
   // Rule (113) record options (keyed/direct + sequential):
-  bool keyNoLock = false;    // NOLOCK                READ/REWRITE/DELETE
-  ExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
-  ExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
-  ExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
-  bool unlockOpt = false;    // UNLOCK                READ/REWRITE (release lock)
-  ExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
+  bool keyNoLock = false;            // NOLOCK                READ/REWRITE/DELETE
+  ExprP setTarget = nullptr;         // SET(ref)              READ / LOCATE (POINTER sink)
+  ExprP ignoreCount = nullptr;       // IGNORE(n)             READ (skip n records)
+  ExprP locateVar = nullptr;         // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;            // UNLOCK                READ/REWRITE (release lock)
+  ExprP recordEventTarget = nullptr; // EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
   ExprP replyTarget;
 
-   std::vector<ExprP> args; // CALL arguments
-   ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
+  std::vector<ExprP> args; // CALL arguments
+  ExprP gotoTarget;        // GO TO (expr) via LABEL variable (rule (77), rule (21))
 
   // CALL task options (rule (79), QR2.8): TASK[(ref)], EVENT(ref),
   // PRIORITY(expr) in any order. taskRef/eventRef are VarRef to a TASK/EVENT
@@ -411,12 +412,12 @@ struct Stmt {
   static constexpr int kSizeCondKey = -1;
   static constexpr int kSubscriptrangeCondKey = -2;
   static constexpr int kZerodivideCondKey = -3;
-  static constexpr int kConversionCondKey = -4; // CONVERSION (rule 94, QR1.2)
-  static constexpr int kStringrangeCondKey = -5; // STRINGRANGE (rules 60-63, 94)
-  static constexpr int kFinishCondKey = -6;      // FINISH (rule 94, ADR-322)
-  static constexpr int kAreaCondKey = -7;        // AREA (rule 94, ADR-323)
-  static constexpr int kUnderflowCondKey = -8;   // UNDERFLOW (rule 94, ADR-326)
-  static constexpr int kOverflowCondKey = -9;    // OVERFLOW (rule 94, ADR-333)
+  static constexpr int kConversionCondKey = -4;     // CONVERSION (rule 94, QR1.2)
+  static constexpr int kStringrangeCondKey = -5;    // STRINGRANGE (rules 60-63, 94)
+  static constexpr int kFinishCondKey = -6;         // FINISH (rule 94, ADR-322)
+  static constexpr int kAreaCondKey = -7;           // AREA (rule 94, ADR-323)
+  static constexpr int kUnderflowCondKey = -8;      // UNDERFLOW (rule 94, ADR-326)
+  static constexpr int kOverflowCondKey = -9;       // OVERFLOW (rule 94, ADR-333)
   static constexpr int kFixedoverflowCondKey = -10; // FIXEDOVERFLOW (rule 94, ADR-334)
   // ENDFILE(f) and UNDEFINEDFILE(f) (rule 97) are file conditions: each key is
   // its base minus the FILE variable's runtime slot, so every file has its own
@@ -515,8 +516,8 @@ struct Program {
   // is NOT the index into this list: the key is a hash of the name (see
   // Sema::resolveCondKey), so it stays the same across separately compiled
   // objects. Key 0 means ERROR, negative keys are the fixed conditions above.
-std::vector<std::string> condNames;
-  };
+  std::vector<std::string> condNames;
+};
 
 // Deep-clone implementation for factored declarations (rule 11).
 // All Expr::Kind variants share the same struct layout; we copy all fields
@@ -537,10 +538,13 @@ inline ExprP cloneExpr(const Expr& e) {
   r->memberPath = e.memberPath;
   // sym, locPtr, allocBaseRef, isLabel, folded — NOT cloned (sema/runtime fills)
   r->op = e.op;
-  if (e.a) r->a = cloneExpr(*e.a);
-  if (e.b) r->b = cloneExpr(*e.b);
+  if (e.a)
+    r->a = cloneExpr(*e.a);
+  if (e.b)
+    r->b = cloneExpr(*e.b);
   for (const auto& arg : e.args)
-    if (arg) r->args.push_back(cloneExpr(*arg));
+    if (arg)
+      r->args.push_back(cloneExpr(*arg));
   return r;
 }
 
@@ -548,8 +552,10 @@ inline InitItem cloneInitItem(const InitItem& it) {
   InitItem r;
   r.kind = it.kind;
   r.factor = it.factor;
-  if (it.value) r.value = cloneExpr(*it.value);
-  for (const auto& child : it.items) r.items.push_back(cloneInitItem(child));
+  if (it.value)
+    r.value = cloneExpr(*it.value);
+  for (const auto& child : it.items)
+    r.items.push_back(cloneInitItem(child));
   return r;
 }
 
@@ -577,7 +583,8 @@ inline DeclItem cloneDeclItem(const DeclItem& base) {
     nds.axis = ds.axis;
     nds.mult = ds.mult;
     nds.add = ds.add;
-    if (ds.expr) nds.expr = cloneExpr(*ds.expr);
+    if (ds.expr)
+      nds.expr = cloneExpr(*ds.expr);
     r.definedSubs.push_back(std::move(nds));
   }
   r.hasPos = base.hasPos;
@@ -608,13 +615,22 @@ inline DeclItem cloneDeclItem(const DeclItem& base) {
   r.imaginary = base.imaginary;
   r.dataAttr = base.dataAttr;
   // Deep clones
-  if (base.init) r.init = cloneExpr(*base.init);
-  if (base.slenExpr) r.slenExpr = cloneExpr(*base.slenExpr);
-  if (base.valueInit) r.valueInit = cloneExpr(*base.valueInit);
-  if (base.initCall) r.initCall = cloneExpr(*base.initCall);
-  for (const auto& e : base.dynBounds) if (e) r.dynBounds.push_back(cloneExpr(*e));
-  for (const auto& e : base.dynLbBounds) if (e) r.dynLbBounds.push_back(cloneExpr(*e));
-  for (const auto& it : base.initItems) r.initItems.push_back(cloneInitItem(it));
+  if (base.init)
+    r.init = cloneExpr(*base.init);
+  if (base.slenExpr)
+    r.slenExpr = cloneExpr(*base.slenExpr);
+  if (base.valueInit)
+    r.valueInit = cloneExpr(*base.valueInit);
+  if (base.initCall)
+    r.initCall = cloneExpr(*base.initCall);
+  for (const auto& e : base.dynBounds)
+    if (e)
+      r.dynBounds.push_back(cloneExpr(*e));
+  for (const auto& e : base.dynLbBounds)
+    if (e)
+      r.dynLbBounds.push_back(cloneExpr(*e));
+  for (const auto& it : base.initItems)
+    r.initItems.push_back(cloneInitItem(it));
   // Non-owning / runtime-filled — leave null/empty
   r.sym = nullptr;
   r.dynMembers.clear();

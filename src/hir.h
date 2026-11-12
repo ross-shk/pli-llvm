@@ -48,8 +48,9 @@ struct HExpr {
   Type ty{}; // the value's type after sema typing
 
   long long ival = 0;
-  PliI128 wideIval = 0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
-                        // IntLit: full value when the digits exceed i64 (rule 135); ival is strtoll (saturating)
+  PliI128 wideIval =
+      0; // DecLit: full scaled value (ADR-191); ival is its i64 truncation
+         // IntLit: full value when the digits exceed i64 (rule 135); ival is strtoll (saturating)
   double fval = 0;
   int decScale = 0;                 // DecLit: fraction digits q (the 10^q scaling of ival)
   int decPrec = 0;                  // DecLit: total significant digits p
@@ -66,11 +67,11 @@ struct HExpr {
   Type convTo{}; // Convert: the target type of the conversion
   bool isLabel = false;
   // PutIter (PUT LIST iteration): fields for the DO specification
-  HExprP putIterExpr;   // the expression to evaluate each iteration
+  HExprP putIterExpr;     // the expression to evaluate each iteration
   std::string putIterVar; // control variable name
-  HExprP putIterFrom;   // starting value
-  HExprP putIterTo;     // ending value
-  HExprP putIterBy;     // step value (null = 1)
+  HExprP putIterFrom;     // starting value
+  HExprP putIterTo;       // ending value
+  HExprP putIterBy;       // step value (null = 1)
 };
 
 // The AST and HIR expression kinds are not in the same order (HIR adds the
@@ -121,10 +122,10 @@ struct HDeclItem {
 // Runtime array descriptor value (HIR-level).
 // Used for: passing to callees, LBOUND/HBOUND/DIM builtins, runtime checks.
 struct HArrayDesc {
-  std::vector<HExprP> lowerBounds;  // one per axis
+  std::vector<HExprP> lowerBounds; // one per axis
   std::vector<HExprP> upperBounds;
-  std::vector<HExprP> strides;      // element strides
-  HExprP baseAddr;                  // void* (i8*)
+  std::vector<HExprP> strides; // element strides
+  HExprP baseAddr;             // void* (i8*)
   Type elementTy;
   // Metadata flags
   std::vector<AxisDesc::Provenance> provenances;
@@ -146,7 +147,7 @@ struct HFormatItem {
   HExprP d;                      // F/E: fractional digits
   HExprP s;                      // F/E: scale factor (evaluated for effects, formatting uses (w,d))
   std::string remote;            // R: FORMAT label (sema expands R, so HIR never carries one)
-  std::string pic;              // P: picture string (rules (53),(146)-(148)); empty = none
+  std::string pic;               // P: picture string (rules (53),(146)-(148)); empty = none
   std::vector<HFormatItem> subs; // C: 1-2 inner real (F/E/P) formats
   // Repeat (rule 47):
   HExprP count;
@@ -190,14 +191,14 @@ struct HStmt {
   } kind = Null;
 
   SourceLoc loc{};
-  std::vector<std::string> labels; // rule (64) label prefixes
+  std::vector<std::string> labels;   // rule (64) label prefixes
   std::vector<LabelElem> labelElems; // rule (65) label-array element prefixes
 
   std::vector<HDeclItem> decls;
 
   HExprP target, value, cond, from, to, by;
-  bool until = false;               // DO UNTIL (extension, ADR-106): test cond after the body
-  bool forever = false;             // DO FOREVER (extension, ADR-370): infinite loop, no condition
+  bool until = false;   // DO UNTIL (extension, ADR-106): test cond after the body
+  bool forever = false; // DO FOREVER (extension, ADR-370): infinite loop, no condition
   // sema-folded: true only when BY is a compile-time negative integer constant
   bool byNegConst = false;          // P1.1: lets emitDoIter skip the runtime sign test
   std::vector<HExprP> extraTargets; // rule (86) multiple assignment a, b, c = e
@@ -216,7 +217,7 @@ struct HStmt {
   bool chkUnder = false;
   bool chkOver = false;
   bool chkFOver = false;
-  int strRange = 0;                 // (STRINGRANGE)/(NOSTRINGRANGE) prefix (ADR-297)
+  int strRange = 0; // (STRINGRANGE)/(NOSTRINGRANGE) prefix (ADR-297)
   HStmtP thenS, elseS;
   std::vector<HStmtP> body;
 
@@ -234,10 +235,10 @@ struct HStmt {
 
   // GET/PUT stream statement options (rules (104),(105))
   bool skip = false, page = false;
-  bool copy = false;              // COPY stream option (rule 105)
-  bool line = false;              // LINE(n) stream option (rule 105)
+  bool copy = false; // COPY stream option (rule 105)
+  bool line = false; // LINE(n) stream option (rule 105)
   HExprP skipCount;
-  HExprP lineCount;               // LINE(n) expression
+  HExprP lineCount; // LINE(n) expression
   std::vector<HExprP> items;
   // Edit-directed transmission (rule (108)); mirrors the AST flag and format
   // list, with lowered width/decimals expressions.
@@ -248,7 +249,7 @@ struct HStmt {
   // STRING ( reference ) option (rule 105): the character variable the list-
   // directed output is written into (PUT) or input read from (GET); null =
   // SYSIN/SYSPRINT.
-   HExprP stringTarget;
+  HExprP stringTarget;
 
   // GO TO (rule (77)): direct jump target label name (name = label), or
   // indirect via a LABEL variable expression (gotoTarget, rule (21)).
@@ -277,16 +278,16 @@ struct HStmt {
   // CLOSE options (rule (103))
   HExprP closeIdent = nullptr;
   // Key options on record I/O statements (rules (112),(113)): mirrors the AST flags.
-  HExprP keyOpt = nullptr;    // KEY( expression )
-  HExprP keyToOpt = nullptr;  // KEYTO( variable )
-  HExprP keyFromOpt = nullptr;// KEYFROM( expression )
+  HExprP keyOpt = nullptr;     // KEY( expression )
+  HExprP keyToOpt = nullptr;   // KEYTO( variable )
+  HExprP keyFromOpt = nullptr; // KEYFROM( expression )
   // Rule (113) record options (keyed/direct + sequential):
-  bool keyNoLock = false;     // NOLOCK                READ/REWRITE/DELETE
-  HExprP setTarget = nullptr; // SET(ref)              READ / LOCATE (POINTER sink)
-  HExprP ignoreCount = nullptr;// IGNORE(n)             READ (skip n records)
-  HExprP locateVar = nullptr; // LOCATE(var)           WRITE (BASED variable)
-  bool unlockOpt = false;     // UNLOCK                READ/REWRITE (release lock)
-  HExprP recordEventTarget = nullptr;// EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
+  bool keyNoLock = false;             // NOLOCK                READ/REWRITE/DELETE
+  HExprP setTarget = nullptr;         // SET(ref)              READ / LOCATE (POINTER sink)
+  HExprP ignoreCount = nullptr;       // IGNORE(n)             READ (skip n records)
+  HExprP locateVar = nullptr;         // LOCATE(var)           WRITE (BASED variable)
+  bool unlockOpt = false;             // UNLOCK                READ/REWRITE (release lock)
+  HExprP recordEventTarget = nullptr; // EVENT(ev)         READ/WRITE/REWRITE/DELETE/LOCATE
 
   // DISPLAY ... REPLY (reference) (rule 114): the character variable to receive
   // the reply input.
@@ -301,7 +302,7 @@ struct HStmt {
   // CALL task options (rule (79), QR2.8): mirrors the AST fields.
   bool hasTaskOpt = false;
   HExprP taskRef;
-  HExprP eventRef;          // EVENT(name) for DISPLAY EVENT or CALL TASK EVENT
+  HExprP eventRef; // EVENT(name) for DISPLAY EVENT or CALL TASK EVENT
   HExprP priorityExpr;
   // WAIT (rule (82)): event list + optional count.
   std::vector<HExprP> waitEvents;
@@ -352,10 +353,10 @@ struct HProc {
   std::string name;
   SourceLoc loc{};
   bool isMain = false;
-  bool isExternal = false;             // rule (42): externally linked, upper-cased name
-  bool isRecursive = false;            // RECURSIVE option (rule (5))
-  bool isFunction = false;             // has a RETURNS attribute (rules (5),(34))
-  Type retTy{};                        // function return type (RETURNS)
+  bool isExternal = false;  // rule (42): externally linked, upper-cased name
+  bool isRecursive = false; // RECURSIVE option (rule (5))
+  bool isFunction = false;  // has a RETURNS attribute (rules (5),(34))
+  Type retTy{};             // function return type (RETURNS)
   // Field paths of dynamic members in the RETURNS structure (rule 13),
   // relative to the structure root. Mirrors Proc::retDynMemberPaths.
   std::vector<std::vector<unsigned>> retDynMemberPaths;

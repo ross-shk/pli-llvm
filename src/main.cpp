@@ -124,8 +124,8 @@ static void usage() {
          "  --no-subscript    elide SUBSCRIPTRANGE checks (default at -O2/-O3;\n"
          "                   cf. (NOSUBSCRIPTRANGE), ADR-111)\n"
          "  --subscript-checks  force SUBSCRIPTRANGE checks (overrides -O2/-O3 default)\n"
-  "  --release        maximum optimization + stripped binary (minimal size)\n"
-  "  --debug          no optimization (-O0; no DWARF emitted yet)\n"
+         "  --release        maximum optimization + stripped binary (minimal size)\n"
+         "  --debug          no optimization (-O0; no DWARF emitted yet)\n"
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --rt-platform <f>\n"
          "                   path to a custom platform bitcode file implementing\n"
@@ -133,7 +133,7 @@ static void usage() {
          "                   pli_rtplat.bc is merged instead)\n"
          "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
          "  --triple <t>     target triple (default: host triple, in-process)\n"
-          "  --march=native   opt-in: use host CPU features (default: generic;\n"
+         "  --march=native   opt-in: use host CPU features (default: generic;\n"
          "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
          "  -L <dir>         add a library search path to the link step\n"
@@ -250,7 +250,7 @@ static std::vector<fs::path> searchUpwards(const fs::path& start,
 // never made. The header names the format version; a reader that does not
 // know it refuses the file rather than guess at it.
 static bool readPublishedEffects(const std::string& path,
-                                  std::map<std::string, pli::PublishedEffect>& out) {
+                                 std::map<std::string, pli::PublishedEffect>& out) {
   std::ifstream in(path);
   if (!in) {
     std::cerr << "pli: cannot read " << path << "\n";
@@ -329,12 +329,11 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
                        const std::string& optLevel, const fs::path& keepLLDir, int fileIndex,
                        std::string* outObj, bool linkBitcode, LowerMode lowerMode = LowerMode::Auto,
                        const std::map<std::string, LowerMode>& perOpOverrides = {},
-                       const std::string& ltoKind = "",
-                       bool marchNative = false, const std::string& platformBc = "",
-                       bool noMemoryEffects = false, bool warnUnset = false,
-                       const std::string& effectsFile = "",
-                       const std::string& emitEffectsFile = "",
-                       bool remarkLibraryCalls = false, bool noRangeFacts = false) {
+                       const std::string& ltoKind = "", bool marchNative = false,
+                       const std::string& platformBc = "", bool noMemoryEffects = false,
+                       bool warnUnset = false, const std::string& effectsFile = "",
+                       const std::string& emitEffectsFile = "", bool remarkLibraryCalls = false,
+                       bool noRangeFacts = false) {
   (void)fileIndex;
   // Default triple comes from LLVM itself, in-process (no `clang -dumpmachine`
   // subprocess since the self-contained milestone).
@@ -401,8 +400,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   // `--print-facts` lowers once and reports the decisions the compiler made
   // (ADR-260), then stops — no object, no link.
   if (print_facts) {
-    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, false,
+                lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     irgen.setNoRangeFacts(noRangeFacts);
@@ -420,8 +419,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   std::string base = inPath.stem().string();
 
   if (emitLLVM || emitMlir) {
-    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks,
-                false, lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
+    IRGen irgen(diags, sema, triple, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, false,
+                lowerMode, perOpOverrides, "", noMemoryEffects, optimizing);
     irgen.setPublishedEffects(published);
     irgen.setRemarkLibraryCalls(remarkLibraryCalls);
     irgen.setNoRangeFacts(noRangeFacts);
@@ -513,8 +512,8 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
         return false;
       }
       std::string memErr;
-      std::string memPath = pli::createMemBlob(
-          llvm::StringRef(objBuf.data(), objBuf.size()), memErr);
+      std::string memPath =
+          pli::createMemBlob(llvm::StringRef(objBuf.data(), objBuf.size()), memErr);
       if (memPath.empty()) {
         std::cerr << "pli: cannot create in-memory object (" << memErr << ")\n";
         return false;
@@ -698,7 +697,8 @@ int main(int argc, char** argv) {
       }
 #ifndef PLI_ENABLE_MLIR
       if (parsed == LowerMode::MLIR) {
-        std::cerr << "pli: --experimental-lowering=mlir requires an MLIR-enabled build (-DPLI_ENABLE_MLIR=ON)\n";
+        std::cerr << "pli: --experimental-lowering=mlir requires an MLIR-enabled build "
+                     "(-DPLI_ENABLE_MLIR=ON)\n";
         return 2;
       }
 #endif
@@ -916,7 +916,8 @@ int main(int argc, char** argv) {
     std::cerr << "pli: cannot specify -o when generating multiple output files\n";
     return 2;
   }
-  if (multi && !output.empty() && (emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
+  if (multi && !output.empty() &&
+      (emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
     std::cerr << "pli: -o is ambiguous with a per-file mode and multiple inputs\n";
     return 2;
   }
@@ -944,7 +945,8 @@ int main(int argc, char** argv) {
 
   // Compile each input to its own object; per-file modes (-c, -emit-llvm,
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
-  const bool terminalMode = compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts;
+  const bool terminalMode =
+      compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts;
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
@@ -970,13 +972,13 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < pliInputs.size(); ++i) {
     std::string outObj;
     if (!compileOne(preprocessor, pliInputs[i], output, triple, sysparm, sysparmExplicit,
-                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir, print_facts,
-                    keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks, noSubChecks, optLevel,
-                    keepLLDir, (int)i, &outObj, linkBitcode, lowerMode, perOpOverrides,
-                    ltoKind,
+                    compileOnly, semaCompileOnly, emitLLVM, emitMlir, syntaxOnly, print_hir,
+                    print_facts, keepLL, verbose, noSizeChecks, noZdivChecks, noConvChecks,
+                    noSubChecks, optLevel, keepLLDir, (int)i, &outObj, linkBitcode, lowerMode,
+                    perOpOverrides, ltoKind,
                     false /* marchNative: compileOne keeps its default (unchanged) */, platformBc,
-                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile,
-                    remarkLibraryCalls, noRangeFacts))
+                    noMemoryEffects, warnUnset, effectsFile, emitEffectsFile, remarkLibraryCalls,
+                    noRangeFacts))
       return 1;
     if (!compileOnly)
       objs.push_back(outObj);
@@ -1021,18 +1023,17 @@ int main(int argc, char** argv) {
         emb = pli::materializeEmbeddedSysroot();
         if (emb.dir.empty()) {
           std::cerr << "pli: no embedded link sysroot for this platform "
-                       "(" << emb.name << ") — cannot link without a sysroot\n";
+                       "("
+                    << emb.name << ") — cannot link without a sysroot\n";
           removeTempObjects();
           return 1;
         }
       }
       if (verbose) {
         if (useMemSysroot)
-          std::cerr << "pli: using embedded link sysroot (" << embMem.name
-                    << ", in-memory)\n";
+          std::cerr << "pli: using embedded link sysroot (" << embMem.name << ", in-memory)\n";
         else
-          std::cerr << "pli: using embedded link sysroot (" << emb.name << ": "
-                    << emb.dir << ")\n";
+          std::cerr << "pli: using embedded link sysroot (" << emb.name << ": " << emb.dir << ")\n";
       }
 
       // Resolve a sysroot logical path to its link argument: the anonymous-fd
@@ -1090,8 +1091,8 @@ int main(int argc, char** argv) {
         std::string libc = sysrootPath("libc.a");
         std::string builtins = sysrootPath("libpli_builtins-" + arch + ".a");
         std::string libm = sysrootPath("libm.a");
-        if (crt1.empty() || crti.empty() || crtn.empty() || libc.empty() ||
-            builtins.empty() || libm.empty()) {
+        if (crt1.empty() || crti.empty() || crtn.empty() || libc.empty() || builtins.empty() ||
+            libm.empty()) {
           std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
           removeTempObjects();
           if (!useMemSysroot)
@@ -1147,10 +1148,9 @@ int main(int argc, char** argv) {
         argStore.push_back(fltused);
         argStore.push_back(chkstk);
         // Import libs + GCC helpers: pass as explicit file paths.
-        for (const char* lib :
-             {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
-              "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
-              "libshell32.a", "libuser32.a", "libws2_32.a"}) {
+        for (const char* lib : {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
+                                "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
+                                "libshell32.a", "libuser32.a", "libws2_32.a"}) {
           std::string p = sysrootPath(lib);
           if (p.empty()) {
             std::cerr << "pli: embedded sysroot incomplete (missing " << lib << ") — cannot link\n";

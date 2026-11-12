@@ -80,7 +80,8 @@ private:
   StmtP parseDefineAlias();              // DEFINE ALIAS name attrs (extension, ADR-114)
   StmtP parseDefineConstant();           // DEFINE CONSTANT name const (extension, ADR-205)
   static ExprP cloneExpr(const Expr* e); // deep copy for SELECT value lists
-  std::vector<InitItem> cloneInitItems(const std::vector<InitItem>& src); // deep copy for factored INITIAL
+  std::vector<InitItem>
+  cloneInitItems(const std::vector<InitItem>& src); // deep copy for factored INITIAL
   // Decode a hex X literal payload to bytes (rule (143)); false after a
   // diagnostic, in which case out is untouched.
   bool decodeHexLiteral(const std::string& hex, SourceLoc loc, std::string& out);
@@ -189,7 +190,7 @@ private:
   // exit path decrements them.
   int exprDepth_ = 0;
   int blockDepth_ = 0;
-  static constexpr int kMaxExprDepth = 512;  // a parenthesised level costs two
+  static constexpr int kMaxExprDepth = 512; // a parenthesised level costs two
   static constexpr int kMaxBlockDepth = 128;
   // A replicated string constant is expanded at parse time; 1 MiB of result
   // is far beyond any real program and keeps a short source line from

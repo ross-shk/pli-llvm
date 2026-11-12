@@ -50,15 +50,13 @@ struct Val {
 class IRGen {
 public:
   IRGen(Diags& d, Sema& s, std::string triple, bool noSizeChecks = false, bool noZdivChecks = false,
-        bool noConvChecks = false, bool noSubChecks = false,
-        bool linkBitcode = false, LowerMode lowerMode = LowerMode::Auto,
-        std::map<std::string, LowerMode> perOpOverrides = {}, std::string platformBc = "",
-        bool noMemoryEffects = false, bool optimize = true)
+        bool noConvChecks = false, bool noSubChecks = false, bool linkBitcode = false,
+        LowerMode lowerMode = LowerMode::Auto, std::map<std::string, LowerMode> perOpOverrides = {},
+        std::string platformBc = "", bool noMemoryEffects = false, bool optimize = true)
       : noMemoryEffects_(noMemoryEffects), optimize_(optimize), d_(d), sema_(s),
-        triple_(std::move(triple)),
-        mod_("pli", ctx_), b_(ctx_), noSizeChecks_(noSizeChecks), noSubChecks_(noSubChecks),
-        noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks), linkBitcode_(linkBitcode),
-        platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
+        triple_(std::move(triple)), mod_("pli", ctx_), b_(ctx_), noSizeChecks_(noSizeChecks),
+        noSubChecks_(noSubChecks), noZdivChecks_(noZdivChecks), noConvChecks_(noConvChecks),
+        linkBitcode_(linkBitcode), platformBc_(std::move(platformBc)), lowerMode_(lowerMode),
         perOpOverrides_(std::move(perOpOverrides)) {}
 
   std::string run(HProgram& prog);
@@ -255,7 +253,7 @@ private:
   void emitSignal(HStmt* s); // raise ERROR: dispatch or take the system action
   void emitFinishSignal();   // FINISH at a task procedure's exit (ADR-322)
   Val applyUnderflow(Val r, llvm::Value* a, llvm::Value* b); // UNDERFLOW (ADR-326)
-  Val applyOverflow(Val r);                                 // OVERFLOW (ADR-333)
+  Val applyOverflow(Val r);                                  // OVERFLOW (ADR-333)
   // IBM's normal-return rule for OVERFLOW: raise ERROR through the runtime ON
   // stack, or take ERROR's system action when no unit is established.
   void emitErrorRaise();
@@ -315,10 +313,8 @@ private:
   // WRITE ... LOCATE(v) (rule (113)): the record holds the based variable's
   // current contents - one value's image, or a structure's members' images
   // in declaration order.
-  void writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr,
-                         SourceLoc loc);
-  void writeLocateMembers(llvm::Value* slot, const Type& ty, llvm::Value* addr,
-                          SourceLoc loc);
+  void writeLocateValue(llvm::Value* slot, const Type& ty, llvm::Value* addr, SourceLoc loc);
+  void writeLocateMembers(llvm::Value* slot, const Type& ty, llvm::Value* addr, SourceLoc loc);
   void emitGet(HStmt* s); // GET (rules 104-109), list-directed input
   // ADR-233: the stream calls of one statement, deferred so the whole record
   // is written or read under the matching lock. A program without a task
@@ -354,13 +350,11 @@ private:
   // data item with its A/F format and emitting the control (X/SKIP/PAGE/LINE)
   // items in order.
   void emitPutEditItems(HStmt* s);
-  void emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di,
-                       llvm::Value* defW, llvm::Value* defD,
-                       const std::vector<Val>& dataItems);
-void emitGetEditItems(HStmt* s);
-  void emitGetEditItem(const HFormatItem& f, HStmt* s,
-                       const std::vector<HExprP>& items,
-                       size_t& di, llvm::Value* defW);
+  void emitPutEditItem(const HFormatItem& f, HStmt* s, size_t& di, llvm::Value* defW,
+                       llvm::Value* defD, const std::vector<Val>& dataItems);
+  void emitGetEditItems(HStmt* s);
+  void emitGetEditItem(const HFormatItem& f, HStmt* s, const std::vector<HExprP>& items, size_t& di,
+                       llvm::Value* defW);
   // Data-directed output (rule (106)): each item as NAME=value, ", "-separated
   // and ";"-terminated; names are compile-time globals, values reuse the
   // list-directed printers.
@@ -380,8 +374,7 @@ void emitGetEditItems(HStmt* s);
   void emitAsyncCall(HStmt* s);
   // Shared spawn tail for emitAsyncCall: builds the context and spawns the
   // task, passing PRIORITY if present.
-  void emitAsyncSpawn(HStmt* s, llvm::Function* calleeF,
-                      std::vector<llvm::Value*> callArgs,
+  void emitAsyncSpawn(HStmt* s, llvm::Function* calleeF, std::vector<llvm::Value*> callArgs,
                       const std::vector<llvm::Type*>& dummyTys);
   void emitWait(HStmt* s); // WAIT (rule (82), QR2.8)
   // One WAIT operand -> its event addresses (an EVENT array expands).
@@ -390,11 +383,11 @@ void emitGetEditItems(HStmt* s);
   // array-element (ev(i)) or member reference, covering CONTROLLED/dynamic
   // storage for the latter two. Returns a pointer to the underlying flag.
   llvm::Value* taskEventAddr(HExpr* e, SourceLoc loc);
-  void emitDelay(HStmt* s);       // DELAY (rule (83), QR2.8)
-  void emitAllocate(HStmt* s);    // ALLOCATE (rule 87)
-  void emitFree(HStmt* s);        // FREE (rule 90)
-  void emitOpen(HStmt* s);        // OPEN (rules 100,101)
-  void emitClose(HStmt* s);       // CLOSE (rules 102,103)
+  void emitDelay(HStmt* s);    // DELAY (rule (83), QR2.8)
+  void emitAllocate(HStmt* s); // ALLOCATE (rule 87)
+  void emitFree(HStmt* s);     // FREE (rule 90)
+  void emitOpen(HStmt* s);     // OPEN (rules 100,101)
+  void emitClose(HStmt* s);    // CLOSE (rules 102,103)
   // A10: the FILE variable's marker global and its process-wide runtime slot.
   // The slot is looked up by the marker's address, so units cannot collide.
   llvm::GlobalVariable* fileMarker(Symbol* f);
@@ -402,14 +395,14 @@ void emitGetEditItems(HStmt* s);
   // A10: a file condition's key is base minus the runtime slot, not a
   // per-unit compile-time constant.
   llvm::Value* fileCondKeyValue(HStmt* s);
-  void emitRecordRead(HStmt* s);  // READ (rules (112),(113)): one binary record in
-  void emitRecordWrite(HStmt* s); // WRITE (rules (112),(113)): one binary record out
-  void emitRecordRewrite(HStmt* s); // REWRITE (rule (112)): replace the current record
-  void emitRecordDelete(HStmt* s);  // DELETE (rule (112)): remove the current record
-  void emitRecordReadKeyed(HStmt* s);   // READ ... KEY(k) [KEYTO(kv)]
-  void emitRecordWriteKeyed(HStmt* s);  // WRITE ... KEY(k)
-  void emitRecordRewriteKeyed(HStmt* s);// REWRITE ... KEYFROM(k)
-  void emitRecordDeleteKeyed(HStmt* s); // DELETE ... KEYFROM(k)
+  void emitRecordRead(HStmt* s);         // READ (rules (112),(113)): one binary record in
+  void emitRecordWrite(HStmt* s);        // WRITE (rules (112),(113)): one binary record out
+  void emitRecordRewrite(HStmt* s);      // REWRITE (rule (112)): replace the current record
+  void emitRecordDelete(HStmt* s);       // DELETE (rule (112)): remove the current record
+  void emitRecordReadKeyed(HStmt* s);    // READ ... KEY(k) [KEYTO(kv)]
+  void emitRecordWriteKeyed(HStmt* s);   // WRITE ... KEY(k)
+  void emitRecordRewriteKeyed(HStmt* s); // REWRITE ... KEYFROM(k)
+  void emitRecordDeleteKeyed(HStmt* s);  // DELETE ... KEYFROM(k)
 
   // Address of one call argument for a by-reference parameter (rule 4): a
   // direct variable of the same type passes its own address; anything else is
@@ -448,8 +441,7 @@ void emitGetEditItems(HStmt* s);
     std::vector<llvm::Value*> savedLifetimes;
     std::vector<PendingVarWrite> savedVarWrites;
     explicit ActualScope(IRGen& ir)
-        : g(ir), saved(std::move(ir.actuals_)),
-          savedLifetimes(std::move(ir.pendingTempLifetimes_)),
+        : g(ir), saved(std::move(ir.actuals_)), savedLifetimes(std::move(ir.pendingTempLifetimes_)),
           savedVarWrites(std::move(ir.pendingVarWrites_)) {
       ir.actuals_.clear();
       ir.pendingTempLifetimes_.clear();
@@ -573,11 +565,11 @@ void emitGetEditItems(HStmt* s);
   // Address of a qualified member S.A.B (rule 124): a GEP off the structure
   // base through the recorded LLVM field indices (relative to each nested
   // struct), loading the leaf member's scalar value.
-   llvm::Value* memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc);
-   // GEP to a struct member at field index `f` in struct type `cur`. For a UNION
-   // (ADR-202), all members share offset 0 — returns `addr` unchanged. For regular
-   // structs, emits CreateStructGEP to the sequential field offset.
-   llvm::Value* structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f, const char* name);
+  llvm::Value* memberAddr(Symbol* base, const std::vector<unsigned>& path, SourceLoc loc);
+  // GEP to a struct member at field index `f` in struct type `cur`. For a UNION
+  // (ADR-202), all members share offset 0 — returns `addr` unchanged. For regular
+  // structs, emits CreateStructGEP to the sequential field offset.
+  llvm::Value* structMemberGEP(const Type& cur, llvm::Value* addr, unsigned f, const char* name);
   // Address of a member of one structure element of an array of structures
   // (rule 124): like memberAddr, but GEPs from a caller-supplied element address
   // through the recorded field indices against the element structure type.
@@ -716,8 +708,8 @@ void emitGetEditItems(HStmt* s);
   // Bytes for an INITIAL value: a bit literal packs directly, anything else
   // contributes its integer value low-bits-first big-endian (zero when absent).
   static std::vector<unsigned char> packBitInit(const Expr* ini, int nbits);
-  Val charTemp(int len); // alloca [len x i8]
-  Val charOf(HExpr* e);  // materialise a character value
+  Val charTemp(int len);                          // alloca [len x i8]
+  Val charOf(HExpr* e);                           // materialise a character value
   Val convertToChar(const Val& v, SourceLoc loc); // numeric -> CHAR for IDENT
   // Hidden result buffer for a character function (rules (34),(37)): a
   // `CHAR(*) VARYING` result (rule (18)) gets a caller-sized max
@@ -831,8 +823,8 @@ void emitGetEditItems(HStmt* s);
   // LLVM lowering (P1+). call sites always go through these so the policy
   // table and per-op overrides are honoured uniformly.
   void emitAssignChar(llvm::Value* dst, llvm::Value* dstLen, llvm::Value* src, llvm::Value* srcLen);
-  llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b,
-                         llvm::Value* bLen, const pli::CallSite& site);
+  llvm::Value* emitIndex(llvm::Value* a, llvm::Value* aLen, llvm::Value* b, llvm::Value* bLen,
+                         const pli::CallSite& site);
   // Dispatch wrappers for W1 string operations (P3). Each checks the active
   // lowering mode and either emits a pli_* runtime call or a direct LLVM
   // lowering.
@@ -1045,7 +1037,9 @@ void emitGetEditItems(HStmt* s);
   // (rules 127 and (34),(37)): the caller-supplied buffer that a RETURN
   // copies into before returning void.
   llvm::Value* structRetPtr_ = nullptr;
-  llvm::BasicBlock* lookupLabelBlock(const std::string& name) { return labelBlocks_.count(name) ? labelBlocks_[name] : nullptr; }
+  llvm::BasicBlock* lookupLabelBlock(const std::string& name) {
+    return labelBlocks_.count(name) ? labelBlocks_[name] : nullptr;
+  }
   std::map<std::string, llvm::BasicBlock*> labelBlocks_; // label -> block (rule 77)
   // Rule (65) initial-label: each statement prefix that names an element of a
   // label array contributes an entry here; the element is initialized with the
@@ -1137,14 +1131,12 @@ void emitGetEditItems(HStmt* s);
   bool fixedOverflowChecks() const {
     return !noSizeChecks_ && (checkStack_.empty() || !checkStack_.back().noFOver);
   }
-  bool strRangeChecks() const {
-    return !checkStack_.empty() && checkStack_.back().strRange == 1;
-  }
+  bool strRangeChecks() const { return !checkStack_.empty() && checkStack_.back().strRange == 1; }
   // P6.1: true when internal procedures should be marked AlwaysInline
   // (checks off = -O2/-O3 default; at -O0 checks are on, no inliner runs).
   bool inlineProcs() const {
-    return noSizeChecks_ && noSubChecks_ && (checkStack_.empty() ||
-            (!checkStack_.back().noSize && !checkStack_.back().noSub));
+    return noSizeChecks_ && noSubChecks_ &&
+           (checkStack_.empty() || (!checkStack_.back().noSize && !checkStack_.back().noSub));
   }
   // P6.3: track DO control variables whose FROM is a non-negative constant
   // so MOD(index, k) with positive k skips the sign-adjust chain.
@@ -1179,12 +1171,13 @@ void emitGetEditItems(HStmt* s);
   // trap/signal dispatch reads the code after the handler returns and branches
   // to the return-with-value or goto-label target in the establishing
   // procedure.
-  llvm::GlobalVariable* escapeCodeGlobal();   // @onEscapeCode (i32): 0=none,1=return,2=goto
-  llvm::GlobalVariable* escapeRetKindGlobal(); // @onEscapeRetKind (i32): 0=i64,1=double,2=struct,3=char
-  llvm::GlobalVariable* escapeRetI64Global(); // @onEscapeRetI64 (i64)
-  llvm::GlobalVariable* escapeRetF64Global(); // @onEscapeRetF64 (double)
-  llvm::GlobalVariable* escapeRetBufGlobal(); // @onEscapeRetBuf ([4096 x i8])
-  llvm::GlobalVariable* escapeRetSizeGlobal(); // @onEscapeRetSize (i64)
+  llvm::GlobalVariable* escapeCodeGlobal(); // @onEscapeCode (i32): 0=none,1=return,2=goto
+  llvm::GlobalVariable*
+  escapeRetKindGlobal(); // @onEscapeRetKind (i32): 0=i64,1=double,2=struct,3=char
+  llvm::GlobalVariable* escapeRetI64Global();   // @onEscapeRetI64 (i64)
+  llvm::GlobalVariable* escapeRetF64Global();   // @onEscapeRetF64 (double)
+  llvm::GlobalVariable* escapeRetBufGlobal();   // @onEscapeRetBuf ([4096 x i8])
+  llvm::GlobalVariable* escapeRetSizeGlobal();  // @onEscapeRetSize (i64)
   llvm::GlobalVariable* escapeLabelIdxGlobal(); // @onEscapeLabelIdx (i32)
   // Emit escape code inside a handler unit: RETURN(value) stores the converted
   // value in the escape globals and returns void from the handler.

@@ -47,8 +47,8 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
     break;
   case llvm::Triple::COFF:
     d.lldDriver = "coff";
-    d.systemLibs = {"kernel32.lib", "ucrt.lib", "vcruntime.lib", "msvcrt.lib",
-                    "oldnames.lib", "legacy_stdio_definitions.lib"};
+    d.systemLibs = {"kernel32.lib", "ucrt.lib",     "vcruntime.lib",
+                    "msvcrt.lib",   "oldnames.lib", "legacy_stdio_definitions.lib"};
     // NOTE: /MD is a compiler flag, not a linker flag — lld-link rejects it.
     d.linkerFlags = {"/entry:mainCRTStartup", "/subsystem:console"};
     break;
@@ -72,9 +72,9 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
   return cache[key];
 }
 
-std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(const std::string& triple, const std::string& optLevel, std::string& err,
-                    bool marchNative) {
+std::unique_ptr<llvm::TargetMachine> createTargetMachine(const std::string& triple,
+                                                         const std::string& optLevel,
+                                                         std::string& err, bool marchNative) {
   initializeAllTargets();
 
   std::string lookupErr;
@@ -94,7 +94,7 @@ createTargetMachine(const std::string& triple, const std::string& optLevel, std:
   llvm::TargetOptions opts;
   opts.FunctionSections = true;
   // --march=native: use host CPU's feature set (opt-in; default stays generic).
-   std::string cpu = marchNative ? llvm::sys::getHostCPUName().str() : "generic";
+  std::string cpu = marchNative ? llvm::sys::getHostCPUName().str() : "generic";
   const char* features = "";
   return std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
       ttm, cpu, features, opts, llvm::Reloc::PIC_, llvm::CodeModel::Small, lvl));

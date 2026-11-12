@@ -101,21 +101,21 @@ struct CheckedMath {
 struct AxisDesc {
   // Provenance: where did this bound come from?
   enum class Provenance {
-    DeclConstant,    // compile-time constant from declaration
-    CallerExtent,    // '*' adjustable extent — bound passed by caller
-    AllocExtent,     // ALLOCATE/FREE or CONTROLLED — bound from allocation
-    BasedExtent,     // BASED variable — bound from locator target
-    DefinedExtent,   // DEFINED overlay — bound from base
-    ParamExtent      // parameter array — bound from actual argument
+    DeclConstant,  // compile-time constant from declaration
+    CallerExtent,  // '*' adjustable extent — bound passed by caller
+    AllocExtent,   // ALLOCATE/FREE or CONTROLLED — bound from allocation
+    BasedExtent,   // BASED variable — bound from locator target
+    DefinedExtent, // DEFINED overlay — bound from base
+    ParamExtent    // parameter array — bound from actual argument
   } provenance = Provenance::DeclConstant;
 
   // Lifetime scope of this axis descriptor.
   enum class Lifetime {
-    Static,          // program lifetime (STATIC storage)
-    Automatic,       // procedure/block activation lifetime
-    ControlledGen,   // CONTROLLED generation lifetime
-    BasedAlloc,      // BASED allocation lifetime (explicit ALLOCATE/FREE)
-    AreaAlloc        // AREA allocation lifetime
+    Static,        // program lifetime (STATIC storage)
+    Automatic,     // procedure/block activation lifetime
+    ControlledGen, // CONTROLLED generation lifetime
+    BasedAlloc,    // BASED allocation lifetime (explicit ALLOCATE/FREE)
+    AreaAlloc      // AREA allocation lifetime
   } lifetime = Lifetime::Automatic;
 
   // Lower bound (1-origin in PL/I semantics). For dynamic lower bounds,
@@ -137,8 +137,8 @@ struct AxisDesc {
   int64_t byteStride = 0;
 
   // Flags
-  bool isDynamic = false;     // true if upper/lower/stride evaluated at runtime
-  bool isAdjustable = false;  // '*' adjustable extent (rule 13)
+  bool isDynamic = false;       // true if upper/lower/stride evaluated at runtime
+  bool isAdjustable = false;    // '*' adjustable extent (rule 13)
   bool isSubscriptRange = true; // false under (NOSUBSCRIPTRANGE)
 
   // For debugging / diagnostics
@@ -149,10 +149,10 @@ struct AxisDesc {
   bool isValid() const { return extent() > 0; }
 
   bool operator==(const AxisDesc& o) const {
-    return provenance == o.provenance && lifetime == o.lifetime &&
-           lower == o.lower && upper == o.upper && stride == o.stride &&
-           byteStride == o.byteStride && isDynamic == o.isDynamic &&
-           isAdjustable == o.isAdjustable && isSubscriptRange == o.isSubscriptRange;
+    return provenance == o.provenance && lifetime == o.lifetime && lower == o.lower &&
+           upper == o.upper && stride == o.stride && byteStride == o.byteStride &&
+           isDynamic == o.isDynamic && isAdjustable == o.isAdjustable &&
+           isSubscriptRange == o.isSubscriptRange;
   }
 };
 
@@ -447,8 +447,7 @@ struct ArrayDesc {
 
   // Constructor from Type + runtime bounds (used at declaration site).
   static ArrayDesc fromType(const Type& ty, const std::vector<HExpr*>& dynBounds,
-                            const std::vector<HExpr*>& dynLbBounds,
-                            Symbol* sym);
+                            const std::vector<HExpr*>& dynLbBounds, Symbol* sym);
 };
 
 // One level-numbered structure member (rule 11). Structures may nest: a
@@ -474,7 +473,7 @@ inline Type& Type::operator=(const Type& o) {
   controlled = o.controlled;
   unaligned = o.unaligned;
   imaginary = o.imaginary; // IMAGINARY flag (ADR-364)
-  isUnion = o.isUnion; // Union overlay layout (ADR-202)
+  isUnion = o.isUnion;     // Union overlay layout (ADR-202)
   picture = o.picture;
   dims = o.dims;
   paramAxes = o.paramAxes;

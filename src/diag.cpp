@@ -16,8 +16,7 @@ void Diags::emit(const char* level, SourceLoc loc, const std::string& msg, const
   const std::string* source = src_;
   if (fl && fileSrc_ && fileSrc_->count(fl->path))
     source = &fileSrc_->at(fl->path);
-  std::string name = (fl && fl->path == rootCanon_) ? file_
-                     : (fl ? fl->path : file_);
+  std::string name = (fl && fl->path == rootCanon_) ? file_ : (fl ? fl->path : file_);
   int lineNum = fl ? fl->line : loc.line;
   int col = loc.col;
 

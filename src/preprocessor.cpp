@@ -331,11 +331,11 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
            (source[target] == ' ' || source[target] == '\t' || source[target] == '\f' ||
             source[target] == '\n' || source[target] == '\r'))
       ++target;
-     semPos = target - 1;
-     // Check for %label: procedure (params) RETURNS (type); … %END;
-     std::string labelName = name;
-     std::string decl = source.substr(target);
-     {
+    semPos = target - 1;
+    // Check for %label: procedure (params) RETURNS (type); … %END;
+    std::string labelName = name;
+    std::string decl = source.substr(target);
+    {
       size_t chk = target;
       while (chk < source.size() &&
              (source[chk] == ' ' || source[chk] == '\t' || source[chk] == '\f' ||
@@ -344,9 +344,9 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
       size_t we = chk;
       while (we < source.size() && isWordChar(source[we]))
         ++we;
-       if (upper(source.substr(chk, we - chk)) == "PROCEDURE" ||
-           upper(source.substr(chk, we - chk)) == "PROC") {
-         size_t procEnd = findDirectiveEnd(source, we);
+      if (upper(source.substr(chk, we - chk)) == "PROCEDURE" ||
+          upper(source.substr(chk, we - chk)) == "PROC") {
+        size_t procEnd = findDirectiveEnd(source, we);
         if (procEnd == npos) {
           error(path, directiveLine, directiveCol, "unterminated preprocessor directive");
           semPos = wordEnd;
@@ -359,8 +359,8 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
         // The body is between procEnd+1 and matchingEnd.
         std::string body = source.substr(procEnd + 1, matchingEnd - (procEnd + 1));
         if (active) {
-          if (!handleDefinition(path, labelName, source.substr(target, procEnd - target),
-                                body, directiveLine, directiveCol))
+          if (!handleDefinition(path, labelName, source.substr(target, procEnd - target), body,
+                                directiveLine, directiveCol))
             return npos;
         }
         // Skip the label prefix and the entire body (past %END;).
@@ -492,9 +492,8 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
   if (name != "INCLUDE" && name != "XINCLUDE" && name != "DECLARE" && name != "DCL" &&
       name != "ACTIVATE" && name != "DEACTIVATE" && name != "REPLACE") {
     size_t rs = wordEnd;
-    while (rs < source.size() && (source[rs] == ' ' || source[rs] == '\t' ||
-                                   source[rs] == '\f' || source[rs] == '\r' ||
-                                   source[rs] == '\n'))
+    while (rs < source.size() && (source[rs] == ' ' || source[rs] == '\t' || source[rs] == '\f' ||
+                                  source[rs] == '\r' || source[rs] == '\n'))
       ++rs;
     if (rs < source.size() && source[rs] == '(') {
       int parenDepth = 1;
@@ -503,7 +502,8 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
       while (argEnd < source.size() && parenDepth > 0) {
         char c = source[argEnd];
         if (inLineCmt) {
-          if (c == '\n') inLineCmt = false;
+          if (c == '\n')
+            inLineCmt = false;
         } else if (inCmt) {
           if (c == '*' && argEnd + 1 < source.size() && source[argEnd + 1] == '/') {
             argEnd += 2;
@@ -515,7 +515,8 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
             argEnd += 2;
             continue;
           }
-          if (c == '\'') inStr = false;
+          if (c == '\'')
+            inStr = false;
         } else {
           if (c == '/' && argEnd + 1 < source.size() && source[argEnd + 1] == '*') {
             argEnd += 2;
@@ -527,9 +528,12 @@ size_t Preprocessor::processDirective(const fs::path& path, const std::string& s
             inLineCmt = true;
             continue;
           }
-          if (c == '\'') inStr = true;
-          else if (c == '(') ++parenDepth;
-          else if (c == ')') --parenDepth;
+          if (c == '\'')
+            inStr = true;
+          else if (c == '(')
+            ++parenDepth;
+          else if (c == ')')
+            --parenDepth;
         }
         ++argEnd;
       }
@@ -675,54 +679,57 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++t;
       continue;
     }
-     if (source[t] == '%') {
-       size_t ws = t + 1;
-       while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
-         ++ws;
-       size_t we = ws;
-       while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
-                                     source[we] == '$' || source[we] == '#' || source[we] == '@'))
-         ++we;
-       std::string word = upper(source.substr(ws, we - ws));
-       if (word == "THEN") {
-         thenAt = t;
-         break;
-       }
-       // Skip macro invocations: %name(args)
-       size_t afterWs = we;
-       while (afterWs < source.size() && (source[afterWs] == ' ' || source[afterWs] == '\t' ||
-                                          source[afterWs] == '\f'))
-         ++afterWs;
-       if (afterWs < source.size() && source[afterWs] == '(') {
-         int parenDepth = 1;
-         size_t pe = afterWs + 1;
-         while (pe < source.size() && parenDepth > 0) {
-           if (source[pe] == '\'') {
-             if (pe + 1 < source.size() && source[pe + 1] == '\'') {
-               pe += 2;
-               continue;
-             }
-             ++pe;
-             while (pe < source.size()) {
-               if (source[pe] == '\'' && pe + 1 < source.size() && source[pe + 1] == '\'') {
-                 pe += 2;
-                 continue;
-               }
-               if (source[pe] == '\'') break;
-               ++pe;
-             }
-             continue;
-           }
-           if (source[pe] == '(') ++parenDepth;
-           else if (source[pe] == ')') --parenDepth;
-           ++pe;
-         }
-         t = pe;
-         continue;
-       }
-       error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
-       return npos;
-     }
+    if (source[t] == '%') {
+      size_t ws = t + 1;
+      while (ws < source.size() && (source[ws] == ' ' || source[ws] == '\t' || source[ws] == '\f'))
+        ++ws;
+      size_t we = ws;
+      while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
+                                    source[we] == '$' || source[we] == '#' || source[we] == '@'))
+        ++we;
+      std::string word = upper(source.substr(ws, we - ws));
+      if (word == "THEN") {
+        thenAt = t;
+        break;
+      }
+      // Skip macro invocations: %name(args)
+      size_t afterWs = we;
+      while (afterWs < source.size() &&
+             (source[afterWs] == ' ' || source[afterWs] == '\t' || source[afterWs] == '\f'))
+        ++afterWs;
+      if (afterWs < source.size() && source[afterWs] == '(') {
+        int parenDepth = 1;
+        size_t pe = afterWs + 1;
+        while (pe < source.size() && parenDepth > 0) {
+          if (source[pe] == '\'') {
+            if (pe + 1 < source.size() && source[pe + 1] == '\'') {
+              pe += 2;
+              continue;
+            }
+            ++pe;
+            while (pe < source.size()) {
+              if (source[pe] == '\'' && pe + 1 < source.size() && source[pe + 1] == '\'') {
+                pe += 2;
+                continue;
+              }
+              if (source[pe] == '\'')
+                break;
+              ++pe;
+            }
+            continue;
+          }
+          if (source[pe] == '(')
+            ++parenDepth;
+          else if (source[pe] == ')')
+            --parenDepth;
+          ++pe;
+        }
+        t = pe;
+        continue;
+      }
+      error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
+      return npos;
+    }
     if (source[t] == ';') {
       error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
       return npos;
@@ -733,18 +740,18 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
     error(path, directiveLine, directiveCol, "expected %THEN in %IF directive");
     return npos;
   }
-   long long cond = 0;
-   if (active) {
-     std::string rawExpr = source.substr(wordEnd, thenAt - wordEnd);
-     // Rescan the expression for macro invocations (%fib(N)) before eval.
-     std::string rescanned;
-     int eline = directiveLine;
-     int ecol = directiveCol;
-     if (!scan(rawExpr, 0, rawExpr.size(), rescanned, eline, ecol, path, true))
-       return npos;
-     if (!evalCondExpr(rescanned, path, directiveLine, directiveCol, cond))
-       return npos;
-   }
+  long long cond = 0;
+  if (active) {
+    std::string rawExpr = source.substr(wordEnd, thenAt - wordEnd);
+    // Rescan the expression for macro invocations (%fib(N)) before eval.
+    std::string rescanned;
+    int eline = directiveLine;
+    int ecol = directiveCol;
+    if (!scan(rawExpr, 0, rawExpr.size(), rescanned, eline, ecol, path, true))
+      return npos;
+    if (!evalCondExpr(rescanned, path, directiveLine, directiveCol, cond))
+      return npos;
+  }
   // One directive or statement per arm, at the caller's activity gated by the condition.
   // thenAt points at '%': re-scan to the end of the THEN word itself, since
   // spaces may sit between them.
@@ -763,7 +770,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   }
   // semPos covers %IF expr and %THEN keyword + trailing whitespace; the
   // arm itself is emitted by the recursive processDirective/emit below.
-      semPos = arm > 0 ? arm - 1 : 0;
+  semPos = arm > 0 ? arm - 1 : 0;
   size_t next;
   if (source[arm] == '%') {
     // Directive arm
@@ -821,7 +828,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
   // An optional %ELSE arm takes the inverted condition.
   size_t e = next;
   while (e < source.size() && (source[e] == ' ' || source[e] == '\t' || source[e] == '\r' ||
-                                source[e] == '\n' || source[e] == '\f'))
+                               source[e] == '\n' || source[e] == '\f'))
     ++e;
   if (e < source.size() && source[e] == '%') {
     size_t ws = e + 1;
@@ -829,7 +836,7 @@ size_t Preprocessor::processIf(const fs::path& path, const std::string& source, 
       ++ws;
     size_t we = ws;
     while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
-                                 source[we] == '$' || source[we] == '#' || source[we] == '@'))
+                                  source[we] == '$' || source[we] == '#' || source[we] == '@'))
       ++we;
     if (upper(source.substr(ws, we - ws)) == "ELSE") {
       size_t arm2 = we;
@@ -954,7 +961,8 @@ bool Preprocessor::scan(const std::string& source, size_t start, size_t end, std
                         int& line, int& col, const fs::path& path, bool active) {
   if (++scanDepth_ > kMaxScanDepth) {
     --scanDepth_;
-    return error(path, line, col, "preprocessor control-flow nesting is too deep (C28-6571-3 Ch.9)");
+    return error(path, line, col,
+                 "preprocessor control-flow nesting is too deep (C28-6571-3 Ch.9)");
   }
   bool inString = false;
   bool inComment = false;
@@ -1115,9 +1123,9 @@ void Preprocessor::collectLabels(const std::string& source, size_t start, size_t
       if (chk < end && source[chk] == ':') {
         std::string labelName = upper(source.substr(ws, we - ws));
         size_t target = chk + 1;
-        while (target < end && (source[target] == ' ' || source[target] == '\t' ||
-                                source[target] == '\f' || source[target] == '\n' ||
-                                source[target] == '\r'))
+        while (target < end &&
+               (source[target] == ' ' || source[target] == '\t' || source[target] == '\f' ||
+                source[target] == '\n' || source[target] == '\r'))
           ++target;
         labels_[labelName] = target;
         i = target;
@@ -1150,8 +1158,8 @@ size_t Preprocessor::findDirectiveEnd(const std::string& source, size_t start) {
 
 // Find the matching %END for a %DO starting at `start` (ADR-316).
 // Returns the %END position in endPos, its ';' in endSemi.
-size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& source,
-                                     size_t start, size_t& endSemi, int line, int col) {
+size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& source, size_t start,
+                                     size_t& endSemi, int line, int col) {
   static const size_t npos = std::string::npos;
   endSemi = npos;
   int depth = 1;
@@ -1195,7 +1203,7 @@ size_t Preprocessor::findMatchingEnd(const fs::path& path, const std::string& so
         ++ws;
       size_t we = ws;
       while (we < source.size() && (std::isalnum((unsigned char)source[we]) || source[we] == '_' ||
-                                     source[we] == '$' || source[we] == '#' || source[we] == '@'))
+                                    source[we] == '$' || source[we] == '#' || source[we] == '@'))
         ++we;
       std::string directiveName = upper(source.substr(ws, we - ws));
       if (directiveName == "DO") {
@@ -1363,8 +1371,8 @@ bool Preprocessor::handleDeclare(const fs::path& input, const std::string& opera
       if (name.compare(i, 5, "VALUE") != 0)
         continue;
       bool leftOk = i == 0 || name[i - 1] == ' ' || name[i - 1] == '\t';
-      bool rightOk = i + 5 == name.size() || name[i + 5] == ' ' || name[i + 5] == '\t' ||
-                     name[i + 5] == '(';
+      bool rightOk =
+          i + 5 == name.size() || name[i + 5] == ' ' || name[i + 5] == '\t' || name[i + 5] == '(';
       if (leftOk && rightOk) {
         valuePos = i;
         break;
@@ -1487,8 +1495,7 @@ bool Preprocessor::handleActivation(const fs::path& input, const std::string& na
 // text without its quotes (ADR-082); quotes mixed with other text are
 // diagnosed.
 bool Preprocessor::handleReplace(const fs::path& path, const std::string& source, size_t i,
-                                 size_t wordEnd, size_t end, int directiveLine,
-                                 int directiveCol) {
+                                 size_t wordEnd, size_t end, int directiveLine, int directiveCol) {
   auto skipWs = [&](size_t& p) {
     while (p < end && (source[p] == ' ' || source[p] == '\t' || source[p] == '\f' ||
                        source[p] == '\r' || source[p] == '\n'))
@@ -1520,8 +1527,7 @@ bool Preprocessor::handleReplace(const fs::path& path, const std::string& source
   while (p < end && isWordChar(source[p]))
     ++p;
   if (upper(source.substr(byStart, p - byStart)) != "BY")
-    return error(path, nameLine, nameCol,
-                 "expected BY after the %REPLACE identifier (ADR-077)");
+    return error(path, nameLine, nameCol, "expected BY after the %REPLACE identifier (ADR-077)");
   // Capture the replacement text between BY and the terminating ';'.
   skipWs(p);
   size_t textEnd = end;
@@ -1701,7 +1707,8 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
   std::string returnsStr;
   size_t pos = 0;
   // Skip PROCEDURE/PROC keyword.
-  while (pos < up.size() && isWordChar(up[pos])) ++pos;
+  while (pos < up.size() && isWordChar(up[pos]))
+    ++pos;
   while (pos < up.size() && (up[pos] == ' ' || up[pos] == '\t' || up[pos] == '\r' ||
                              up[pos] == '\n' || up[pos] == '\f'))
     ++pos;
@@ -1711,9 +1718,12 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
     size_t pStart = pos + 1;
     ++pos;
     while (pos < up.size() && depth > 0) {
-      if (up[pos] == '(') ++depth;
-      else if (up[pos] == ')') --depth;
-      if (depth == 0) break;
+      if (up[pos] == '(')
+        ++depth;
+      else if (up[pos] == ')')
+        --depth;
+      if (depth == 0)
+        break;
       ++pos;
     }
     paramsStr = up.substr(pStart, pos - pStart);
@@ -1734,9 +1744,12 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
       size_t rettStart = pos + 1;
       ++pos;
       while (pos < up.size() && depth > 0) {
-        if (up[pos] == '(') ++depth;
-        else if (up[pos] == ')') --depth;
-        if (depth == 0) break;
+        if (up[pos] == '(')
+          ++depth;
+        else if (up[pos] == ')')
+          --depth;
+        if (depth == 0)
+          break;
         ++pos;
       }
       returnsStr = up.substr(rettStart, pos - rettStart);
@@ -1754,7 +1767,8 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
     size_t start = 0;
     while (start < paramsTrimmed.size()) {
       size_t comma = paramsTrimmed.find(',', start);
-      if (comma == std::string::npos) comma = paramsTrimmed.size();
+      if (comma == std::string::npos)
+        comma = paramsTrimmed.size();
       std::string param = upper(trim(paramsTrimmed.substr(start, comma - start)));
       if (!param.empty())
         proc.params.push_back(param);
@@ -1764,7 +1778,8 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
 
   std::string procName = upper(labelName);
   if (ppVars_.count(procName)) {
-    error(path, directiveLine, directiveCol, "%" + procName + " conflicts with a preprocessor variable");
+    error(path, directiveLine, directiveCol,
+          "%" + procName + " conflicts with a preprocessor variable");
     return false;
   }
   procTable_[procName] = proc;
@@ -1777,7 +1792,7 @@ bool Preprocessor::handleDefinition(const fs::path& path, const std::string& lab
 // context.
 bool Preprocessor::handleInvocation(const fs::path& path, const std::string& name,
                                     const std::string& args, int line, int col,
-                                     std::string& output) {
+                                    std::string& output) {
   std::string upperName = upper(name);
   auto it = procTable_.find(upperName);
   if (it == procTable_.end()) {
@@ -1798,7 +1813,8 @@ bool Preprocessor::handleInvocation(const fs::path& path, const std::string& nam
           pos += 2;
           continue;
         }
-        if (c == '\'') inStr = false;
+        if (c == '\'')
+          inStr = false;
       } else if (c == '\'') {
         inStr = true;
       } else if (c == '(') {
@@ -1817,7 +1833,7 @@ bool Preprocessor::handleInvocation(const fs::path& path, const std::string& nam
   if (argList.size() != proc.params.size()) {
     return error(path, line, col,
                  "%" + upperName + " expects " + std::to_string(proc.params.size()) +
-                 " argument(s), got " + std::to_string(argList.size()));
+                     " argument(s), got " + std::to_string(argList.size()));
   }
 
   // Evaluate arguments as integer expressions in the caller's context.
@@ -1877,9 +1893,8 @@ bool Preprocessor::handleInvocation(const fs::path& path, const std::string& nam
   long long result = procResult_;
 
   // Emit the result and rescan it for further macro invocations.
-  std::string emittedText = (proc.returns == "CHARACTER")
-                                ? "'" + std::to_string(result) + "'"
-                                : std::to_string(result);
+  std::string emittedText =
+      (proc.returns == "CHARACTER") ? "'" + std::to_string(result) + "'" : std::to_string(result);
   std::string rescanned;
   int rline = line;
   int rcol = col;

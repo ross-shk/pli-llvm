@@ -395,8 +395,7 @@ Type divResultType(const Type& a, const Type& b) {
   // carry a raw too small to represent it (1 / 2**-62 needs 124 raw bits).
   if (q < 0)
     q = 0;
-  return bothDec ? Type::fixedDec(31, q)
-                 : Type::fixedBin(63, q);
+  return bothDec ? Type::fixedDec(31, q) : Type::fixedBin(63, q);
 }
 
 // Cross-section (rule 126): a subscript list containing at least one '*'. The
@@ -736,8 +735,7 @@ bool Sema::run(Program& prog, bool compileOnly) {
 
 // The expressions one statement names directly. Nested bodies are walked by the
 // caller so that a block's locals stay scoped to the block.
-template <class Fn>
-static void eachStmtExpr(const Stmt* s, Fn&& f) {
+template <class Fn> static void eachStmtExpr(const Stmt* s, Fn&& f) {
   auto e = [&](const ExprP& p) {
     if (p)
       f(p.get());
@@ -1175,8 +1173,8 @@ void Sema::processProc(Proc* p) {
     if (lc == labelBeginChains_.end())
       d_.error(it->loc, "'" + it->label + "' is not a label in this procedure", "(38)");
     else if (!lc->second.empty())
-      d_.error(it->loc,
-               "an ABNORMAL label must be at the procedure's top level in this stage", "(38)");
+      d_.error(it->loc, "an ABNORMAL label must be at the procedure's top level in this stage",
+               "(38)");
     else {
       it->sym->abnormalLabel = it->label;
       it->sym->abnormalOwner = p;
@@ -1557,9 +1555,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         neg = lit->op == Tok::Minus;
         lit = lit->a.get();
       }
-      if (!lit || (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit &&
-                   lit->kind != Expr::FltLit && lit->kind != Expr::CharLit &&
-                   lit->kind != Expr::BitLit)) {
+      if (!lit ||
+          (lit->kind != Expr::IntLit && lit->kind != Expr::DecLit && lit->kind != Expr::FltLit &&
+           lit->kind != Expr::CharLit && lit->kind != Expr::BitLit)) {
         d_.error(s->loc, "DEFINE CONSTANT requires a constant value (ADR-205)", "");
         continue;
       }
@@ -1596,8 +1594,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
       std::vector<std::vector<int>> children;
       for (auto& item : s->decls) {
         // RESERVED reserves storage without initialization (ADR-203/ADR-373).
-        if (item.reserved && (item.init || !item.initItems.empty() ||
-                              item.initCall || item.valueInit))
+        if (item.reserved &&
+            (item.init || !item.initItems.empty() || item.initCall || item.valueInit))
           d_.error(item.loc, "RESERVED and INITIAL cannot be combined", "(15)");
         if (item.entryIsFunction && !item.isEntry) {
           // RETURNS is an entry-name-attribute (rule (34)): it types an ENTRY
@@ -1632,8 +1630,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // REDUCIBLE/IRREDUCIBLE is an entry-name-attribute (rule (34)): it
           // says how calls through the entry may be repeated, so a storage
           // item cannot carry it.
-          d_.error(item.loc, "REDUCIBLE/IRREDUCIBLE is only valid on an ENTRY declaration",
-                   "(34)");
+          d_.error(item.loc, "REDUCIBLE/IRREDUCIBLE is only valid on an ENTRY declaration", "(34)");
           item.reducible = 0;
         }
         if ((!item.abnormalLabel.empty() || item.normal) && !item.isEntry) {
@@ -1664,13 +1661,11 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               item.area || item.offset || item.isCondition || item.controlled ||
               !item.basedBase.empty() || item.basedNoPtr || !item.like.empty() ||
               !item.typeRef.empty())
-            d_.error(item.loc,
-                     "GENERIC cannot be combined with a data or storage attribute", "(15)");
+            d_.error(item.loc, "GENERIC cannot be combined with a data or storage attribute",
+                     "(15)");
           if (item.isEntry)
-            d_.error(item.loc,
-                     "GENERIC is not valid on an explicit ENTRY declaration", "(34)");
-          Symbol* sym = declare(sc, item.name, Type::voidTy(), item.loc,
-                                Symbol::Generic, false);
+            d_.error(item.loc, "GENERIC is not valid on an explicit ENTRY declaration", "(34)");
+          Symbol* sym = declare(sc, item.name, Type::voidTy(), item.loc, Symbol::Generic, false);
           sym->genericEntries = item.genericEntries;
           item.sym = sym;
           continue;
@@ -1715,8 +1710,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                      "(ADR-171)",
                      "");
           else if (!item.abnormalLabel.empty())
-            d_.error(item.loc, "ABNORMAL on an ENTRY variable is not implemented (ADR-171)",
-                     "");
+            d_.error(item.loc, "ABNORMAL on an ENTRY variable is not implemented (ADR-171)", "");
           else {
             Symbol* sym = declare(sc, item.name, Type::entryTy(), item.loc, Symbol::Var, isStatic);
             sym->owner = p;
@@ -1736,8 +1730,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         }
         if (item.isEntry) {
           if (!item.ty.dims.empty())
-            d_.error(item.loc, "an array of ENTRY values is not implemented in this stage",
-                     "(12)");
+            d_.error(item.loc, "an array of ENTRY values is not implemented in this stage", "(12)");
           if (item.valueInit)
             d_.error(item.loc,
                      "VALUE on an ENTRY declaration is not implemented in this stage (ADR-108)",
@@ -1757,7 +1750,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             Symbol* tpl = lookup(sc, item.returnsStructName);
             if (!tpl || tpl->kind != Symbol::Var || !tpl->ty.isStruct()) {
               d_.error(item.loc,
-                       "RETURNS reference '" + item.returnsStructName + "' is not a structure in this scope",
+                       "RETURNS reference '" + item.returnsStructName +
+                           "' is not a structure in this scope",
                        "(127)");
               item.entryRetTy = Type::voidTy();
             } else {
@@ -1817,14 +1811,16 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // Rule (148): an off-class character or a binary digit specifier is
           // diagnosed before the generic picture checks.
           if (spec.badChar) {
-            d_.error(it.loc, "picture character '" + std::string(1, spec.badChar) +
-                                 "' is not in a picture class",
+            d_.error(it.loc,
+                     "picture character '" + std::string(1, spec.badChar) +
+                         "' is not in a picture class",
                      "(148)");
             return Type::chr(1);
           }
           if (spec.binary) {
-            d_.error(it.loc, "binary PICTURE digit elements 1, 2 and 3 are not implemented in "
-                             "this stage",
+            d_.error(it.loc,
+                     "binary PICTURE digit elements 1, 2 and 3 are not implemented in "
+                     "this stage",
                      "(148)");
             return Type::chr(1);
           }
@@ -1838,8 +1834,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             return Type::chr(1);
           }
           if (spec.hasScale) {
-            d_.error(it.loc,
-                     "the PICTURE scaling factor F(n) is not implemented in this stage", "(19)");
+            d_.error(it.loc, "the PICTURE scaling factor F(n) is not implemented in this stage",
+                     "(19)");
             return Type::chr(1);
           }
           if (spec.width > 127) {
@@ -1966,8 +1962,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // An AREA member has no region of its own in this stage; accepting it
           // would allocate from a null region (rule (20)).
           if (items[c]->area)
-            d_.error(items[c]->loc,
-                     "an AREA structure member is not implemented in this stage",
+            d_.error(items[c]->loc, "an AREA structure member is not implemented in this stage",
                      "(20)");
           Type ct = buildType(c, cp, dynMs, unaligned);
           if (ct.isArray() && ct.isDynamic()) {
@@ -1991,7 +1986,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         Type st = Type::structTy(std::move(ms));
         st.unaligned = unaligned;
         st.isUnion = it.unionAttr; // UNION overlay (ADR-202): members share offset 0
-        st.dims = it.ty.dims; // an array of structures: keep the level item's dimension
+        st.dims = it.ty.dims;      // an array of structures: keep the level item's dimension
         return st;
       };
       // Declare each top-level item (no parent) as a variable; members are
@@ -2033,9 +2028,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // AREA STATIC already handled; EXTERNAL handled separately below.
         // Package-level variables (isStatic) have program lifetime (ADR-109),
         // but BASED/DEFINED/CONTROLLED/FILE variables cannot be STATIC (rule 23).
-        if (isStatic && !item.sawStatic && item.basedBase.empty() &&
-            item.definedBase.empty() && !item.controlled && !item.fileAttr &&
-            !item.areaStar) {
+        if (isStatic && !item.sawStatic && item.basedBase.empty() && item.definedBase.empty() &&
+            !item.controlled && !item.fileAttr && !item.areaStar) {
           item.sawStatic = true;
         }
         bool staticItem = item.sawStatic && !item.areaStar;
@@ -2193,8 +2187,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
               } else if (itemElem <= 0 || baseElem <= 0 || itemElem != baseElem) {
                 d_.error(item.loc,
                          "a DEFINED array needs its base's element type and size (" +
-                             item.ty.elementType().desc() + " vs " +
-                             base->ty.elementType().desc() + ")",
+                             item.ty.elementType().desc() + " vs " + base->ty.elementType().desc() +
+                             ")",
                          "(24)");
               } else if (itemN > baseN) {
                 d_.error(item.loc,
@@ -2319,8 +2313,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 // affine image of each mapped item axis must stay within its
                 // base axis bounds, and every item axis must be mapped so the
                 // per-axis bounds check covers the whole item.
-                bool match = item.ty.isArray() &&
-                             item.ty.elementType() == base->ty.elementType();
+                bool match = item.ty.isArray() && item.ty.elementType() == base->ty.elementType();
                 for (size_t j = 0; match && j < axisUsed.size(); ++j)
                   if (!axisUsed[j])
                     match = false;
@@ -2364,8 +2357,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
                 long long itemUnits = item.ty.isArray() ? -1 : definedCharUnits(item.ty);
                 long long elUnits = definedCharUnits(base->ty.elementType());
                 if (itemUnits < 0 || elUnits < 0) {
-                  d_.error(item.loc,
-                           "POSITION requires a scalar CHARACTER item and base element",
+                  d_.error(item.loc, "POSITION requires a scalar CHARACTER item and base element",
                            "(24)");
                 } else if (definedPosFits(d_, item.loc, item.pos, itemUnits, elUnits,
                                           "base element")) {
@@ -2489,8 +2481,9 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // created and destroyed with the block. A runtime extent would need
           // one region per element created in a loop, so it stays diagnosed.
           if (item.ty.isDynamic())
-            d_.error(item.loc, "an AREA array with a variable bound is not implemented in "
-                               "this stage",
+            d_.error(item.loc,
+                     "an AREA array with a variable bound is not implemented in "
+                     "this stage",
                      "(20)");
           // A STATIC area is served by irgen (a module global slot created on
           // first use); an EXTERNAL area (ADR-318) reuses that path, because
@@ -2614,8 +2607,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             // A `(*)` BASED array takes its extent from each ALLOCATE
             // (rules (13),(25),(89)), like a CONTROLLED `(*)` axis.
             // Served: leading '*' with constant later axes. Multiple '*' diagnosed.
-            bool basedStar = hasStar &&
-                             (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
+            bool basedStar =
+                hasStar && (!item.basedBase.empty() || item.basedNoPtr || item.sym->isBased());
             bool basedMultiStar = false;
             if (basedStar) {
               for (size_t k = 1; k < item.ty.dims.size(); ++k)
@@ -2627,8 +2620,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
             if (hasStar && !isParam && !ctlStar && !basedStar)
               d_.error(item.loc, "a '*' adjustable extent is only valid on a parameter", "(13)");
             if (basedMultiStar)
-              d_.error(item.loc,
-                       "a BASED '*' extent needs a leading '*' with constant later axes",
+              d_.error(item.loc, "a BASED '*' extent needs a leading '*' with constant later axes",
                        "(13)");
             if (hasStar && isParam) {
               // A multi-axis '*' parameter is served when only the first axis
@@ -3336,19 +3328,19 @@ bool Sema::isConstantExpr(Expr* e) const {
   if (!e)
     return false;
   switch (e->kind) {
-    case Expr::IntLit:
-    case Expr::FltLit:
-    case Expr::DecLit:
-    case Expr::CharLit:
-    case Expr::BitLit:
-      return true;
-    case Expr::Unary:
-      // Allow unary minus/not on a constant literal
-      if (e->op == Tok::Minus || e->op == Tok::Not)
-        return isConstantExpr(e->a.get());
-      return false;
-    default:
-      return false;
+  case Expr::IntLit:
+  case Expr::FltLit:
+  case Expr::DecLit:
+  case Expr::CharLit:
+  case Expr::BitLit:
+    return true;
+  case Expr::Unary:
+    // Allow unary minus/not on a constant literal
+    if (e->op == Tok::Minus || e->op == Tok::Not)
+      return isConstantExpr(e->a.get());
+    return false;
+  default:
+    return false;
   }
 }
 
@@ -3441,13 +3433,11 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       return;
     // A whole reference to an automatic of the establishing frame: the
     // capture stores the address the reference would use (ADR-253/299).
-    const bool plainOwn =
-        sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
-        !sym->definedBase && !sym->fileAttr && sym->owner == p;
+    const bool plainOwn = sym->kind == Symbol::Var && !sym->isStatic && !sym->isBased() &&
+                          !sym->definedBase && !sym->fileAttr && sym->owner == p;
     // A subscript or a member reference needs a base address the frame owns
     // and that cannot move: fixed-size own storage only (ADR-321).
-    const bool ownFixed =
-        plainOwn && !sym->controlled && !sym->ty.isArea() && !sym->ty.isDynamic();
+    const bool ownFixed = plainOwn && !sym->controlled && !sym->ty.isArea() && !sym->ty.isDynamic();
     if (!nested && plainOwn && whole) {
       if (std::find(caps.begin(), caps.end(), sym) == caps.end())
         caps.push_back(sym);
@@ -3537,7 +3527,7 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
     default:
       break;
     }
-     checkExpr(s->target.get());
+    checkExpr(s->target.get());
     for (auto& t : s->extraTargets)
       checkExpr(t.get());
     checkExpr(s->value.get());
@@ -3742,10 +3732,14 @@ int Sema::resolveFileCondKey(Stmt* s, Scope* sc) {
 // also stays out: its live bound is per-generation in the runtime stack.
 bool Sema::wholeArrayStorageOk(Expr* e) {
   Symbol* s = e->sym;
-  if (!s) return false;
-  if (s->kind != Symbol::Var) return false;
-  if (s->definedBase) return false;
-  if (s->isBased()) return false;
+  if (!s)
+    return false;
+  if (s->kind != Symbol::Var)
+    return false;
+  if (s->definedBase)
+    return false;
+  if (s->isBased())
+    return false;
   if (!e->memberPath.empty() && e->ty.isDynamic())
     return false;
   // A CONTROLLED array has per-generation live bounds (an ALLOCATE (n)
@@ -4215,24 +4209,25 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       continue;
     }
     if (e.subs.size() != sym->ty.dims.size()) {
-      d_.error(s->loc, "label array '" + e.name + "' has " +
-                           std::to_string(sym->ty.dims.size()) + " dimension(s) and takes " +
-                           std::to_string(e.subs.size()) + " subscript(s)",
+      d_.error(s->loc,
+               "label array '" + e.name + "' has " + std::to_string(sym->ty.dims.size()) +
+                   " dimension(s) and takes " + std::to_string(e.subs.size()) + " subscript(s)",
                "(65)");
       continue;
     }
     if (sym->ty.isDynamic() || sym->controlled || sym->isBased()) {
       // The element's address must be fixed when the procedure is entered.
-      d_.error(s->loc,
-               "a label-array prefix needs a fixed-extent automatic array in this stage", "(65)");
+      d_.error(s->loc, "a label-array prefix needs a fixed-extent automatic array in this stage",
+               "(65)");
       continue;
     }
     bool inRange = true;
     for (size_t k = 0; k < e.subs.size(); ++k) {
       const Dim& d = sym->ty.dims[k];
       if (e.subs[k] < d.lb || e.subs[k] > d.ub) {
-        d_.error(s->loc, "label-array subscript " + std::to_string(e.subs[k]) +
-                             " is outside the declared bounds",
+        d_.error(s->loc,
+                 "label-array subscript " + std::to_string(e.subs[k]) +
+                     " is outside the declared bounds",
                  "(65)");
         inRange = false;
       }
@@ -4490,8 +4485,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       Expr* t = s->target.get();
       if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
           t->args[0]->sym->kind == Symbol::ProcName) {
-        d_.error(t->args[0]->loc,
-                 "PAGENO assignment target must be a modifiable variable", "(86)");
+        d_.error(t->args[0]->loc, "PAGENO assignment target must be a modifiable variable", "(86)");
         break;
       }
       if (!s->value->ty.isVoid())
@@ -4511,8 +4505,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       Expr* t = s->target.get();
       if (t->args[0]->kind != Expr::VarRef || !t->args[0]->sym ||
           t->args[0]->sym->kind == Symbol::ProcName) {
-        d_.error(t->args[0]->loc,
-                 "UNSPEC assignment target must be a modifiable variable", "(86)");
+        d_.error(t->args[0]->loc, "UNSPEC assignment target must be a modifiable variable", "(86)");
         break;
       }
       break;
@@ -4680,10 +4673,12 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           Expr* value = it->putIterExpr.get();
           if (!value || (value->kind != Expr::VarRef && value->kind != Expr::Subscript) ||
               !value->sym || value->sym->kind == Symbol::ProcName) {
-            d_.error(it->loc, "a PUT DATA iterative item must iterate a variable reference", "(110)");
+            d_.error(it->loc, "a PUT DATA iterative item must iterate a variable reference",
+                     "(110)");
             continue;
           }
-          if (value->ty.isVoid() || value->ty.isPointer() || value->ty.isArray() || value->ty.isStruct())
+          if (value->ty.isVoid() || value->ty.isPointer() || value->ty.isArray() ||
+              value->ty.isStruct())
             d_.error(value->loc, "PUT DATA of this type is not implemented in this stage", "(110)");
           if (value->locPtr || (value->sym->ty.isArray() && !value->memberPath.empty()))
             d_.error(value->loc, "this qualified iterative PUT DATA reference is not implemented",
@@ -4747,8 +4742,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           d_.error(it->loc, "a GET DATA item must be a scalar variable", "(110)");
           continue;
         }
-        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() ||
-            it->ty.isArray() || (it->ty.isChar() && !it->ty.picture.empty())) {
+        if (it->ty.isVoid() || it->ty.isStruct() || it->ty.isPointer() || it->ty.isArray() ||
+            (it->ty.isChar() && !it->ty.picture.empty())) {
           d_.error(it->loc, "GET DATA of this type is not implemented in this stage", "(110)");
         }
       }
@@ -4810,8 +4805,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (!sym->abnormalLabel.empty() && (s->hasTaskOpt || s->eventRef || s->priorityExpr))
       d_.error(s->loc, "a CALL to an ABNORMAL entry cannot be asynchronous", "(38)");
     if (!sym->abnormalLabel.empty() && sym->abnormalOwner && sym->abnormalOwner != p)
-      d_.error(s->loc,
-               "an ABNORMAL entry can only be called from the procedure that declares it", "(38)");
+      d_.error(s->loc, "an ABNORMAL entry can only be called from the procedure that declares it",
+               "(38)");
     Proc* callee = sym->proc;
     Stmt* en = sym->entry; // rule (56): an ENTRY name uses the entry's params
     std::vector<Symbol*> calleeParams =
@@ -5016,28 +5011,27 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     if (s->replyTarget) {
       typeExpr(s->replyTarget.get(), sc, p);
       Expr* rt = s->replyTarget.get();
-      bool ref = rt && ((rt->kind == Expr::VarRef && rt->sym &&
-                          rt->sym->kind != Symbol::ProcName) ||
-                         rt->kind == Expr::Subscript);
+      bool ref =
+          rt && ((rt->kind == Expr::VarRef && rt->sym && rt->sym->kind != Symbol::ProcName) ||
+                 rt->kind == Expr::Subscript);
       if (!ref)
         d_.error(rt ? rt->loc : s->loc, "DISPLAY REPLY requires a variable", "(114)");
       else if (!rt->ty.isChar() || rt->ty.isArray() || rt->ty.varying)
-        d_.error(rt->loc,
-                 "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
+        d_.error(rt->loc, "DISPLAY REPLY requires a NONVARYING scalar CHARACTER variable", "(114)");
       else
         checkValueTarget(rt); // VALUE constants cannot receive the reply
     }
-// DISPLAY ... EVENT ( reference ) (rule 114): the event to complete when
+    // DISPLAY ... EVENT ( reference ) (rule 114): the event to complete when
     // the display (and any REPLY read) finishes.
     if (s->eventRef) {
       typeExpr(s->eventRef.get(), sc, p);
       Expr* e = s->eventRef.get();
-      bool ev = e && ((e->kind == Expr::VarRef && e->sym &&
-                       e->sym->kind != Symbol::ProcName && e->ty.isEvent()) ||
+      bool ev = e && ((e->kind == Expr::VarRef && e->sym && e->sym->kind != Symbol::ProcName &&
+                       e->ty.isEvent()) ||
                       (e->kind == Expr::Subscript && e->sym && e->ty.isEvent()));
       if (!ev)
-        d_.error(e ? e->loc : s->loc,
-                 "DISPLAY EVENT requires an EVENT variable or element", "(114)");
+        d_.error(e ? e->loc : s->loc, "DISPLAY EVENT requires an EVENT variable or element",
+                 "(114)");
     }
     break;
   }
@@ -5425,8 +5419,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         // A single extent on a 1-D array is served; other shapes stay
         // diagnosed rather than silently sized wrong.
         if (!bsym->ty.isArray())
-          d_.error(s->allocBase[i]->loc,
-                   "ALLOCATE bounds are only valid on an array", "(89)");
+          d_.error(s->allocBase[i]->loc, "ALLOCATE bounds are only valid on an array", "(89)");
         else if (bsym->ty.dims.size() != 1)
           d_.error(s->allocBase[i]->loc,
                    "per-ALLOCATE bounds for a multi-axis BASED array are not implemented "
@@ -5438,8 +5431,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
                        std::to_string(bbounds.size()) + " given",
                    "(89)");
         else if (bbounds[0].lb)
-          d_.error(s->allocBase[i]->loc,
-                   "ALLOCATE lb:ub bounds are not implemented in this stage", "(89)");
+          d_.error(s->allocBase[i]->loc, "ALLOCATE lb:ub bounds are not implemented in this stage",
+                   "(89)");
         else if (bbounds[0].star)
           d_.error(s->allocBase[i]->loc,
                    "ALLOCATE (*) of BASED storage is not implemented in this stage", "(89)");
@@ -5454,8 +5447,8 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
           if (d.adj)
             anyAdj = true;
         if (anyAdj)
-          d_.error(s->allocBase[i]->loc,
-                   "ALLOCATE of (*) needs extent(s): ALLOCATE x (n[, ...])", "(89)");
+          d_.error(s->allocBase[i]->loc, "ALLOCATE of (*) needs extent(s): ALLOCATE x (n[, ...])",
+                   "(89)");
       }
       // The IN ( area ) option (rule (88)): the block is allocated from the
       // named AREA region; the reference must name an AREA variable.
@@ -5476,11 +5469,11 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       if (i >= s->allocSet.size() || !s->allocSet[i]) {
         if (!areaE && bsym->basedBase && bsym->basedBase->ty.isOffset() &&
             !bsym->basedBase->ty.isArray() && bsym->basedBase->offsetArea)
-          areaE = setImplicitArea(s->allocArea, i, bsym->basedBase->offsetArea,
-                                  s->allocBase[i]->loc);
+          areaE =
+              setImplicitArea(s->allocArea, i, bsym->basedBase->offsetArea, s->allocBase[i]->loc);
         if (!areaE || bsym->basedNoPtr) {
-          if (!bsym->basedNoPtr && bsym->basedBase &&
-              bsym->basedBase->ty.isOffset() && !bsym->basedBase->ty.isArray())
+          if (!bsym->basedNoPtr && bsym->basedBase && bsym->basedBase->ty.isOffset() &&
+              !bsym->basedBase->ty.isArray())
             d_.error(s->allocBase[i]->loc,
                      "ALLOCATE of an OFFSET-based variable without IN requires the offset to be "
                      "declared with an AREA",
@@ -5495,8 +5488,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         // variable, an array element, or a member (rule (88)).
         const Expr* tgt = s->allocSet[i].get();
         const bool assignable = tgt->kind == Expr::VarRef || tgt->kind == Expr::Subscript;
-        const bool scalarLoc =
-            !tgt->ty.isArray() && (tgt->ty.isPointer() || tgt->ty.isOffset());
+        const bool scalarLoc = !tgt->ty.isArray() && (tgt->ty.isPointer() || tgt->ty.isOffset());
         if (!assignable || !scalarLoc)
           d_.error(tgt->loc,
                    "the SET target of ALLOCATE must be a POINTER or OFFSET variable or element",
@@ -5554,8 +5546,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         d_.error(f->loc, "'" + f->name + "' is not a BASED variable; FREE requires based storage",
                  "(90)");
       if (f->locPtr &&
-          ((!f->locPtr->ty.isPointer() && !f->locPtr->ty.isOffset()) ||
-           f->locPtr->ty.isArray()))
+          ((!f->locPtr->ty.isPointer() && !f->locPtr->ty.isOffset()) || f->locPtr->ty.isArray()))
         d_.error(f->locPtr->loc, "the locator of '->' in FREE must be a POINTER or OFFSET", "(90)");
       // IN ( area ) (rule (90)): return the block to the named AREA region.
       // Without IN, an OFFSET locator or the based variable's own OFFSET base
@@ -5584,8 +5575,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
         }
         if (offTy && offTy->isOffset() && !offTy->isArray()) {
           if (offSym && offSym->offsetArea)
-            setImplicitArea(s->freeArea, i, offSym->offsetArea,
-                            offExpr ? offExpr->loc : f->loc);
+            setImplicitArea(s->freeArea, i, offSym->offsetArea, offExpr ? offExpr->loc : f->loc);
           else if (offExpr && !offExpr->path.empty())
             d_.error(offExpr->loc,
                      "FREE of an OFFSET member without IN is not implemented in this stage",
@@ -5706,8 +5696,7 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     // Rules (91),(94),(97),(99): ERROR, a fixed condition, ENDFILE(file) or
     // UNDEFINEDFILE(file), or a programmer-named condition; the unit body only
     // needs typing plus the establishing-frame checks.
-    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
-                                             : resolveCondKey(s, sc);
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc) : resolveCondKey(s, sc);
     if (!s->isSystem && s->unit) {
       ++inUnit_;
       checkStmt(s->unit.get(), sc, p);
@@ -5717,19 +5706,16 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     break;
   case Stmt::Revert:
     // A REVERT with no established handler is a no-op reverting to SYSTEM.
-    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc)
-                                             : resolveCondKey(s, sc);
+    s->condKey = isFileCondName(s->condName) ? resolveFileCondKey(s, sc) : resolveCondKey(s, sc);
     break;
   case Stmt::Signal:
     // Rule (97): the file conditions are raised by the runtime, never by SIGNAL.
     if (s->condName == "ENDFILE") {
-      d_.error(s->loc, "SIGNAL ENDFILE is not allowed; the condition is raised by READ",
-               "(93)");
+      d_.error(s->loc, "SIGNAL ENDFILE is not allowed; the condition is raised by READ", "(93)");
       break;
     }
     if (s->condName == "UNDEFINEDFILE") {
-      d_.error(s->loc,
-               "SIGNAL UNDEFINEDFILE is not allowed; the condition is raised by OPEN",
+      d_.error(s->loc, "SIGNAL UNDEFINEDFILE is not allowed; the condition is raised by OPEN",
                "(93)");
       break;
     }
@@ -5826,20 +5812,20 @@ static ExprP cloneFmtExpr(const Expr* e) {
 }
 
 static FormatItem cloneFmtItem(const FormatItem& f) {
-   FormatItem c;
-   c.kind = f.kind;
-   c.w = cloneFmtExpr(f.w.get());
-   c.d = cloneFmtExpr(f.d.get());
-   c.s = cloneFmtExpr(f.s.get());
-   c.pic = f.pic;
-   c.remote = f.remote;
-   for (const auto& sb : f.subs)
-     c.subs.push_back(cloneFmtItem(sb));
-   c.count = cloneFmtExpr(f.count.get());
-   for (const auto& it : f.items)
-     c.items.push_back(cloneFmtItem(it));
-   return c;
- }
+  FormatItem c;
+  c.kind = f.kind;
+  c.w = cloneFmtExpr(f.w.get());
+  c.d = cloneFmtExpr(f.d.get());
+  c.s = cloneFmtExpr(f.s.get());
+  c.pic = f.pic;
+  c.remote = f.remote;
+  for (const auto& sb : f.subs)
+    c.subs.push_back(cloneFmtItem(sb));
+  c.count = cloneFmtExpr(f.count.get());
+  for (const auto& it : f.items)
+    c.items.push_back(cloneFmtItem(it));
+  return c;
+}
 
 // Splice R(label) items with the referenced FORMAT lists (rules (44),(55)).
 // Nested R references expand recursively; cycles and unknown labels are
@@ -5848,7 +5834,7 @@ static FormatItem cloneFmtItem(const FormatItem& f) {
 bool Sema::expandRemoteFormats(std::vector<FormatItem>& fmts, SourceLoc loc) {
   std::unordered_set<std::string> active;
   std::function<bool(std::vector<FormatItem>&, int)> expand = [&](std::vector<FormatItem>& list,
-                                                                   int depth) -> bool {
+                                                                  int depth) -> bool {
     if (depth > 16) {
       d_.error(loc, "remote format nesting too deep (possible R cycle)", "(55)");
       return false;
@@ -5903,8 +5889,7 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
     typeExpr(it.get(), sc, p);
   for (auto& it : s->items)
     if (it->kind == Expr::PutIter && (isGet || s->items.size() != 1)) {
-      d_.error(it->loc,
-               "an iterative EDIT datalist must be the sole PUT EDIT item in this stage",
+      d_.error(it->loc, "an iterative EDIT datalist must be the sole PUT EDIT item in this stage",
                "(111)");
       return;
     }
@@ -5950,83 +5935,87 @@ void Sema::checkEditFormats(Stmt* s, Scope* sc, Proc* p, bool isGet) {
   size_t dataIdx = 0;
   // Second pass: pair data formats with data items, skipping control formats
   // and Repeat groups (which expand at runtime).
-  std::function<void(std::vector<FormatItem>&, size_t&)> pairFormats = [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
-    for (auto& f : fmts) {
-      if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
-          f.kind == FormatItem::Line || f.kind == FormatItem::Column)
-        continue; // a control format consumes no data item
-      if (f.kind == FormatItem::Remote) {
-        d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
-        continue;
-      }
-      if (f.kind == FormatItem::Repeat) {
-        size_t savedDi = dataIdx;
-        pairFormats(f.items, dataIdx);
-        dataIdx = savedDi;
-        continue;
-      }
-      if (dataIdx >= s->items.size()) {
-        d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
-        break;
-      }
-      Expr* it = s->items[dataIdx].get();
-      if (f.kind == FormatItem::A && !it->ty.isChar())
-        d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
-      else if (f.kind == FormatItem::B && !it->ty.isBit())
-        d_.error(it->loc, "a B format requires a BIT item", "(52)");
-      else if (f.kind == FormatItem::C && !it->ty.isComplex())
-        d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
-      else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
-        const char* letter = f.kind == FormatItem::F ? "F" : "E";
-        const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
-        d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item", rule);
-      }
-      if (f.kind == FormatItem::P && isGet) {
-        validatePictureFormat(f, it, isGet, false);
-      } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
-        validatePictureFormat(f, it, isGet, false);
-      } else if (f.kind == FormatItem::P) {
-        d_.error(it->loc, "a P format requires a numeric item", "(53)");
-      }
-      // C(real[,real]) may hold a P picture part (rule (51)); validate it as a
-      // numeric complex part.
-      if (f.kind == FormatItem::C) {
-        for (auto& sb : f.subs)
-          if (sb.kind == FormatItem::P)
-            validatePictureFormat(sb, it, isGet, true);
-      }
-      if (isGet) {
-        if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
-          d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
-                   "(53)");
-        bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
-                   it->kind == Expr::Subscript;
-        if (!ref)
-          d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
-        else if (it->ty.isStruct())
-          d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage", "(110)");
-        else
-          checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
-      } else if (it->ty.isVoid()) {
-        d_.error(it->loc, "invalid data list item", "(110)");
-      }
-      ++dataIdx;
-    }
-  };
+  std::function<void(std::vector<FormatItem>&, size_t&)> pairFormats =
+      [&](std::vector<FormatItem>& fmts, size_t& dataIdx) {
+        for (auto& f : fmts) {
+          if (f.kind == FormatItem::X || f.kind == FormatItem::Skip || f.kind == FormatItem::Page ||
+              f.kind == FormatItem::Line || f.kind == FormatItem::Column)
+            continue; // a control format consumes no data item
+          if (f.kind == FormatItem::Remote) {
+            d_.error(s->loc, "unexpanded remote format R (internal)", "(55)");
+            continue;
+          }
+          if (f.kind == FormatItem::Repeat) {
+            size_t savedDi = dataIdx;
+            pairFormats(f.items, dataIdx);
+            dataIdx = savedDi;
+            continue;
+          }
+          if (dataIdx >= s->items.size()) {
+            d_.error(s->loc, "more data formats than data items in EDIT", "(108)");
+            break;
+          }
+          Expr* it = s->items[dataIdx].get();
+          if (f.kind == FormatItem::A && !it->ty.isChar())
+            d_.error(it->loc, "an A format requires a CHARACTER item", "(52)");
+          else if (f.kind == FormatItem::B && !it->ty.isBit())
+            d_.error(it->loc, "a B format requires a BIT item", "(52)");
+          else if (f.kind == FormatItem::C && !it->ty.isComplex())
+            d_.error(it->loc, "a C format requires a COMPLEX item", "(51)");
+          else if ((f.kind == FormatItem::F || f.kind == FormatItem::E) && !it->ty.isNumeric()) {
+            const char* letter = f.kind == FormatItem::F ? "F" : "E";
+            const char* rule = f.kind == FormatItem::F ? "(50)" : "(53)";
+            d_.error(it->loc, "an " + std::string(letter) + " format requires a numeric item",
+                     rule);
+          }
+          if (f.kind == FormatItem::P && isGet) {
+            validatePictureFormat(f, it, isGet, false);
+          } else if (f.kind == FormatItem::P && it->ty.isNumeric()) {
+            validatePictureFormat(f, it, isGet, false);
+          } else if (f.kind == FormatItem::P) {
+            d_.error(it->loc, "a P format requires a numeric item", "(53)");
+          }
+          // C(real[,real]) may hold a P picture part (rule (51)); validate it as a
+          // numeric complex part.
+          if (f.kind == FormatItem::C) {
+            for (auto& sb : f.subs)
+              if (sb.kind == FormatItem::P)
+                validatePictureFormat(sb, it, isGet, true);
+          }
+          if (isGet) {
+            if (it->ty.isChar() && !it->ty.picture.empty() && f.kind != FormatItem::P)
+              d_.error(it->loc, "GET EDIT of a PICTURE variable is not implemented in this stage",
+                       "(53)");
+            bool ref = (it->kind == Expr::VarRef && it->sym && it->sym->kind != Symbol::ProcName) ||
+                       it->kind == Expr::Subscript;
+            if (!ref)
+              d_.error(it->loc, "GET EDIT item must be a variable to receive the value", "(110)");
+            else if (it->ty.isStruct())
+              d_.error(it->loc, "a whole structure cannot be read with GET EDIT in this stage",
+                       "(110)");
+            else
+              checkValueTarget(it); // VALUE constants cannot receive values (ADR-108)
+          } else if (it->ty.isVoid()) {
+            d_.error(it->loc, "invalid data list item", "(110)");
+          }
+          ++dataIdx;
+        }
+      };
   pairFormats(s->formats, dataIdx);
   size_t dataFormats = 0;
   bool hasRepeat = false;
-  std::function<void(std::vector<FormatItem>&)> countDataFormats = [&](std::vector<FormatItem>& fmts) {
-    for (auto& f : fmts) {
-      if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
-          f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
-        ++dataFormats;
-      else if (f.kind == FormatItem::Repeat) {
-        hasRepeat = true;
-        countDataFormats(f.items);
-      }
-    }
-  };
+  std::function<void(std::vector<FormatItem>&)> countDataFormats =
+      [&](std::vector<FormatItem>& fmts) {
+        for (auto& f : fmts) {
+          if (f.kind == FormatItem::A || f.kind == FormatItem::B || f.kind == FormatItem::C ||
+              f.kind == FormatItem::F || f.kind == FormatItem::E || f.kind == FormatItem::P)
+            ++dataFormats;
+          else if (f.kind == FormatItem::Repeat) {
+            hasRepeat = true;
+            countDataFormats(f.items);
+          }
+        }
+      };
   countDataFormats(s->formats);
   if (!hasRepeat && dataFormats < s->items.size())
     d_.error(s->loc, "more data items than data formats in EDIT", "(108)");
@@ -6045,8 +6034,7 @@ void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool compl
   if (isGet) {
     if (spec.badChar) {
       d_.error(f.w ? f.w->loc : it->loc,
-               "picture character '" + std::string(1, spec.badChar) +
-                   "' is not in a picture class",
+               "picture character '" + std::string(1, spec.badChar) + "' is not in a picture class",
                "(148)");
     } else if (spec.binary) {
       d_.error(f.w ? f.w->loc : it->loc,
@@ -6064,8 +6052,8 @@ void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool compl
         for (char c : spec.expanded) {
           if (std::string("GHMPB./9Z").find(c) == std::string::npos) {
             d_.error(it->loc,
-                     std::string("sterling P input does not support the picture character '") +
-                         c + "' in this stage",
+                     std::string("sterling P input does not support the picture character '") + c +
+                         "' in this stage",
                      "(53)");
             break;
           }
@@ -6095,13 +6083,13 @@ void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool compl
       d_.error(it->loc, "an input P format requires a numeric or PICTURE item", "(53)");
     // Complex parts are doubles; wide/sterling conversions are not meaningful there.
     if (complexPart && (spec.sterling || spec.intDigits + spec.fracDigits > 18)) {
-      d_.error(it->loc, "sterling or wide P inside C input is not implemented in this stage", "(53)");
+      d_.error(it->loc, "sterling or wide P inside C input is not implemented in this stage",
+               "(53)");
     }
   } else {
     if (spec.badChar) {
       d_.error(f.w ? f.w->loc : it->loc,
-               "picture character '" + std::string(1, spec.badChar) +
-                   "' is not in a picture class",
+               "picture character '" + std::string(1, spec.badChar) + "' is not in a picture class",
                "(148)");
     } else if (spec.binary) {
       d_.error(f.w ? f.w->loc : it->loc,
@@ -6114,8 +6102,7 @@ void Sema::validatePictureFormat(FormatItem& f, Expr* it, bool isGet, bool compl
       d_.error(it->loc, "sterling PICTURE output requires a non-wide whole-pence value", "(53)");
     } else if (!complexPart && it->ty.k == TK::FixedBin && it->ty.scale > 0) {
       if (it->ty.scale >= 127)
-        d_.error(it->loc,
-                 "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
+        d_.error(it->loc, "PICTURE output of a scaled FIXED BINARY needs a scale below 127",
                  "(53)");
       else if (spec.valid && spec.fracDigits > 18)
         d_.error(it->loc,
@@ -6338,8 +6325,10 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       p->localSyms.push_back(ctl); // implicit vars are AUTOMATIC storage
     }
     if (!ctl->ty.isNumeric() || ctl->ty.isArray())
-      d_.error(e->loc, "the control variable of an iterative datalist must be arithmetic, found " +
-                           ctl->ty.desc(), "(72)");
+      d_.error(e->loc,
+               "the control variable of an iterative datalist must be arithmetic, found " +
+                   ctl->ty.desc(),
+               "(72)");
     if (ctl->isValue)
       d_.error(e->loc, "an iterative datalist cannot modify a VALUE constant", "(72)");
     if (ctl->ty.isFixed() && ctl->ty.scale != 0)
@@ -6352,14 +6341,16 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     typeExpr(e->putIterBy.get(), sc, p);
     for (Expr* bound : {e->putIterFrom.get(), e->putIterTo.get(), e->putIterBy.get()})
       if (bound && (!bound->ty.isNumeric() || bound->ty.isArray()))
-        d_.error(bound->loc, "an iterative datalist bound or step must be scalar arithmetic", "(73)");
+        d_.error(bound->loc, "an iterative datalist bound or step must be scalar arithmetic",
+                 "(73)");
     ConstNum step;
     if (e->putIterBy && constNumOf(e->putIterBy.get(), step) && step.value == 0)
       d_.error(e->putIterBy->loc, "an iterative datalist step must not be zero", "(73)");
     if (e->putIterExpr && e->putIterExpr->kind == Expr::PutIter)
       d_.error(e->loc, "nested iterative datalists are not implemented in this stage", "(111)");
     if (!e->putIterExpr->ty.isNumeric() && !e->putIterExpr->ty.isChar())
-      d_.error(e->loc, "an iterative datalist item must be a numeric or character expression", "(111)");
+      d_.error(e->loc, "an iterative datalist item must be a numeric or character expression",
+               "(111)");
     // The item's type is the iterated expression's: every iteration
     // transmits one value of it.
     e->ty = e->putIterExpr->ty;
@@ -6368,7 +6359,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
   case Expr::VarRef: {
     // ONSOURCE pseudo-variable (TR 123, ADR-210): bare ONSOURCE has a type so
     // it can be assigned to; the IRGen emits pli_set_on_source calls.
-     if (e->name == "ONSOURCE") {
+    if (e->name == "ONSOURCE") {
       e->ty = Type::fixedBin(15, 0);
       break;
     }
@@ -6396,8 +6387,7 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
     // member path below then resolves X.A against the based structure type.
     if (e->locPtr) {
       typeExpr(e->locPtr.get(), sc, p);
-      if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
-          e->locPtr->ty.isArray())
+      if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) || e->locPtr->ty.isArray())
         d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
       if (!sym->isBased())
         d_.error(e->loc,
@@ -6460,15 +6450,14 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // used, so Q->S.A(i) can address a different block than P->S.A(i).
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
-            e->locPtr->ty.isArray()) {
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) || e->locPtr->ty.isArray()) {
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value",
+                   "(124)");
           e->ty = Type::voidTy();
           break;
         }
         Symbol* ls = lookup(sc, e->name);
-        if (ls && ls->kind == Symbol::Var && ls->ty.isArray() &&
-            ls->ty.elementType().isStruct()) {
+        if (ls && ls->kind == Symbol::Var && ls->ty.isArray() && ls->ty.elementType().isStruct()) {
           d_.error(e->loc,
                    "a locator-qualified array-of-structures member is not implemented in this "
                    "stage",
@@ -6513,8 +6502,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         bool star = false;
         for (const auto& a : e->args)
           if (a->kind == Expr::Star) {
-            d_.error(e->loc,
-                     "a locator-qualified cross-section is not implemented in this stage", "(126)");
+            d_.error(e->loc, "a locator-qualified cross-section is not implemented in this stage",
+                     "(126)");
             star = true;
             break;
           }
@@ -6628,9 +6617,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
       // silently given the own base.
       if (e->locPtr) {
         typeExpr(e->locPtr.get(), sc, p);
-        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) ||
-            e->locPtr->ty.isArray())
-          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value", "(124)");
+        if ((!e->locPtr->ty.isPointer() && !e->locPtr->ty.isOffset()) || e->locPtr->ty.isArray())
+          d_.error(e->locPtr->loc, "the locator of '->' must be a POINTER or OFFSET value",
+                   "(124)");
         if (!arr->isBased()) {
           d_.error(e->loc,
                    "'" + e->name + "' is not a BASED variable; '->' requires a based reference",
@@ -6928,9 +6917,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         // but complex-or-numeric is diagnosed.
         if (!(A.isComplex() || A.isNumeric()) || !(B.isComplex() || B.isNumeric()))
           d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-} else if (A.isChar() != B.isChar())
-         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-       e->ty = Type::bit(1);
+      } else if (A.isChar() != B.isChar())
+        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+      e->ty = Type::bit(1);
       break;
     case Tok::Lt:
     case Tok::Le:
@@ -6943,9 +6932,9 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         d_.error(e->loc, "ordered comparison of a COMPLEX value is not allowed", "(117)");
       else if (A.isLocator() || B.isLocator())
         d_.error(e->loc, "ordered comparison of a POINTER or OFFSET is not allowed", "(117)");
-       else if (A.isChar() != B.isChar())
-         d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
-       e->ty = Type::bit(1);
+      else if (A.isChar() != B.isChar())
+        d_.error(e->loc, "cannot compare " + A.desc() + " with " + B.desc(), "(117)");
+      e->ty = Type::bit(1);
       break;
     default:
       e->ty = Type::fixedBin(31, 0);
@@ -7035,9 +7024,8 @@ bool Sema::expandReductionTemps(Stmt* s, Scope* sc, Proc* p) {
   std::function<void(Expr*)> scan = [&](Expr* e) {
     if (!e)
       return;
-    if ((e->kind == Expr::Call) &&
-         (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" || e->name == "ALL" ||
-          e->name == "EVERY" || e->name == "SOME")) {
+    if ((e->kind == Expr::Call) && (e->name == "SUM" || e->name == "PROD" || e->name == "ANY" ||
+                                    e->name == "ALL" || e->name == "EVERY" || e->name == "SOME")) {
       for (auto& pr : pendingReduces_)
         if (pr.call == e && pr.owner == p) {
           found.push_back(e);
@@ -7252,7 +7240,9 @@ bool Sema::resolveGenericCall(Expr* e, Symbol* gen, Scope* sc) {
     return false;
   }
   Type argTy = e->args[0]->ty;
-  struct Cand { Symbol* sym; };
+  struct Cand {
+    Symbol* sym;
+  };
   std::vector<Cand> cands;
   for (const auto& [entryName, whenTy] : gen->genericEntries) {
     Symbol* esym = lookup(sc, entryName);
@@ -7296,14 +7286,12 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // A ': ... :' designator outside the five enquiry built-ins (ADR-206/207/
   // 208) is never a value; diagnose it once instead of cascading per-builtin
   // arity/type errors.
-  const bool isEnquiry = e->name == "NULL" || e->name == "DECLARESIZE" ||
-                         e->name == "EPSILON" || e->name == "MAXVAL" ||
-                         e->name == "MINVAL";
+  const bool isEnquiry = e->name == "NULL" || e->name == "DECLARESIZE" || e->name == "EPSILON" ||
+                         e->name == "MAXVAL" || e->name == "MINVAL";
   if (!isEnquiry) {
     for (const auto& a : e->args)
       if (a->kind == Expr::TypeTag) {
-        d_.error(a->loc, "a ': ... :' designator is only allowed in an enquiry built-in",
-                 "(123)");
+        d_.error(a->loc, "a ': ... :' designator is only allowed in an enquiry built-in", "(123)");
         e->ty = Type::voidTy();
         return true;
       }
@@ -7387,8 +7375,7 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // offset by a numeric count (converted to FIXED BIN(31,0)) and yield an
   // OFFSET; DIFF yields the FIXED BIN(31,0) byte distance between two
   // offsets.
-  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" ||
-      e->name == "OFFSETDIFF") {
+  if (e->name == "OFFSETADD" || e->name == "OFFSETSUBTRACT" || e->name == "OFFSETDIFF") {
     const bool diff = e->name == "OFFSETDIFF";
     if (e->args.size() != 2) {
       d_.error(e->loc,
@@ -7399,15 +7386,13 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     if (!e->args[0]->ty.isOffset() || e->args[0]->ty.isArray()) {
-      d_.error(e->args[0]->loc, "the first argument to " + e->name + " must be an OFFSET",
-               "(22)");
+      d_.error(e->args[0]->loc, "the first argument to " + e->name + " must be an OFFSET", "(22)");
       e->ty = Type::voidTy();
       return true;
     }
     if (diff) {
       if (!e->args[1]->ty.isOffset() || e->args[1]->ty.isArray()) {
-        d_.error(e->args[1]->loc, "the second argument to OFFSETDIFF must be an OFFSET",
-                 "(22)");
+        d_.error(e->args[1]->loc, "the second argument to OFFSETDIFF must be an OFFSET", "(22)");
         e->ty = Type::voidTy();
         return true;
       }
@@ -7415,8 +7400,8 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       return true;
     }
     if (!e->args[1]->ty.isNumeric() || e->args[1]->ty.isArray()) {
-      d_.error(e->args[1]->loc,
-               "the byte count of " + e->name + " must be a numeric scalar", "(123)");
+      d_.error(e->args[1]->loc, "the byte count of " + e->name + " must be a numeric scalar",
+               "(123)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -7511,14 +7496,14 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
         a->ty = a->ty.elementType();
       }
     }
-     bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
-     if (ok && a->sym && a->sym->kind == Symbol::ProcName)
-       ok = false;
-     if (a->kind == Expr::VarRef && a->isLabel) {
-       e->ty = Type::labelTy();
-       return true;
-     }
-     if (!ok) {
+    bool ok = a->kind == Expr::VarRef || a->kind == Expr::Subscript;
+    if (ok && a->sym && a->sym->kind == Symbol::ProcName)
+      ok = false;
+    if (a->kind == Expr::VarRef && a->isLabel) {
+      e->ty = Type::labelTy();
+      return true;
+    }
+    if (!ok) {
       d_.error(a->loc, "ADDR requires a variable or array element in this stage", "(123)");
       e->ty = Type::voidTy();
       return true;
@@ -7693,26 +7678,26 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
       e->ty = Type::voidTy();
       return true;
     }
-     e->ty = Type::flt(6);
-     return true;
-   }
-   // EXPONENT built-in (rule (123), Appendix 1): the binary exponent e such
-   // that x = f * 2^e (0.5 <= |f| < 1); 0 for 0.0 or NaN. Returns FIXED BIN(63).
-   if (e->name == "EXPONENT") {
-     if (e->args.size() != 1) {
-       d_.error(e->loc, "EXPONENT expects 1 argument", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     if (!e->args[0]->ty.isNumeric()) {
-       d_.error(e->args[0]->loc, "EXPONENT argument must be numeric", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     e->ty = Type::fixedBin(63, 0);
-     return true;
-   }
-   // ATAN2(y, x) (CM5, Appendix 1): C-order two-argument arctangent.
+    e->ty = Type::flt(6);
+    return true;
+  }
+  // EXPONENT built-in (rule (123), Appendix 1): the binary exponent e such
+  // that x = f * 2^e (0.5 <= |f| < 1); 0 for 0.0 or NaN. Returns FIXED BIN(63).
+  if (e->name == "EXPONENT") {
+    if (e->args.size() != 1) {
+      d_.error(e->loc, "EXPONENT expects 1 argument", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric()) {
+      d_.error(e->args[0]->loc, "EXPONENT argument must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = Type::fixedBin(63, 0);
+    return true;
+  }
+  // ATAN2(y, x) (CM5, Appendix 1): C-order two-argument arctangent.
   if (e->name == "ATAN2") {
     if (e->args.size() != 2) {
       d_.error(e->loc, "ATAN2 expects 2 arguments (y, x)", "(123)");
@@ -8093,8 +8078,12 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
   // -> CHARACTER(6) 'HHMMSS'; both take no arguments.
   if (e->name == "DATE" || e->name == "TIME" || e->name == "DATETIME") {
     if (!e->args.empty()) {
-      d_.error(e->loc, std::string(e->name == "DATE" ? "DATE" : e->name == "TIME" ? "TIME" : "DATETIME") +
-               " takes no arguments", "(123)");
+      d_.error(e->loc,
+               std::string(e->name == "DATE"   ? "DATE"
+                           : e->name == "TIME" ? "TIME"
+                                               : "DATETIME") +
+                   " takes no arguments",
+               "(123)");
       e->ty = Type::voidTy();
       return true;
     }
@@ -8167,32 +8156,29 @@ bool Sema::typeBuiltin(Expr* e, Proc* p) {
         e->ty = Type::fixedBin(31, 0);
         return true;
       }
-      d_.error(e->args[0]->loc, "FIXED argument must be character or numeric",
-               "(123)");
+      d_.error(e->args[0]->loc, "FIXED argument must be character or numeric", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     // Precision/scale form: p and q are integer constants, q defaults to 0.
     if (a.isArray() || a.isComplex() || (!a.isNumeric() && !a.isChar())) {
       d_.error(a.isArray() ? e->args[0]->loc : e->loc,
-               "FIXED precision requires a scalar numeric or character value",
-               "(123)");
+               "FIXED precision requires a scalar numeric or character value", "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     int p = 0, q = 0;
-auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-        ConstNum c;
-        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-          d_.error(e->args[idx]->loc,
-                   std::string("FIXED ") + what + " must be an integer constant",
-                   "(123)");
-          return false;
-        }
-        out = (int)pli_to_i64(c.value);
-        return true;
-      };
+    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+      ConstNum c;
+      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 || c.value < (PliI128)INT_MIN ||
+          c.value > (PliI128)INT_MAX) {
+        d_.error(e->args[idx]->loc, std::string("FIXED ") + what + " must be an integer constant",
+                 "(123)");
+        return false;
+      }
+      out = (int)pli_to_i64(c.value);
+      return true;
+    };
     if (!readInteger(1, "precision", p)) {
       e->ty = Type::voidTy();
       return true;
@@ -8206,8 +8192,7 @@ auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
     const bool dec = a.k == TK::FixedDec || a.k == TK::Float;
     const int maxP = dec ? 31 : 63;
     if (p < 1 || p > maxP) {
-      d_.error(e->args[1]->loc,
-               "FIXED precision must be between 1 and " + std::to_string(maxP),
+      d_.error(e->args[1]->loc, "FIXED precision must be between 1 and " + std::to_string(maxP),
                "(123)");
       e->ty = Type::voidTy();
       return true;
@@ -8215,185 +8200,181 @@ auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
     const int maxQ = dec ? (p > 18 ? 38 : 18) : 62;
     if (q < 0 || q > maxQ) {
       d_.error(e->args.size() == 3 ? e->args[2]->loc : e->args[1]->loc,
-               "FIXED scale must be between 0 and " + std::to_string(maxQ),
-               "(123)");
+               "FIXED scale must be between 0 and " + std::to_string(maxQ), "(123)");
       e->ty = Type::voidTy();
       return true;
     }
     e->ty = dec ? Type::fixedDec(p, q) : Type::fixedBin(p, q);
     return true;
   }
-   // FIXEDBIN/FIXEDDEC built-ins (rule (123), Appendix 1): convert x to a
-   // fixed binary/decimal value. Explicit p/q must be constants; when both
-   // are omitted IBM's source-type table derives them.
-   if (e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
-     const bool bin = e->name == "FIXEDBIN";
-     const char* nm = e->name.c_str();
-     if (e->args.empty() || e->args.size() > 3) {
-       d_.error(e->loc, std::string(nm) + " expects 1-3 arguments", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     const Type& a = e->args[0]->ty;
-     if (a.isArray() || (!a.isNumeric() && !a.isChar() && !a.isBit())) {
-       d_.error(e->args[0]->loc,
-                std::string(nm) + " argument must be a scalar numeric, bit, "
-                                  "or character value",
-                "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     int p = 0, q = 0;
-     const bool haveP = e->args.size() >= 2;
-     const bool haveQ = e->args.size() >= 3;
-auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
-        ConstNum c;
-        if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 ||
-            c.value < (PliI128)INT_MIN || c.value > (PliI128)INT_MAX) {
-          d_.error(e->args[idx]->loc,
-                   std::string(nm) + " " + what + " must be an integer constant",
-                   "(123)");
-          return false;
-        }
-        out = (int)pli_to_i64(c.value);
+  // FIXEDBIN/FIXEDDEC built-ins (rule (123), Appendix 1): convert x to a
+  // fixed binary/decimal value. Explicit p/q must be constants; when both
+  // are omitted IBM's source-type table derives them.
+  if (e->name == "FIXEDBIN" || e->name == "FIXEDDEC") {
+    const bool bin = e->name == "FIXEDBIN";
+    const char* nm = e->name.c_str();
+    if (e->args.empty() || e->args.size() > 3) {
+      d_.error(e->loc, std::string(nm) + " expects 1-3 arguments", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const Type& a = e->args[0]->ty;
+    if (a.isArray() || (!a.isNumeric() && !a.isChar() && !a.isBit())) {
+      d_.error(e->args[0]->loc,
+               std::string(nm) + " argument must be a scalar numeric, bit, "
+                                 "or character value",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int p = 0, q = 0;
+    const bool haveP = e->args.size() >= 2;
+    const bool haveQ = e->args.size() >= 3;
+    auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
+      ConstNum c;
+      if (!constNumOf(e->args[idx].get(), c) || c.scale != 0 || c.value < (PliI128)INT_MIN ||
+          c.value > (PliI128)INT_MAX) {
+        d_.error(e->args[idx]->loc, std::string(nm) + " " + what + " must be an integer constant",
+                 "(123)");
+        return false;
+      }
+      out = (int)pli_to_i64(c.value);
+      return true;
+    };
+    if (haveP && !readInteger(1, "precision", p)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (haveQ && !readInteger(2, "scale", q)) {
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (haveP) {
+      const int maxP = bin ? 63 : 31;
+      if (p < 1 || p > maxP) {
+        d_.error(e->args[1]->loc,
+                 std::string(nm) + " precision must be between 1 and " + std::to_string(maxP),
+                 "(123)");
+        e->ty = Type::voidTy();
         return true;
-      };
-     if (haveP && !readInteger(1, "precision", p)) {
-       e->ty = Type::voidTy();
-       return true;
-     }
-     if (haveQ && !readInteger(2, "scale", q)) {
-       e->ty = Type::voidTy();
-       return true;
-     }
-     if (haveP) {
-       const int maxP = bin ? 63 : 31;
-       if (p < 1 || p > maxP) {
-         d_.error(e->args[1]->loc,
-                  std::string(nm) + " precision must be between 1 and " +
-                      std::to_string(maxP),
-                  "(123)");
-         e->ty = Type::voidTy();
-         return true;
-       }
-       // The conversion paths use a 64-bit power of two for BINARY and an
-       // i64/i128 power of ten for DECIMAL; keep q inside those slots.
-       const int maxQ = bin ? 62 : (p > 18 ? 38 : 18);
-       if (haveQ && q > maxQ) {
-         d_.error(e->args[2]->loc,
-                  std::string(nm) + " scale must not exceed " +
-                      std::to_string(maxQ),
-                  "(123)");
-         e->ty = Type::voidTy();
-         return true;
-       }
-     }
-     if (haveQ && q < 0) {
-       d_.error(e->args[2]->loc,
-                std::string(nm) + " scale must be nonnegative", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     if (haveP) {
-       e->ty = bin ? Type::fixedBin(p, q) : Type::fixedDec(p, q);
-       return true;
-     }
-     // The source-type table (IBM Appendix 1). The compiler's FLOAT type
-     // does not retain its base, so it is read as FLOAT DECIMAL here; the
-     // FLOAT base is part of B11's precision tail.
-     int dp = 0, dq = 0;
-     switch (a.k) {
-     case TK::FixedBin:
-       if (bin) {
-         dp = a.prec;
-         dq = a.scale;
-       } else {
-         dp = binToDecDigits(a.prec);
-         dq = binToDecScale(a.scale);
-       }
-       break;
-     case TK::FixedDec:
-       if (bin) {
-         dp = decToBinDigits(a.prec);
-         dq = decToBinScale(a.scale);
-       } else {
-         dp = a.prec;
-         dq = a.scale;
-       }
-       break;
-     case TK::Float:
-       if (bin)
-         dp = std::min(63, ceilMulDiv(a.prec, 83, 25));
-       else
-         dp = std::min(31, a.prec);
-       break;
-     case TK::Bit:
-       dp = bin ? 63 : binToDecDigits(63);
-       break;
-     case TK::Char:
-       dp = bin ? decToBinDigits(std::max(1, a.len)) : 31;
-       break;
-     default:
-       break;
-     }
-     const int maxQ = bin ? 62 : (dp > 18 ? 38 : 18);
-     if (dq > maxQ) {
-       d_.error(e->args[0]->loc,
-                std::string(nm) + " source-derived scale must not exceed " +
-                    std::to_string(maxQ),
-                "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     e->ty = bin ? Type::fixedBin(dp, dq) : Type::fixedDec(dp, dq);
-     return true;
-   }
-   // BINARY/DECIMAL/FLOAT built-in (rule (123), Appendix 1): convert x to
-   // FIXED BINARY, FIXED DECIMAL, or FLOAT, with optional precision/scale.
-   // BINARY(x[,p]), DECIMAL(x[,p[,s]]), FLOAT(x[,p]) — p/s must be constants.
-   if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
-     const char* nm = e->name.c_str();
-     int lo = 1, hi = 3;
-     if (e->name == "BINARY" || e->name == "FLOAT")
-       hi = 2;
-     if (e->args.size() < (size_t)lo || e->args.size() > (size_t)hi) {
-       d_.error(e->loc, std::string(nm) + " expects " + std::to_string(lo) +
-                          "-" + std::to_string(hi) + " arguments", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     const Type& a = e->args[0]->ty;
-     if (!a.isChar() && !a.isNumeric()) {
-       d_.error(e->args[0]->loc, std::string(nm) + " argument must be character or numeric", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     int p = 0, s = 0;
-     if (e->args.size() >= 2) {
-       if (e->args[1]->kind != Expr::IntLit) {
-         d_.error(e->args[1]->loc, std::string(nm) + " precision must be a constant", "(123)");
-         e->ty = Type::voidTy();
-         return true;
-       }
-       p = (int)e->args[1]->ival;
-     }
-     if (e->args.size() >= 3) {
-       if (e->args[2]->kind != Expr::IntLit) {
-         d_.error(e->args[2]->loc, std::string(nm) + " scale must be a constant", "(123)");
-         e->ty = Type::voidTy();
-         return true;
-       }
-       s = (int)e->args[2]->ival;
-     }
-     if (e->name == "BINARY")
-       e->ty = Type::fixedBin(p > 0 ? p : 31, s);
-     else if (e->name == "DECIMAL")
-       e->ty = Type::fixedDec(p > 0 ? p : 31, s);
-     else
-       e->ty = Type::flt(p > 0 ? p : 6);
-     return true;
-   }
-   // CHAR built-in (rule (123)): CHAR(x) renders a scalar value as text
+      }
+      // The conversion paths use a 64-bit power of two for BINARY and an
+      // i64/i128 power of ten for DECIMAL; keep q inside those slots.
+      const int maxQ = bin ? 62 : (p > 18 ? 38 : 18);
+      if (haveQ && q > maxQ) {
+        d_.error(e->args[2]->loc,
+                 std::string(nm) + " scale must not exceed " + std::to_string(maxQ), "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+    }
+    if (haveQ && q < 0) {
+      d_.error(e->args[2]->loc, std::string(nm) + " scale must be nonnegative", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (haveP) {
+      e->ty = bin ? Type::fixedBin(p, q) : Type::fixedDec(p, q);
+      return true;
+    }
+    // The source-type table (IBM Appendix 1). The compiler's FLOAT type
+    // does not retain its base, so it is read as FLOAT DECIMAL here; the
+    // FLOAT base is part of B11's precision tail.
+    int dp = 0, dq = 0;
+    switch (a.k) {
+    case TK::FixedBin:
+      if (bin) {
+        dp = a.prec;
+        dq = a.scale;
+      } else {
+        dp = binToDecDigits(a.prec);
+        dq = binToDecScale(a.scale);
+      }
+      break;
+    case TK::FixedDec:
+      if (bin) {
+        dp = decToBinDigits(a.prec);
+        dq = decToBinScale(a.scale);
+      } else {
+        dp = a.prec;
+        dq = a.scale;
+      }
+      break;
+    case TK::Float:
+      if (bin)
+        dp = std::min(63, ceilMulDiv(a.prec, 83, 25));
+      else
+        dp = std::min(31, a.prec);
+      break;
+    case TK::Bit:
+      dp = bin ? 63 : binToDecDigits(63);
+      break;
+    case TK::Char:
+      dp = bin ? decToBinDigits(std::max(1, a.len)) : 31;
+      break;
+    default:
+      break;
+    }
+    const int maxQ = bin ? 62 : (dp > 18 ? 38 : 18);
+    if (dq > maxQ) {
+      d_.error(e->args[0]->loc,
+               std::string(nm) + " source-derived scale must not exceed " + std::to_string(maxQ),
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    e->ty = bin ? Type::fixedBin(dp, dq) : Type::fixedDec(dp, dq);
+    return true;
+  }
+  // BINARY/DECIMAL/FLOAT built-in (rule (123), Appendix 1): convert x to
+  // FIXED BINARY, FIXED DECIMAL, or FLOAT, with optional precision/scale.
+  // BINARY(x[,p]), DECIMAL(x[,p[,s]]), FLOAT(x[,p]) — p/s must be constants.
+  if (e->name == "BINARY" || e->name == "DECIMAL" || e->name == "FLOAT") {
+    const char* nm = e->name.c_str();
+    int lo = 1, hi = 3;
+    if (e->name == "BINARY" || e->name == "FLOAT")
+      hi = 2;
+    if (e->args.size() < (size_t)lo || e->args.size() > (size_t)hi) {
+      d_.error(e->loc,
+               std::string(nm) + " expects " + std::to_string(lo) + "-" + std::to_string(hi) +
+                   " arguments",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    const Type& a = e->args[0]->ty;
+    if (!a.isChar() && !a.isNumeric()) {
+      d_.error(e->args[0]->loc, std::string(nm) + " argument must be character or numeric",
+               "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    int p = 0, s = 0;
+    if (e->args.size() >= 2) {
+      if (e->args[1]->kind != Expr::IntLit) {
+        d_.error(e->args[1]->loc, std::string(nm) + " precision must be a constant", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      p = (int)e->args[1]->ival;
+    }
+    if (e->args.size() >= 3) {
+      if (e->args[2]->kind != Expr::IntLit) {
+        d_.error(e->args[2]->loc, std::string(nm) + " scale must be a constant", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      s = (int)e->args[2]->ival;
+    }
+    if (e->name == "BINARY")
+      e->ty = Type::fixedBin(p > 0 ? p : 31, s);
+    else if (e->name == "DECIMAL")
+      e->ty = Type::fixedDec(p > 0 ? p : 31, s);
+    else
+      e->ty = Type::flt(p > 0 ? p : 6);
+    return true;
+  }
+  // CHAR built-in (rule (123)): CHAR(x) renders a scalar value as text
   // (the PL/I CHAR(x) conversion used by libnet's
   // `trim(char(moves))` and `'...' || char(port)` chains).
   if (e->name == "CHAR") {
@@ -8502,41 +8483,41 @@ auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
       e->ty = Type::voidTy();
       return true;
     }
-     e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
-     return true;
-   }
-   // ADD/SUBTRACT built-in (rule (123), Appendix 1): a+b / a-b as the common
-   // arithmetic type, or as FIXED BINARY(p,s) when precision/scale override
-   // is given. The 3rd/4th args must be constant integers.
-   if (e->name == "ADD" || e->name == "SUBTRACT") {
-     const char* nm = e->name.c_str();
-     if (e->args.size() < 2 || e->args.size() > 4) {
-       d_.error(e->loc, std::string(nm) + " expects 2-4 arguments (a, b [, p [, s]])", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
-       d_.error(e->loc, std::string(nm) + " arguments must be numeric", "(123)");
-       e->ty = Type::voidTy();
-       return true;
-     }
-     // Precision/scale override: result is FIXED BINARY(p, s), s defaults to 0.
-     if (e->args.size() >= 3) {
-       int p = e->args[2]->ival;
-       int s = e->args.size() >= 4 ? (int)e->args[3]->ival : 0;
-       if (e->args[2]->kind != Expr::IntLit || p <= 0 ||
-           (e->args.size() >= 4 && (e->args[3]->kind != Expr::IntLit || s < 0))) {
-         d_.error(e->loc, std::string(nm) + " precision/scale must be constants", "(123)");
-         e->ty = Type::voidTy();
-         return true;
-       }
-       e->ty = Type::fixedBin(p, s);
-     } else {
-       e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
-     }
-     return true;
-   }
-   // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
+    e->ty = Type::flt(std::max(6, std::max(e->args[0]->ty.prec, e->args[1]->ty.prec)));
+    return true;
+  }
+  // ADD/SUBTRACT built-in (rule (123), Appendix 1): a+b / a-b as the common
+  // arithmetic type, or as FIXED BINARY(p,s) when precision/scale override
+  // is given. The 3rd/4th args must be constant integers.
+  if (e->name == "ADD" || e->name == "SUBTRACT") {
+    const char* nm = e->name.c_str();
+    if (e->args.size() < 2 || e->args.size() > 4) {
+      d_.error(e->loc, std::string(nm) + " expects 2-4 arguments (a, b [, p [, s]])", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    if (!e->args[0]->ty.isNumeric() || !e->args[1]->ty.isNumeric()) {
+      d_.error(e->loc, std::string(nm) + " arguments must be numeric", "(123)");
+      e->ty = Type::voidTy();
+      return true;
+    }
+    // Precision/scale override: result is FIXED BINARY(p, s), s defaults to 0.
+    if (e->args.size() >= 3) {
+      int p = e->args[2]->ival;
+      int s = e->args.size() >= 4 ? (int)e->args[3]->ival : 0;
+      if (e->args[2]->kind != Expr::IntLit || p <= 0 ||
+          (e->args.size() >= 4 && (e->args[3]->kind != Expr::IntLit || s < 0))) {
+        d_.error(e->loc, std::string(nm) + " precision/scale must be constants", "(123)");
+        e->ty = Type::voidTy();
+        return true;
+      }
+      e->ty = Type::fixedBin(p, s);
+    } else {
+      e->ty = arithResultType(e->args[0]->ty, e->args[1]->ty);
+    }
+    return true;
+  }
+  // Array attribute built-ins (M2, rules (12),(13),(123)): LBOUND/HBOUND/
   // DIM/DIMENSION of an array. With constant bounds these fold to
   // compile-time values; the first argument must be an unsubscripted array.
   // An optional second integer-constant argument selects the axis (1-based);
@@ -8685,7 +8666,7 @@ auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
         return true;
       }
     }
-    e->ty = Type::chr(256);  // max span for 8-bit code points
+    e->ty = Type::chr(256); // max span for 8-bit code points
     return true;
   }
   // BOOL (rule (123), Appendix 1): BOOL(b1, b2, b3) -> if b1 then b2 else b3.
@@ -8838,8 +8819,7 @@ auto readInteger = [&](size_t idx, const char* what, int& out) -> bool {
     };
     for (auto& arg : e->args) {
       if (hasUnion(arg->ty)) {
-        d_.error(arg->loc, "IDENTICAL over unions is not implemented in this stage",
-                 "(123)");
+        d_.error(arg->loc, "IDENTICAL over unions is not implemented in this stage", "(123)");
         e->ty = Type::voidTy();
         return true;
       }

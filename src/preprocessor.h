@@ -17,7 +17,7 @@ struct PPProc {
   std::string name;
   std::vector<std::string> params;
   std::string returns; // "FIXED" or "CHARACTER"
-  std::string body; // body text between %label: procedure(...); and %END;
+  std::string body;    // body text between %label: procedure(...); and %END;
 };
 
 class Preprocessor {
@@ -46,8 +46,8 @@ private:
   // Scan a source range char-by-char, emitting non-directive text via emit()
   // and dispatching %-directives to processDirective (ADR-316). String, comment
   // and // comment nesting is tracked so directives inside them are inert.
-  bool scan(const std::string& source, size_t start, size_t end, std::string& output,
-            int& line, int& col, const std::filesystem::path& path, bool active);
+  bool scan(const std::string& source, size_t start, size_t end, std::string& output, int& line,
+            int& col, const std::filesystem::path& path, bool active);
   // Pre-scan source[start..end) for %label: definitions (ADR-316).
   void collectLabels(const std::string& source, size_t start, size_t end);
   // Find the ';' (or comment-embedded ';') that terminates a directive body
@@ -67,9 +67,8 @@ private:
   // %IF expr %THEN directive [%ELSE directive] (ADR-083): arms are full
   // directives run (or structurally skipped) recursively, so nesting works;
   // each arm is exactly one directive.
-  size_t processIf(const fs::path& path, const std::string& source, size_t,
-                   size_t wordEnd, std::string& output, int& line, int& col, bool active,
-                   size_t& semPos);
+  size_t processIf(const fs::path& path, const std::string& source, size_t, size_t wordEnd,
+                   std::string& output, int& line, int& col, bool active, size_t& semPos);
   // Evaluate a %IF/%assignment integer expression (ADR-083); on failure
   // returns false after diagnosing at the directive position.
   bool evalCondExpr(const std::string& text, const fs::path& path, int line, int col,
@@ -85,25 +84,24 @@ private:
                      std::string& output);
   // %DO [v=e1 TO e2 [BY e3]] ; — repeat the body up to %END (ADR-316).
   // Returns the position past %END (or npos on error).
-  size_t handleDo(const fs::path& path, const std::string& source, size_t bodyStart,
-                  size_t endPos, size_t endSemi, std::string& output, int& line, int& col,
-                  bool active, const std::string& spec, int directiveLine, int directiveCol);
+  size_t handleDo(const fs::path& path, const std::string& source, size_t bodyStart, size_t endPos,
+                  size_t endSemi, std::string& output, int& line, int& col, bool active,
+                  const std::string& spec, int directiveLine, int directiveCol);
   // %label: / %GOTO label / %GO TO label — resolve to a flat position jump (ADR-316).
   bool handleGoto(const fs::path& path, const std::string& name, const std::string& operand,
                   int line, int col);
   // %label: procedure (p1,p2) RETURNS (fixed|character); … %END; — register a
   // compile-time macro (Stage 2). The body text is captured, not scanned.
-  bool handleDefinition(const fs::path& path, const std::string& labelName,
-                        const std::string& decl, const std::string& body,
-                        int directiveLine, int directiveCol);
+  bool handleDefinition(const fs::path& path, const std::string& labelName, const std::string& decl,
+                        const std::string& body, int directiveLine, int directiveCol);
   // %name(arg,…): invoke a registered macro (Stage 2). Parses args, binds
   // params in a child scope, scans the body, emits the return value.
   bool handleInvocation(const fs::path& path, const std::string& name, const std::string& args,
                         int line, int col, std::string& output);
   // %RETURN (expr) ; — stop scanning the current macro body and capture the
   // return value (ADR-316, Stage 2).
-  size_t handleReturn(const fs::path& path, const std::string& source, size_t wordEnd,
-                      size_t end, std::string& output, int& line, int& col);
+  size_t handleReturn(const fs::path& path, const std::string& source, size_t wordEnd, size_t end,
+                      std::string& output, int& line, int& col);
   // %REPLACE — Stage 3: textual rescanning in the preprocessor (ADR-327).
   bool handleReplace(const fs::path& path, const std::string& source, size_t i, size_t wordEnd,
                      size_t end, int directiveLine, int directiveCol);

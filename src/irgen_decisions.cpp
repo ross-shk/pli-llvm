@@ -210,16 +210,15 @@ enum class BuiltinEffect {
 // in none of the groups is Unknown: the calling procedure then claims nothing.
 BuiltinEffect builtinEffect(const std::string& op) {
   static const std::set<std::string> constants = {
-      "DECLARESIZE", "EPSILON", "MAXVAL", "MINVAL", "NULL",  "OMITTED", "PRESENT",
-      "PRECISION",   "REAL",    "IMAG",   "EXPONENT", "ABS",  "SIGN",    "MAX",
-      "MIN",         "TRUNC",   "ROUND",  "CEIL",     "FLOOR", "ACOS",    "ASIN",
-      "ATAN",        "ATAN2",   "ATAND",  "ATANH",    "CBRT", "COS",     "COSD",
-      "COSH",        "ERF",     "ERFC",   "EXP",      "LOG",  "LOG10",   "LOG2",
-      "SIN",         "SIND",    "SINH",   "SQRT",     "TAN",  "TAND",    "TANH",
-      "COMPLEX",     "CONJG"};
-  static const std::set<std::string> readers = {"INDEX",  "LENGTH", "SUBSTR",   "VERIFY",
-                                                "SEARCH", "TRANSLATE", "MOD",  "ADD",
-                                                "SUBTRACT", "MULTIPLY", "DIVIDE"};
+      "DECLARESIZE", "EPSILON", "MAXVAL",   "MINVAL", "NULL", "OMITTED", "PRESENT", "PRECISION",
+      "REAL",        "IMAG",    "EXPONENT", "ABS",    "SIGN", "MAX",     "MIN",     "TRUNC",
+      "ROUND",       "CEIL",    "FLOOR",    "ACOS",   "ASIN", "ATAN",    "ATAN2",   "ATAND",
+      "ATANH",       "CBRT",    "COS",      "COSD",   "COSH", "ERF",     "ERFC",    "EXP",
+      "LOG",         "LOG10",   "LOG2",     "SIN",    "SIND", "SINH",    "SQRT",    "TAN",
+      "TAND",        "TANH",    "COMPLEX",  "CONJG"};
+  static const std::set<std::string> readers = {"INDEX",    "LENGTH",    "SUBSTR", "VERIFY",
+                                                "SEARCH",   "TRANSLATE", "MOD",    "ADD",
+                                                "SUBTRACT", "MULTIPLY",  "DIVIDE"};
   static const std::set<std::string> allocators = {"REPEAT", "REVERSE"};
   static const std::set<std::string> escapers = {"ADDR", "BYADDR"};
   if (constants.count(op))
@@ -240,21 +239,20 @@ struct Bits {
   bool writesOther = false;
   bool readsArg = false;
   bool writesArg = false;
-  bool opaque = false;     // effects unknown: nothing may be claimed
-  bool io = false;         // does input or output
-  bool hasOnUnit = false;  // establishes an ON unit (rule 91)
-  bool nameEscapes = false; // its name is assigned or passed as an argument
-  bool mayUnwind = false;  // makes a call whose unwinding is not known
+  bool opaque = false;       // effects unknown: nothing may be claimed
+  bool io = false;           // does input or output
+  bool hasOnUnit = false;    // establishes an ON unit (rule 91)
+  bool nameEscapes = false;  // its name is assigned or passed as an argument
+  bool mayUnwind = false;    // makes a call whose unwinding is not known
   bool mayNotReturn = false; // may not return: a stop, or an endless loop
-  std::set<int> raiseKeys; // the conditions it can raise
-  std::string note;        // why the effect is not stronger
+  std::set<int> raiseKeys;   // the conditions it can raise
+  std::string note;          // why the effect is not stronger
 
   bool operator==(const Bits& o) const {
-    return readsOther == o.readsOther && writesOther == o.writesOther &&
-           readsArg == o.readsArg && writesArg == o.writesArg && opaque == o.opaque &&
-           io == o.io && hasOnUnit == o.hasOnUnit && nameEscapes == o.nameEscapes &&
-           mayUnwind == o.mayUnwind && mayNotReturn == o.mayNotReturn &&
-           raiseKeys == o.raiseKeys;
+    return readsOther == o.readsOther && writesOther == o.writesOther && readsArg == o.readsArg &&
+           writesArg == o.writesArg && opaque == o.opaque && io == o.io &&
+           hasOnUnit == o.hasOnUnit && nameEscapes == o.nameEscapes && mayUnwind == o.mayUnwind &&
+           mayNotReturn == o.mayNotReturn && raiseKeys == o.raiseKeys;
   }
 };
 
@@ -1062,7 +1060,6 @@ RangeFact fixedBinRangeFact(int prec, const RangeSite& site) {
   return f;
 }
 
-
 // The text of a REPEAT of a constant string a constant number of times
 // (ADR-241). The decision lives here, outside irgen.cpp (the plan's C2), so
 // it can be read without a backend.
@@ -1127,10 +1124,10 @@ bool isPictureChar(char c) {
 // with (148) before anything reaching the runtime interpreter.
 bool isNumericPictureChar(char c) {
   static const std::string chars =
-      "9ZV.,$+-SY*EK"  // digit/point, suppression, insertion, signs, exponent
-      "CRDTI"          // credit/debit and overpunched signs
-      "B/"             // insertion
-      "GHMP678";       // sterling
+      "9ZV.,$+-SY*EK" // digit/point, suppression, insertion, signs, exponent
+      "CRDTI"         // credit/debit and overpunched signs
+      "B/"            // insertion
+      "GHMP678";      // sterling
   return chars.find(c) != std::string::npos;
 }
 
@@ -1147,8 +1144,8 @@ bool isFoldablePictureChar(char c) {
 
 // Analyze every procedure in the program.
 std::map<const HProc*, ProcEffects> analyzeEffects(const HProgram& prog,
-                                                    const std::unordered_set<const Symbol*>& byValue,
-                                                    const EffectOptions& opts) {
+                                                   const std::unordered_set<const Symbol*>& byValue,
+                                                   const EffectOptions& opts) {
   // Map each AST procedure to its HIR twin, so a call site finds the callee.
   std::map<const Proc*, const HProc*> bySrc;
   for (const auto& p : prog.procs)
@@ -1330,7 +1327,7 @@ static const char* effectToken(MemEffect e) {
 const char* const kPublishedEffectsHeader = "# pli published effects v1";
 
 std::string formatEffectLine(const std::string& name, const ProcEffects& e,
-                              const std::string& digest) {
+                             const std::string& digest) {
   std::string out = name;
   out += ' ';
   out += digest;
@@ -1522,8 +1519,8 @@ PictureSpec classifyPicture(const std::string& pic) {
     char c = s.expanded[i];
     // Every digit-position class of rule (148) counts toward the precision,
     // not just 9 and Z (Y * $ T I R suppress/overpunch like digit slots).
-    if (c != '9' && c != 'Z' && c != 'Y' && c != '*' && c != '$' &&
-        c != 'T' && c != 'I' && c != 'R')
+    if (c != '9' && c != 'Z' && c != 'Y' && c != '*' && c != '$' && c != 'T' && c != 'I' &&
+        c != 'R')
       continue;
     if (s.point >= 0 && static_cast<int>(i) > s.point)
       ++s.fracDigits;

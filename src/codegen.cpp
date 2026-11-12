@@ -87,7 +87,8 @@ static bool platformTripleMatches(const llvm::Module& mod, const llvm::Triple& t
     return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
                                                                       : (int)os;
   };
-  return modTriple.getArch() == target.getArch() && osKey(modTriple.getOS()) == osKey(target.getOS());
+  return modTriple.getArch() == target.getArch() &&
+         osKey(modTriple.getOS()) == osKey(target.getOS());
 }
 
 // Strip the build host's target-cpu / target-features / probe-stack /
@@ -132,8 +133,8 @@ std::unique_ptr<llvm::Module> loadPlatformModule(llvm::LLVMContext& ctx,
     const RuntimeBlob* blob = selectPlatformForTarget(targetTriple);
     if (!blob)
       return nullptr; // no embedded platform: caller reports per-path
-    llvm::MemoryBufferRef buf(
-        llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len), "pli_rtplat.bc");
+    llvm::MemoryBufferRef buf(llvm::StringRef(reinterpret_cast<const char*>(blob->data), blob->len),
+                              "pli_rtplat.bc");
     llvm::Expected<std::unique_ptr<llvm::Module>> parsed = llvm::parseBitcodeFile(buf, ctx);
     if (!parsed) {
       err = "cannot parse embedded pli_rtplat.bc";
@@ -150,9 +151,18 @@ std::unique_ptr<llvm::Module> loadPlatformModule(llvm::LLVMContext& ctx,
 bool isPlatformSeamSymbol(const std::string& name) {
   // pli_plat_* plus the threading backend (same names as the old header).
   static const char* const kThreadSeam[] = {
-      "pli_mutex_init",     "pli_mutex_lock",      "pli_mutex_unlock",  "pli_cond_init",
-      "pli_cond_wait",      "pli_cond_signal",     "pli_cond_broadcast", "pli_call_once",
-      "pli_spawn",          "pli_spawn_detached",  "pli_thread_detach", "pli_sleep_ms",
+      "pli_mutex_init",
+      "pli_mutex_lock",
+      "pli_mutex_unlock",
+      "pli_cond_init",
+      "pli_cond_wait",
+      "pli_cond_signal",
+      "pli_cond_broadcast",
+      "pli_call_once",
+      "pli_spawn",
+      "pli_spawn_detached",
+      "pli_thread_detach",
+      "pli_sleep_ms",
       "pli_mutex_init_recursive",
   };
   // The tasking model (ADR-234) adds pli_plat_getenv, pli_plat_cpu_count,
