@@ -511,6 +511,17 @@ const void *__std_max_element_4u(const void *first, const void *last) {
     return best;
 }
 
+/* ---- compiler-rt GS security cookie (compiler-rt builtins are /GS-compiled) ----
+ * compiler-rt.builtins-x86_64.lib references __security_cookie and
+ * __security_check_cookie from MSVC's CRT. Provide minimal stubs so they link
+ * without pulling in libcmt.lib (which would duplicate __guard_dispatch_icall_fptr
+ * from libmingwex.a). */
+uintptr_t __security_cookie = 0x2B992DDFA23249D6ULL; /* arbitrary non-zero cookie */
+
+void __security_check_cookie(uintptr_t cookie) {
+    (void)cookie;
+}
+
 /* ---- compiler-rt 128-bit division/modulo: __divti3 / __modti3 ----
  * Prebuilt clang_rt.builtins for Windows x86_64 does not export these,
  * so the linker reports them undefined. Implement via 64-bit long division
