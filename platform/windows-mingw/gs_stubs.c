@@ -8,6 +8,8 @@
  * Embedded as gs_stubs.o into the Windows link sysroot (ADR-227), so every
  * user program linked by pli.exe gets them.
  */
+#include <stdint.h>
+
 uintptr_t __security_cookie = 0x2B992DDFA23249D6ULL;
 
 void __security_check_cookie(uintptr_t cookie) {
