@@ -4298,7 +4298,7 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   if (!sym->proc && !en) {
     for (const Type& t : sym->entryParams) {
       for (const auto& d : t.dims)
-        if (d.adj || d.dyn || d.lbDyn)
+        if (d.adj)
           pt.push_back(b_.getInt64Ty());
       if (t.isChar() && t.starLen)
         pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
@@ -4324,7 +4324,7 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
   }
   for (const Type& t : sym->entryParams) {
     for (const auto& d : t.dims)
-      if (d.adj || d.dyn || d.lbDyn)
+      if (d.adj)
         pt.push_back(b_.getInt64Ty());
     if (t.isChar() && t.starLen)
       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
@@ -4350,8 +4350,8 @@ llvm::Function* IRGen::calleeFn(Symbol* sym) {
 
 // LLVM function type of a call through an entry variable/parameter (IBM ENTRY
 // VARIABLE extension, ADR-171), built from its declared descriptor. PL/I
-// passes every argument by reference (ptr) plus a hidden i64 for each
-// dynamic axis of `*`-extent / CHAR(*) parameter; a by-value C entry marshals FIXED/FLOAT
+// passes every argument by reference (ptr) plus a hidden i64 for each `*`
+// extent / CHAR(*) parameter; a by-value C entry marshals FIXED/FLOAT
 // scalars and POINTERs as values. No static-link arguments are threaded: a
 // procedure that captures enclosing state is diagnosed at assignment.
 llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
@@ -4366,9 +4366,9 @@ llvm::FunctionType* IRGen::entryFnType(Symbol* sym) {
       pt.push_back(b_.getPtrTy());
   }
   for (const Type& t : sym->entryParams) {
-    // One hidden extent per dynamic axis
+    // One hidden extent per `*` axis
     for (const auto& d : t.dims)
-      if (d.adj || d.dyn || d.lbDyn)
+      if (d.adj)
         pt.push_back(b_.getInt64Ty());
     if (t.isChar() && t.starLen)
       pt.push_back(b_.getInt64Ty()); // hidden length arg (rule (18))
@@ -4413,20 +4413,14 @@ llvm::CallInst* IRGen::emitEntryCall(Symbol* sym, std::vector<HExprP>& args, Sou
     callArgs.push_back(llvm::Constant::getNullValue(b_.getPtrTy()));
   for (size_t i = 0; i < sym->entryParams.size(); ++i) {
     const Type& t = sym->entryParams[i];
-    bool hasAdjAxis = false;
-    for (const auto& d : t.dims) {
-      if (d.adj || d.dyn || d.lbDyn) {
-        hasAdjAxis = true;
-        break;
-      }
-    }
-    if (!hasAdjAxis && !(t.isChar() && t.starLen))
-      continue;
     HExpr* a = (i >= args.size() || args[i]->kind == HExpr::Star) ? nullptr : args[i].get();
-    // Pass one hidden extent for each dynamic axis
+    // Pass one hidden extent for each `*` axis.
+    if (!isStarLen(t) && !std::any_of(t.dims.begin(), t.dims.end(),
+                                      [](const Dim& d) { return d.adj; }))
+      continue;
     for (size_t axis = 0; axis < t.dims.size(); ++axis) {
       const Dim& d = t.dims[axis];
-      if (d.adj || d.dyn || d.lbDyn) {
+      if (d.adj) {
         llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled, axis);
         if (!ext) {
           d_.error(loc, "a '*' extent parameter takes a fixed or dynamic-bound array in this stage",
@@ -5224,25 +5218,34 @@ void IRGen::allocaLocals(HProc* p) {
 
 void IRGen::recordDynParamUbs(const std::vector<Symbol*>& params) {
   for (Symbol* s : params) {
-    if (!s->ty.isDynamic() || dynUb_.count(s))
+    if (!s->ty.isDynamic())
       continue;
     const size_t rank = s->ty.dims.size();
-    std::vector<llvm::Value*> ubs(rank, nullptr), lbs(rank, nullptr);
+    // `*` axes already hold their hidden extent; fill the remaining runtime
+    // bounds from the declared expressions, evaluated once at entry.
+    auto& ubs = dynUb_[s];
+    auto& lbs = dynLb_[s];
+    if (ubs.size() < rank)
+      ubs.resize(rank, nullptr);
+    if (lbs.size() < rank)
+      lbs.resize(rank, nullptr);
     for (size_t k = 0; k < rank; ++k) {
       const Dim& d = s->ty.dims[k];
       HExpr* ue = (k < s->dynUbAxes.size()) ? s->dynUbAxes[k] : (k == 0 ? s->dynUb : nullptr);
       HExpr* le = (k < s->dynLbAxes.size()) ? s->dynLbAxes[k] : (k == 0 ? s->dynLb : nullptr);
-      if (ue)
-        ubs[k] = toI64(emitExpr(ue));
-      else if (d.dyn || d.adj)
-        ubs[k] = i64(d.ub);
-      if (le)
-        lbs[k] = toI64(emitExpr(le));
-      else if (d.lbDyn)
-        lbs[k] = i64(d.lb);
+      if (!ubs[k]) {
+        if (ue)
+          ubs[k] = toI64(emitExpr(ue));
+        else if (d.dyn || d.adj)
+          ubs[k] = i64(d.ub);
+      }
+      if (!lbs[k]) {
+        if (le)
+          lbs[k] = toI64(emitExpr(le));
+        else if (d.lbDyn || d.adj)
+          lbs[k] = i64(d.lb);
+      }
     }
-    dynUb_[s] = std::move(ubs);
-    dynLb_[s] = std::move(lbs);
   }
 }
 
@@ -6004,9 +6007,9 @@ void IRGen::declareProc(HProc* p) {
       pt.push_back(isByValueParam(p->paramSyms[i]) ? llvmTy(p->paramSyms[i]->ty) : b_.getPtrTy());
     for (Symbol* s : p->paramSyms)
       if (isAdjustable(s)) {
-        // One hidden extent per dynamic axis, plus CHAR(*) length if applicable
+        // One hidden extent per `*` axis, plus CHAR(*) length if applicable
         for (const auto& d : s->ty.dims)
-          if (d.adj || d.dyn || d.lbDyn)
+          if (d.adj)
             pt.push_back(b_.getInt64Ty());
         if (isStarLen(s->ty))
           pt.push_back(b_.getInt64Ty());
@@ -6046,9 +6049,9 @@ void IRGen::declareProc(HProc* p) {
     pt.push_back(b_.getPtrTy());
   for (Symbol* s : uni)
     if (isAdjustable(s)) {
-      // One hidden extent per dynamic axis, plus CHAR(*) length if applicable
+      // One hidden extent per `*` axis, plus CHAR(*) length if applicable
       for (const auto& d : s->ty.dims)
-        if (d.adj || d.dyn || d.lbDyn)
+        if (d.adj)
           pt.push_back(b_.getInt64Ty());
       if (isStarLen(s->ty))
         pt.push_back(b_.getInt64Ty());
@@ -6080,9 +6083,9 @@ void IRGen::declareProc(HProc* p) {
       sig.push_back(b_.getPtrTy());
     for (Symbol* s : mine)
       if (isAdjustable(s)) {
-        // One hidden extent per dynamic axis, plus CHAR(*) length if applicable
+        // One hidden extent per `*` axis, plus CHAR(*) length if applicable
         for (const auto& d : s->ty.dims)
-          if (d.adj || d.dyn || d.lbDyn)
+          if (d.adj)
             sig.push_back(b_.getInt64Ty());
         if (isStarLen(s->ty))
           sig.push_back(b_.getInt64Ty());
@@ -6108,18 +6111,40 @@ void IRGen::declareProc(HProc* p) {
     std::unordered_map<Symbol*, llvm::Value*> mineAddr;
     for (Symbol* s : mine)
       mineAddr[s] = tf->getArg(targ++);
-    std::unordered_map<Symbol*, llvm::Value*> mineExt;
+    std::unordered_map<Symbol*, std::vector<llvm::Value*>> mineExt;
+    std::unordered_map<Symbol*, llvm::Value*> mineLen;
     for (Symbol* s : mine)
-      if (isAdjustable(s))
-        mineExt[s] = tf->getArg(targ++);
+      if (isAdjustable(s)) {
+        std::vector<llvm::Value*> exts;
+        for (const auto& d : s->ty.dims)
+          if (d.adj)
+            exts.push_back(tf->getArg(targ++));
+        mineExt[s] = std::move(exts);
+        if (isStarLen(s->ty))
+          mineLen[s] = tf->getArg(targ++);
+      }
     std::vector<llvm::Value*> links;
     for (size_t i = 0; i < p->env.size(); ++i)
       links.push_back(tf->getArg(targ++));
     for (Symbol* u : uni)
       args.push_back(mineAddr.count(u) ? mineAddr[u] : llvm::UndefValue::get(b_.getPtrTy()));
     for (Symbol* u : uni)
-      if (isAdjustable(u))
-        args.push_back(mineExt.count(u) ? mineExt[u] : llvm::UndefValue::get(b_.getInt64Ty()));
+      if (isAdjustable(u)) {
+        auto exts = mineExt.find(u);
+        for (size_t axis = 0; axis < u->ty.dims.size(); ++axis) {
+          if (!u->ty.dims[axis].adj)
+            continue;
+          llvm::Value* v = (exts != mineExt.end() && axis < exts->second.size())
+                               ? exts->second[axis]
+                               : llvm::UndefValue::get(b_.getInt64Ty());
+          args.push_back(v);
+        }
+        if (isStarLen(u->ty)) {
+          auto len = mineLen.find(u);
+          args.push_back(len != mineLen.end() ? len->second
+                                              : llvm::UndefValue::get(b_.getInt64Ty()));
+        }
+      }
     for (auto* l : links)
       args.push_back(l);
     args.push_back(selv);
@@ -6280,7 +6305,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
-  // dope slot; one hidden arg per dynamic axis. The trailing args are the
+  // dope slot; one hidden arg per `*` axis. The trailing args are the
   // static links (rule (8)).
   size_t ai = 0;
   if (p->isFunction && (p->retTy.isStruct() || p->retTy.isChar()))
@@ -6290,25 +6315,19 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   std::vector<std::pair<Symbol*, llvm::Value*>> ctlHid;
   for (Symbol* s : p->paramSyms)
     if (isAdjustable(s)) {
-      // A `*`-extent array reads its hidden extents into dynUb_ (one per dynamic axis).
+      // A `*`-extent array reads one hidden extent per `*` axis into dynUb_;
+      // runtime bounds on non-`*` axes come from their expressions at entry.
       // A `CHAR(*)` parameter reads its hidden length into dynLen_ (rules (13),(18)).
       // A CONTROLLED `CHAR(*)` dummy takes the actual's slot key instead
       // (rules (15),(18)); its alias binds once the entry block is live.
       const Type& ty = s->ty;
-      std::vector<llvm::Value*> ubs;
-      std::vector<llvm::Value*> lbs;
+      std::vector<llvm::Value*> ubs(ty.dims.size(), nullptr);
+      std::vector<llvm::Value*> lbs(ty.dims.size(), nullptr);
       for (size_t axis = 0; axis < ty.dims.size(); ++axis) {
         const Dim& d = ty.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
-          llvm::Value* hv = fn->getArg(ai++);
-          ubs.push_back(hv);
-          // Also read lower bound if dynamic
-          if (d.lbDyn) {
-            llvm::Value* lbhv = fn->getArg(ai++);
-            lbs.push_back(lbhv);
-          } else {
-            lbs.push_back(i64(d.lb));
-          }
+        if (d.adj) {
+          ubs[axis] = fn->getArg(ai++); // hidden extent; lb is static for `*`
+          lbs[axis] = i64(d.lb);
         }
       }
       // Read CHAR(*) hidden length argument if present
@@ -6319,13 +6338,9 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
         } else {
           dynLen_[s] = lenArg;
         }
-      } else if (s->controlled) {
-        // CONTROLLED array with dynamic extent but not CHAR(*)
-        ctlHid.push_back({s, ubs.empty() ? i64(-1) : ubs[0]});
-      } else {
-        dynUb_[s] = std::move(ubs);
-        dynLb_[s] = std::move(lbs);
       }
+      dynUb_[s] = std::move(ubs);
+      dynLb_[s] = std::move(lbs);
     }
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = fn->getArg(ai++);
@@ -6444,23 +6459,16 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   std::vector<std::pair<Symbol*, llvm::Value*>> ctlHid;
   for (Symbol* s : uni)
     if (isAdjustable(s)) {
-      // Hidden args as in emitProc: extent per dynamic axis, `CHAR(*)` length,
+      // Hidden args as in emitProc: one extent per `*` axis, `CHAR(*)` length,
       // or the CONTROLLED `CHAR(*)` dummy's slot key (rules (13),(15),(18)).
       const Type& ty = s->ty;
-      std::vector<llvm::Value*> ubs;
-      std::vector<llvm::Value*> lbs;
+      std::vector<llvm::Value*> ubs(ty.dims.size(), nullptr);
+      std::vector<llvm::Value*> lbs(ty.dims.size(), nullptr);
       for (size_t axis = 0; axis < ty.dims.size(); ++axis) {
         const Dim& d = ty.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
-          llvm::Value* hv = impl->getArg(ai++);
-          ubs.push_back(hv);
-          // Also read lower bound if dynamic
-          if (d.lbDyn) {
-            llvm::Value* lbhv = impl->getArg(ai++);
-            lbs.push_back(lbhv);
-          } else {
-            lbs.push_back(i64(d.lb));
-          }
+        if (d.adj) {
+          ubs[axis] = impl->getArg(ai++); // hidden extent; lb is static for `*`
+          lbs[axis] = i64(d.lb);
         }
       }
       // Read CHAR(*) hidden length argument if present
@@ -6471,13 +6479,9 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
         } else {
           dynLen_[s] = lenArg;
         }
-      } else if (s->controlled) {
-        // CONTROLLED array with dynamic extent but not CHAR(*)
-        ctlHid.push_back({s, ubs.empty() ? i64(-1) : ubs[0]});
-      } else {
-        dynUb_[s] = std::move(ubs);
-        dynLb_[s] = std::move(lbs);
       }
+      dynUb_[s] = std::move(ubs);
+      dynLb_[s] = std::move(lbs);
     }
   for (size_t i = 0; i < p->env.size(); ++i)
     symAddr_[p->env[i]] = impl->getArg(ai++);
@@ -12479,10 +12483,10 @@ void IRGen::emitCall(HStmt* s) {
       HExpr* a =
           (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
       const Type& pty = calleeParams[i]->ty;
-      // Pass one hidden extent for each adjustable/dynamic axis.
+      // Pass one hidden extent for each `*` axis.
       for (size_t axis = 0; axis < pty.dims.size(); ++axis) {
         const Dim& d = pty.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           llvm::Value* ext = hiddenAdjustArg(a, pty, calleeParams[i]->controlled, axis);
           if (!ext) {
             d_.error(s->args[i]->loc,
@@ -12507,10 +12511,10 @@ void IRGen::emitCall(HStmt* s) {
   if (!en && !callee)
     for (size_t i = 0; i < calleeSym->entryParams.size(); ++i) {
       const Type& t = calleeSym->entryParams[i];
-      // Check if any axis is adjustable/dynamic
+      // Check if any axis is `*`
       bool hasAdjAxis = false;
       for (const auto& d : t.dims) {
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           hasAdjAxis = true;
           break;
         }
@@ -12519,10 +12523,10 @@ void IRGen::emitCall(HStmt* s) {
         continue;
       HExpr* a =
           (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
-      // Pass one hidden extent for each adjustable/dynamic axis.
+      // Pass one hidden extent for each `*` axis.
       for (size_t axis = 0; axis < t.dims.size(); ++axis) {
         const Dim& d = t.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled, axis);
           if (!ext) {
             d_.error(s->args[i]->loc,
@@ -12629,7 +12633,7 @@ void IRGen::emitAsyncCall(HStmt* s) {
       const Type& t = paramTypes[i];
       bool hasAdjAxis = false;
       for (const auto& d : t.dims) {
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           hasAdjAxis = true;
           break;
         }
@@ -12638,10 +12642,10 @@ void IRGen::emitAsyncCall(HStmt* s) {
         continue;
       HExpr* a =
           (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
-      // Pass one hidden extent for each adjustable/dynamic axis.
+      // Pass one hidden extent for each `*` axis.
       for (size_t axis = 0; axis < t.dims.size(); ++axis) {
         const Dim& d = t.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled, axis);
           if (!ext) {
             SourceLoc loc = (i < s->args.size() && s->args[i]) ? s->args[i]->loc : s->loc;
@@ -12708,10 +12712,10 @@ void IRGen::emitAsyncCall(HStmt* s) {
       HExpr* a =
           (i >= s->args.size() || s->args[i]->kind == HExpr::Star) ? nullptr : s->args[i].get();
       const Type& pty = calleeParams[i]->ty;
-      // Pass one hidden extent for each adjustable/dynamic axis.
+      // Pass one hidden extent for each `*` axis.
       for (size_t axis = 0; axis < pty.dims.size(); ++axis) {
         const Dim& d = pty.dims[axis];
-        if (d.adj || d.dyn || d.lbDyn) {
+        if (d.adj) {
           llvm::Value* ext = hiddenAdjustArg(a, pty, calleeParams[i]->controlled, axis);
           if (!ext)
             ext = i64(0); // diagnosed by sema through the sync path (13)
@@ -15134,7 +15138,7 @@ Val IRGen::emitExpr(HExpr* e) {
         const Type& t = e->sym->entryParams[i];
         bool hasAdjAxis = false;
         for (const auto& d : t.dims) {
-          if (d.adj || d.dyn || d.lbDyn) {
+          if (d.adj) {
             hasAdjAxis = true;
             break;
           }
@@ -15143,10 +15147,10 @@ Val IRGen::emitExpr(HExpr* e) {
           continue;
         HExpr* a =
             (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
-        // Pass one hidden extent for each adjustable/dynamic axis.
+        // Pass one hidden extent for each `*` axis.
         for (size_t axis = 0; axis < t.dims.size(); ++axis) {
           const Dim& d = t.dims[axis];
-          if (d.adj || d.dyn || d.lbDyn) {
+          if (d.adj) {
             llvm::Value* ext = hiddenAdjustArg(a, t, t.controlled, axis);
             if (!ext) {
               d_.error(e->args[i]->loc,
@@ -15365,10 +15369,10 @@ Val IRGen::emitExpr(HExpr* e) {
         HExpr* a =
             (i >= e->args.size() || e->args[i]->kind == HExpr::Star) ? nullptr : e->args[i].get();
         const Type& pty = calleeParams[i]->ty;
-        // Pass one hidden extent for each adjustable/dynamic axis.
+        // Pass one hidden extent for each `*` axis.
         for (size_t axis = 0; axis < pty.dims.size(); ++axis) {
           const Dim& d = pty.dims[axis];
-          if (d.adj || d.dyn || d.lbDyn) {
+          if (d.adj) {
             llvm::Value* ext = hiddenAdjustArg(a, pty, calleeParams[i]->controlled, axis);
             if (!ext) {
               d_.error(e->args[i]->loc,

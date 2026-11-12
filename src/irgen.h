@@ -496,10 +496,11 @@ private:
       return true;
     if (!s->ty.isArray() || s->ty.dims.empty())
       return false;
-    // A `*`-extent parameter is adjustable if ANY axis is adjustable/dynamic.
-    // Each such axis gets a hidden extent argument.
+    // A `*`-extent parameter is adjustable if ANY axis is `*`.
+    // Each such axis gets one hidden extent argument; axes with runtime
+    // bounds supplied by an expression are evaluated at entry instead.
     for (const auto& d : s->ty.dims) {
-      if (d.adj || d.dyn || d.lbDyn)
+      if (d.adj)
         return true;
     }
     return false;

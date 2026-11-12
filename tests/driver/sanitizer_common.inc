@@ -50,12 +50,20 @@ san_cc() {
   fi
 }
 
+# A source-built clang has no default macOS SDK sysroot, so system headers and
+# libSystem would be missing. Point it at the active SDK when one exists.
+SAN_SDK=""
+if [ "$(uname -s)" = Darwin ]; then
+  sdk=$(xcrun --show-sdk-path 2>/dev/null) || sdk=""
+  [ -n "$sdk" ] && SAN_SDK="-isysroot $sdk"
+fi
+
 # san_build_runtime <cc> <san flags> <outdir> — compile the runtime with the
 # sanitizer. Non-zero when a TU does not compile; the caller reports which.
 san_build_runtime() {
   mkdir -p "$3" || return 1
   for s in $SAN_RT_SRCS; do
-    "$1" $2 -O1 -g -fno-omit-frame-pointer -Iruntime \
+    "$1" $2 $SAN_SDK -O1 -g -fno-omit-frame-pointer -Iruntime \
       -DPLI_LLVM_VERSION='"unknown"' -c "runtime/$s.c" \
       -o "$3/$s.o" >"$3/$s.log" 2>&1 || return 1
   done
@@ -72,7 +80,7 @@ san_instrument_ir() {
 # san_compile_program <cc> <san flags> <prog.ll> <prog.o> — compile the marked
 # program IR with the same sanitizer; the link adds the sanitizer runtime.
 san_compile_program() {
-  "$1" $2 -c "$3" -o "$4"
+  "$1" $2 $SAN_SDK -c "$3" -o "$4"
 }
 
 # san_link <cc> <san flags> <program.o> <rtdir> <exe> — link the program
@@ -82,7 +90,7 @@ san_link() {
     Linux) libs="-lpthread -lm -ldl" ;;
     *) libs="-lpthread -lm" ;;
   esac
-  "$1" $2 "$3" "$4"/*.o $libs -o "$5"
+  "$1" $2 $SAN_SDK "$3" "$4"/*.o $libs -o "$5"
 }
 
 # san_missing_runtime <link log> — non-zero when the link failed because this

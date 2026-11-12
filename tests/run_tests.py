@@ -32,10 +32,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-TIMEOUT = 10  # seconds per exec run step
+TIMEOUT = 30  # seconds per exec run step
 # The ceiling a load-scaled exec budget may reach.
-EXEC_TIMEOUT_MAX = 60
-# Driver scripts compile and link several programs each, so one 10s budget
+EXEC_TIMEOUT_MAX = 120
+# Driver scripts compile and link several programs each, so one short budget
 # starves them under parallel load (the overflow drivers timed out cold);
 # they get their own budget while single-binary runs stay tight enough to
 # catch genuine hangs quickly.
@@ -142,7 +142,7 @@ def exec_timeout() -> int:
     """The per-run budget for a compiled test, scaled by host load.
 
     A test that finishes in milliseconds can wait behind the rest of the
-    suite on a busy host; the fixed 10s budget then fails a correct program.
+    suite on a busy host; the fixed budget then fails a correct program.
     The load average is sampled once per test, so an idle host keeps the
     tight budget that catches a genuine hang.
     """

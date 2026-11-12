@@ -27,20 +27,10 @@ case "$(uname -s)" in
 esac
 
 # The clang of the compiler's own LLVM: its sanitizer runtime matches the
-# object, another clang's does not.
-CC=""
-if [ -n "${LLVM_BINDIR:-}" ] && [ -x "$LLVM_BINDIR/clang" ]; then
-  CC="$LLVM_BINDIR/clang"
-elif [ -f build/cmake/CMakeCache.txt ]; then
-  llvm_dir=$(sed -n 's/^LLVM_DIR:[A-Z_]*=//p' build/cmake/CMakeCache.txt | head -1)
-  if [ -n "$llvm_dir" ]; then
-    # <prefix>/lib/cmake/llvm -> <prefix>
-    prefix=$(dirname "$(dirname "$(dirname "$llvm_dir")")")
-    if [ -x "$prefix/bin/clang" ]; then
-      CC="$prefix/bin/clang"
-    fi
-  fi
-fi
+# object, another clang's does not. The shared helper also supplies the macOS
+# SDK sysroot when the clang is a source build without a default one.
+. tests/driver/sanitizer_common.inc
+CC=$(san_cc)
 if [ -z "$CC" ]; then
   echo "SKIP: no clang from the compiler's own LLVM (set LLVM_BINDIR)"
   exit 0
@@ -91,13 +81,13 @@ cat > "$OUT.pli" <<'EOF'
 EOF
 
 $PLI "$OUT.pli" -c -o "$OUT.o" || { echo "FAIL lifetime_asan: compile"; exit 1; }
-"$CC" -fsanitize=address "$OUT.o" -o "$OUT" 2>"$OUT.link.log" || {
+"$CC" $SAN_SDK -fsanitize=address "$OUT.o" -o "$OUT" 2>"$OUT.link.log" || {
    # Skip when the AddressSanitizer runtime is unavailable: the static LLVM
    # stash (ADR-224) ships no libclang_rt.asan* runtime, so the -asan link cannot
    # resolve the runtime dylib/.so. Older clang reported this as "sanitizer
    # runtime ..."; clang/lld 23 report it as a missing libclang_rt.asan* file.
    # Detect both wordings so the test skips instead of failing on a bare toolchain.
-   if grep -qE 'sanitiz|libclang_rt\.asan' "$OUT.link.log"; then
+   if grep -qE 'sanitiz|libclang_rt\.asan|library .System. not found' "$OUT.link.log"; then
       echo "SKIP: no AddressSanitizer runtime in this toolchain"
       exit 0
    fi

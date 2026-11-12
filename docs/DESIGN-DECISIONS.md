@@ -14581,3 +14581,29 @@ cases; `tests/core/bad_format_repeat_nonint.pli` pins the non-integer
 diagnostic; `tests/core/format_repeat_live.pli` covers the variable, nested
 and call-count repeats. GRAMMAR-COVERAGE row (44)-(55) already states this
 rule and needs no change.
+
+---
+
+## ADR-389 — Hidden extents ride only `*` axes; dynamic parameter bounds evaluate at entry
+
+**Context.** Extending `*` parameters to dynamic later axes (row (12),(13),
+`dynamic_later_axis.pli`) initially threaded a hidden i64 for every axis with
+a runtime bound, not just the `*` axis. Caller and callee disagreed about how
+many hidden arguments a parameter carried: `emitCall` pushed one per
+adjustable/dynamic axis while the callee signature was built from a different
+set, and `dyn_param_lower.pli` crashed in `getArg() out of range`. The
+convention also contradicted ADR-117's "one hidden value per `*` extent".
+
+**Decision.** A hidden i64 extent exists only for an `adj` (`*`) axis — one
+per such axis. Axes whose bounds are runtime expressions (dynamic or dynamic
+lower bound) carry no hidden argument; the callee evaluates the declared
+bound expressions once at entry (`recordDynParamUbs`), exactly like a local
+AUTOMATIC array. Multi-entry thunks forward one hidden extent per `*` axis
+and synthesize `undef` only for a union parameter the thunk does not own.
+
+**Consequences.** Caller and callee signatures are built from one rule
+(`isAdjustable` checks `d.adj`), so the crash is gone; `dyn_param_lower.pli`,
+`dynamic_later_axis.pli`, and `dynamic_later_axis2.pli` pin single-axis and
+multi-axis lowering, including forwarding through a thunk. ADR-185's
+"Rejected" note about per-axis hidden extents still holds: `*` stays
+first-axis-only, and later axes remain dynamic-bound, not `*`.

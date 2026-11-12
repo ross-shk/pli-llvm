@@ -85,6 +85,13 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS 23)
   message(FATAL_ERROR "pli requires LLVM 23 or newer (found ${LLVM_PACKAGE_VERSION})")
 endif()
 if(PLI_LLVM_STATIC_PREFIX)
+  # Refuse a malformed value such as -DPLI_LLVM_STATIC_PREFIX=ON: the path is
+  # prepended to the search path below, and silently ignoring it mixes a shared
+  # lld with static LLVM archives (the in-process LTO crash, ADR-268).
+  if(NOT IS_DIRECTORY "${PLI_LLVM_STATIC_PREFIX}")
+    message(FATAL_ERROR "PLI_LLVM_STATIC_PREFIX must name the source-built LLVM install "
+                        "prefix (got '${PLI_LLVM_STATIC_PREFIX}')")
+  endif()
   # The stash pins one LLVM per release; a stale prefix fails loudly here
   # instead of mixing headers/libs across versions.
   file(STRINGS "${CMAKE_SOURCE_DIR}/scripts/llvm_static.pins" _pins_line REGEX "^LLVM_VER=")
@@ -227,11 +234,30 @@ set(LLD_ROOT "" CACHE PATH "Path to lld installation root")
 if(LLD_ROOT)
   list(APPEND CMAKE_PREFIX_PATH ${LLD_ROOT})
 endif()
-find_library(LLD_ELF_LIB NAMES lldELF)
-find_library(LLD_MACHO_LIB NAMES lldMachO)
-find_library(LLD_COFF_LIB NAMES lldCOFF)
-find_library(LLD_MINGW_LIB NAMES lldMinGW)
-find_library(LLD_COMMON_LIB NAMES lldCommon)
+# A static toolchain must find its own static lld archives, not a previously
+# cached shared lld from another prefix (mixing crashes the LTO link).
+if(PLI_LLVM_STATIC_PREFIX)
+  unset(LLD_ELF_LIB CACHE)
+  unset(LLD_MACHO_LIB CACHE)
+  unset(LLD_COFF_LIB CACHE)
+  unset(LLD_MINGW_LIB CACHE)
+  unset(LLD_COMMON_LIB CACHE)
+endif()
+find_library(LLD_ELF_LIB NAMES lldELF
+  HINTS ${PLI_LLVM_STATIC_PREFIX}/lib ${LLVM_LIBRARY_DIRS} ${LLD_DIR}
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/lib)
+find_library(LLD_MACHO_LIB NAMES lldMachO
+  HINTS ${PLI_LLVM_STATIC_PREFIX}/lib ${LLVM_LIBRARY_DIRS} ${LLD_DIR}
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/lib)
+find_library(LLD_COFF_LIB NAMES lldCOFF
+  HINTS ${PLI_LLVM_STATIC_PREFIX}/lib ${LLVM_LIBRARY_DIRS} ${LLD_DIR}
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/lib)
+find_library(LLD_MINGW_LIB NAMES lldMinGW
+  HINTS ${PLI_LLVM_STATIC_PREFIX}/lib ${LLVM_LIBRARY_DIRS} ${LLD_DIR}
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/lib)
+find_library(LLD_COMMON_LIB NAMES lldCommon
+  HINTS ${PLI_LLVM_STATIC_PREFIX}/lib ${LLVM_LIBRARY_DIRS} ${LLD_DIR}
+  PATHS ${LLVM_INCLUDE_DIRS} /opt/homebrew/opt/lld/lib)
 # ADR-225: in-process lld is the ONLY link — every lld driver library is a
 # hard requirement (the old soft gate + clang fallback are gone).
 # ADR-227 adds the MinGW driver (vendored-mingw sysroot links need it).
