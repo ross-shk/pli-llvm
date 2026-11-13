@@ -82,6 +82,30 @@
 
 namespace fs = std::filesystem;
 
+// Target-aware output naming policy (platform-aware outputs, option A):
+// naming follows the effective target triple's object format, not host OS.
+static bool isCOFFTargetTriple(const std::string& triple) {
+  llvm::Triple t(triple.empty() ? llvm::sys::getDefaultTargetTriple() : triple);
+  return t.getObjectFormat() == llvm::Triple::COFF;
+}
+
+static std::string defaultExecutableName(const std::string& triple) {
+  return isCOFFTargetTriple(triple) ? "a.exe" : "a.out";
+}
+
+static std::string normalizeExecutableOutput(const std::string& name, const std::string& triple) {
+  if (!isCOFFTargetTriple(triple))
+    return name;
+  fs::path p(name);
+  if (p.filename().empty() || !p.filename().extension().empty())
+    return name;
+  return (p.string() + ".exe");
+}
+
+static std::string defaultObjectExtension(const std::string& triple) {
+  return isCOFFTargetTriple(triple) ? ".obj" : ".o";
+}
+
 static void usage() {
   std::cout
       << "pli — PL/I compiler (LLVM backend)\n"
@@ -91,10 +115,13 @@ static void usage() {
          "Multiple inputs compile like cc: each file becomes an independent\n"
          "relocatable object and they are linked together with the embedded\n"
          "runtime into one\n"
-         "output (-o names it). -c writes <base>.o per input and does not link.\n"
+          "output (-o names it). -c writes <base>.o per input (or <base>.obj on\n"
+          "Windows/COFF targets) and does not link.\n"
          "\n"
          "options:\n"
-         "  -o <file>        output file (default: a.out, or <base>.ll with -emit-llvm)\n"
+          "  -o <file>        output file (default: a.out on Unix, a.exe on Windows/COFF;\n"
+          "                   or <base>.ll with -emit-llvm). On COFF targets an\n"
+          "                   extensionless -o name gets .exe appended.\n"
          "                   (single input only with -emit-llvm/--print-hir/-fsyntax-only,\n"
          "                   and with -c when more than one input is given)\n"
          "  -c               compile each input to a relocatable object (no linking)\n"
@@ -454,13 +481,13 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
   }
 
   // Object destination, mirroring cc: -c single with -o names the object, -c
-  // without -o writes <base>.o in the cwd; link mode uses an in-memory object
+  // without -o writes <base>.o (or <base>.obj on COFF targets) in the cwd; link mode uses an in-memory object
   // (anonymous fd, no named temp) created after codegen below.
   fs::path objPath;
   if (compileOnly && !output.empty())
     objPath = output;
   else if (compileOnly)
-    objPath = fs::path(base) += ".o";
+    objPath = fs::path(base) += defaultObjectExtension(triple);
 
   // In-process codegen only (no subprocess, ADR-225): owned module ->
   // TargetMachine -> relocatable object, or LTO bitcode with --flto (in-process
@@ -999,10 +1026,12 @@ int main(int argc, char** argv) {
     for (size_t i = foreignObjs.size(); i < objs.size(); ++i)
       pli::closeMemBlob(objs[i]);
   };
-  if (output.empty())
-    output = "a.out";
   if (triple.empty())
     triple = llvm::sys::getDefaultTargetTriple();
+  if (output.empty())
+    output = defaultExecutableName(triple);
+  else
+    output = normalizeExecutableOutput(output, triple);
 
   {
     llvm::Triple llt(triple);

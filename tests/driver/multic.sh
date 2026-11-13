@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-# tests/driver/multic.sh — `pli -c a.pli b.pli` writes <base>.o per input in
+# tests/driver/multic.sh — `pli -c a.pli b.pli` writes <base>.o/.obj per input in
 # the cwd (cc behavior), and rejects -o with multiple inputs. Runs from the
 # gitignored out/ dir so the .o artifacts stay out of the repo; links the two
 # objects to prove they link cleanly.
@@ -31,8 +31,9 @@ case "$(uname -s)" in
     # states. A foreign MinGW would supply a different CRT and the result
     # would not run.
     LINKER=$PLI
+    OBJEXT=.obj
     ;;
-  *) EXE=; MATHLIB=-lm; RTLIBFLAGS=; LINKER=$CC ;;
+  *) EXE=; MATHLIB=-lm; RTLIBFLAGS=; LINKER=$CC; OBJEXT=.o ;;
 esac
 OUT=tests/driver/out/multic
 mkdir -p tests/driver/out
@@ -51,13 +52,13 @@ cat > multic_b.pli <<'EOF'
 EOF
 
 $PLI -c multic_a.pli multic_b.pli || { echo "FAIL multic: -c multi failed"; exit 1; }
-[ -f multic_a.o ] && [ -f multic_b.o ] || { echo "FAIL multic: missing .o outputs"; exit 1; }
+[ -f multic_a$OBJEXT ] && [ -f multic_b$OBJEXT ] || { echo "FAIL multic: missing .o outputs"; exit 1; }
 # -o with multiple inputs must be rejected (cc: "cannot specify -o ...").
 if $PLI -c multic_a.pli multic_b.pli -o x.o 2>/dev/null; then
   echo "FAIL multic: accepted -o with multiple -c inputs"
   exit 1
 fi
 # The merged runtime needs libm on Linux (a no-op on macOS and Windows).
-$LINKER multic_b.o multic_a.o $MATHLIB $RTLIBFLAGS -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
+$LINKER multic_b$OBJEXT multic_a$OBJEXT $MATHLIB $RTLIBFLAGS -o multic$EXE || { echo "FAIL multic: link"; exit 1; }
 ./multic$EXE
 exit 0
