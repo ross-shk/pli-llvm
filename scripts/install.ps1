@@ -63,8 +63,7 @@ if ($Version) {
       -Headers @{ "User-Agent" = "pli-installer" }
     $tag = $latest.tag_name
   } catch {
-    Write-Error "pli installer: failed to resolve latest release: $($_.Exception.Message)"
-    exit 1
+    throw "pli installer: failed to resolve latest release: $($_.Exception.Message)"
   }
 }
 Write-Host "pli installer: release tag = $tag"
@@ -83,10 +82,9 @@ $zipPath = Join-Path $tmpDir $ZIP_NAME
 Write-Host "pli installer: downloading $zipUrl"
 try {
   Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-} catch {
-  Write-Error "pli installer: download failed: $($_.Exception.Message)"
-  exit 1
-}
+  } catch {
+    throw "pli installer: download failed: $($_.Exception.Message)"
+  }
 
 if (-not $SkipVerify) {
   Write-Host "pli installer: verifying sha256 ..."
@@ -94,14 +92,12 @@ if (-not $SkipVerify) {
   try {
     Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath
   } catch {
-    Write-Error "pli installer: could not fetch checksum ($shaUrl). Re-run with -SkipVerify to bypass integrity checking."
-    exit 1
+    throw "pli installer: could not fetch checksum ($shaUrl). Re-run with -SkipVerify to bypass integrity checking."
   }
   $expected = (Get-Content $shaPath -Raw).Trim() -split '\s+' | Select-Object -First 1
   $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($expected.ToLowerInvariant() -ne $actual) {
-    Write-Error "pli installer: sha256 mismatch. Expected $expected, got $actual. The download is corrupt or tampered with."
-    exit 1
+    throw "pli installer: sha256 mismatch. Expected $expected, got $actual. The download is corrupt or tampered with."
   }
   Write-Host "pli installer: sha256 OK"
 }
@@ -115,16 +111,14 @@ if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 try {
   Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-} catch {
-  Write-Error "pli installer: extraction failed: $($_.Exception.Message)"
-  exit 1
-}
+  } catch {
+    throw "pli installer: extraction failed: $($_.Exception.Message)"
+  }
 
 $found = Get-ChildItem -Path $extractDir -Recurse -Filter "pli.exe" -File |
   Select-Object -First 1
 if (-not $found) {
-  Write-Error "pli installer: pli.exe not found inside the archive"
-  exit 1
+  throw "pli installer: pli.exe not found inside the archive"
 }
 
 New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
@@ -160,16 +154,13 @@ if (-not $NoPath) {
 try {
   $ver = & $dst --version
   if ($LASTEXITCODE -ne 0) {
-    Write-Error "pli installer: installed binary failed its --version check (exit $LASTEXITCODE)"
-    exit 1
+    throw "pli installer: installed binary failed its --version check (exit $LASTEXITCODE)"
   }
   foreach ($line in $ver) { Write-Host "  $line" }
 } catch {
-  Write-Error "pli installer: could not run $dst --version: $($_.Exception.Message)"
-  exit 1
+  throw "pli installer: could not run $dst --version: $($_.Exception.Message)"
 }
 
 Write-Host ""
 Write-Host "pli installed to: $dst"
 Write-Host "Open a NEW shell so $DestDir is on PATH, then run: pli --help"
-exit 0
