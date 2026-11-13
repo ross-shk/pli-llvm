@@ -7,7 +7,35 @@ DEFERRED-WORK.md.
 
 ---
 
-## ADR-001 — Implementation language: C++20
+## Topic index
+
+ADRs are grouped by concern below. Each ADR is immutable and cross-referenced by number; see the ADR body for full context. ADRs marked "(ext)" are documented extensions not in TR 25.084.
+
+| Topic | ADRs |
+|-------|------|
+| Language foundations (implementation language, IR levels, storage classes, declarations, character sets, diagnostics, testing, build tooling, rebrand) | 001, 002, 003, 004, 005, 010, 011, 012, 013, 019, 020, 042, 218 |
+| Lexer, parser & preprocessor (%INCLUDE, %REPLACE, %IF, line comments, keyword recognition) | 003, 004, 071, 077, 078, 082, 083, 156 (ext), 157 (ext), 316, 327, 328 |
+| Types — numeric (FIXED DECIMAL/BINARY, FLOAT, scale, overflow, conversion, constants) | 006, 014, 056, 089, 095, 096, 190, 191, 240, 282, 283, 284, 289, 343, 345, 361, 362 |
+| Types — character, string & bit (VARYING, VARYINGZ, CHAR(*), SUBSTR, UNSPEC, BOOL, bit logic) | 007, 141, 142, 144, 151, 152, 153, 154, 155, 160, 161, 168, 169, 194, 196, 198, 200, 201, 205, 206, 207, 208, 245, 246, 314, 377, 378 |
+| Aggregates, arrays & structures (structures, arrays, cross-sections, DEFINED, iSUB, BY NAME, LIKE, INITIAL, UNION/CELL) | 008, 033, 034, 035, 036, 037, 038, 039, 040, 041, 043, 044, 045, 046, 047, 048, 049, 050, 051, 053, 054, 055, 057, 058, 059, 060, 061, 062, 074, 090, 091, 092, 093, 107, 138, 139, 140, 145, 146, 150, 157, 163, 164, 165, 166, 167, 170, 173, 174, 175, 176, 181, 184, 185, 192, 199, 202, 203, 204, 211, 216, 241, 261, 267, 271, 303, 304, 305, 306, 307, 308, 333, 334, 335, 336, 337, 338, 339, 340, 344, 346, 347, 364, 365, 368, 373, 374, 375, 377, 378, 381, 383, 384, 385, 386, 387, 388, 389 |
+| Pointers, BASED & AREA/OFFSET (POINTER, BASED, ALLOCATE/FREE, AREA, OFFSET, locators) | 063, 064, 065, 070, 171, 172, 174, 184, 243, 278, 279, 300, 301, 309, 310, 311, 312, 313, 317, 318, 319, 324, 326, 348, 349, 353, 356, 357, 372 |
+| Storage classes & allocation (CONTROLLED, STATIC, AUTOMATIC, generations, freelist) | 010, 150, 152, 155, 161, 175, 176, 214, 321, 326, 356 |
+| Procedures, ENTRY & parameters (ENTRY, internal procs, static links, parameters, call by ref/value, memory effects, REDUCIBLE) | 021, 022, 023, 024, 025, 026, 027, 072, 075, 094, 171, 215, 264, 268, 302, 335, 351, 359 |
+| Statements & control flow (BEGIN, GO TO, DO, IF, blocks, ABNORMAL/NORMAL) | 015, 023, 172, 308, 354, 372 |
+| Conditions & condition handling (ON, SIGNAL, REVERT, ONCODE, specific conditions, handler stack) | 009, 076, 080, 147, 187, 223, 263, 273, 297, 298, 299, 320, 321, 322, 323, 329, 350, 357, 379 |
+| I/O — list-directed & edit-directed (GET/PUT LIST, EDIT, format items, DISPLAY) | 066, 067, 068, 069, 070, 081, 209, 287, 371, 374, 375, 376, 385, 388 |
+| I/O — record & FILE (OPEN/CLOSE, READ/WRITE/REWRITE/DELETE, keyed/direct, FILE slots) | 068, 181, 285, 286, 291, 292, 342, 355, 367, 380 |
+| PICTURE (picture variables, P edit item, picture parsing, sterling) | 017, 088, 209, 273, 274, 288, 290, 291, 292, 293, 294, 295, 346, 347, 371, 374 |
+| Built-in functions (scalar math, complex, string, enquiries, DATETIME, TRIM/TALLY, etc.) | 072, 073, 074, 084, 085, 086, 087, 107, 148, 149, 186, 193, 195, 197, 199, 248, 260 |
+| Complex numbers | 073, 074, 084, 085, 086, 182 |
+| Multitasking & tasking (TASK, EVENT, fibers, scheduler, FINISH, input broker) | 016, 181, 233, 234, 235, 236, 237, 238, 239, 298, 299, 313, 322, 324, 325, 331, 332, 356 |
+| Diagnostics & error messages | 019, 030, 266 |
+| Testing (golden tests, rule coverage, self-checking, benchmarks) | 020, 031, 262, 280, 315, 329, 330 |
+| Build tooling, driver & linking (clang driver, cmake, sysroot, in-memory link, host CRT, vendored SDK) | 042, 179, 224, 225, 226, 227, 228, 229, 232, 280, 281, 348, 349, 357, 360, 372 |
+| Optimization & codegen (folding, inlining, alias, LTO/PGO, MLIR, vectorization, memory effects) | 158, 179, 180, 212, 213, 214, 215, 216, 217, 240, 241, 242, 243, 244, 245, 246, 252, 253, 254, 257, 260, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 293, 314, 366 |
+| Extensions (IBM Enterprise PL/I, dialect, SUBSET-G) | 156, 157, 168, 169, 193, 195, 197, 199, 230, 231, 364, 387 |
+| Deprecated / renumbered ADRs (duplicate numbers, originally remote) | 192, 194, 202, 203, 204, 232, 278, 279, 259, 369, 381, 382, 383, 384 |
+
 
 **Context.** The compiler must link against LLVM, whose stable API is C++.
 **Decision.** C++20 for the compiler; C11 for the runtime library.

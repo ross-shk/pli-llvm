@@ -214,7 +214,7 @@ Do not re-open these without a new record.
    reason rather than hold the conformance fix behind a flag (ADR-282). The
    sweep found no existing test that relied on storage-width wrapping.
 3. **B7 needs a file-format decision.** Settled: index sidecar + fixed-size binary data file (ADR-367); the decision is written down, so B7 is unblocked.
-4. **B10 needs a corpus ranking that does not exist.** Settled: `scripts/corpus_rank.py` ranks the
+4. **B10 needs a corpus ranking that does not exist.** Settled: `tools/corpus_rank.py` ranks the
    existing corpus by `[TR 25.084 rule (nn)]` citation. Result: rule (41) GENERIC = 0 citations (the
    largest B10 gap), abbreviation rules minor (e.g. (68)=73, (15)=25), 48-char operator rules (116)=2,
    (117)=1, (115/118–122)=0. GENERIC (41) is the highest-impact unserved B10 rule; decision recorded

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-"""scripts/corpus_rank.py
+"""tools/corpus_rank.py
 
 Compile every `tests/**/*.pli` program with `pli -fsyntax-only` and tally the
 emitted diagnostics by their `[TR 25.084 rule (nn)]` citation, printing a
