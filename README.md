@@ -17,7 +17,23 @@ curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$
 
 Windows (x86_64):
 
-The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains `pli.exe` at its top level; extract it to any dir on `PATH`.
+The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains `pli.exe` inside a `windows-x86_64/` folder; extract it to any dir on `PATH`.
+
+Recommended (PowerShell one-liner, downloads the release `install.ps1` and runs it):
+
+```pwsh
+irm https://github.com/ross-shk/pli-llvm/releases/latest/download/install.ps1 | iex
+```
+
+This installs `pli.exe` to `%USERPROFILE%\pli`, verifies the download against the published sha256, and adds `%USERPROFILE%\pli` to your **user** PATH (skipping it if already present). Open a new shell afterwards. Options:
+
+- `-Version <tag>`: install a specific release (e.g. `v0.7.0`) instead of latest
+- `-DestDir <path>`: install elsewhere
+- `-SkipVerify`: skip the sha256 integrity check
+- `-Clean`: remove an existing `pli.exe` before installing
+- `-NoPath`: do not touch your PATH
+
+Manual install:
 
 cmd.exe:
 
@@ -28,11 +44,14 @@ tar -xf pli.zip -C "%USERPROFILE%\pli"
 setx PATH "%PATH%;%USERPROFILE%\pli"
 ```
 
+Note: `tar` extracts `windows-x86_64\pli.exe` into a subfolder; when installing manually, copy `pli.exe` from there to a dir on `PATH`.
+
 PowerShell:
 
 ```pwsh
 Invoke-WebRequest -Uri https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -OutFile pli.zip
 Expand-Archive -Force pli.zip -DestinationPath $env:USERPROFILE\pli
+Get-ChildItem -Path $env:USERPROFILE\pli -Recurse -Filter pli.exe | Move-Item -Destination $env:USERPROFILE\pli\pli.exe -Force
 [Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\pli", [EnvironmentVariableTarget]::User)
 ```
 

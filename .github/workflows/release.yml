@@ -169,6 +169,14 @@ jobs:
           cp build/cmake/pli.exe ${{ matrix.platdir }}/pli.exe
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli.exe
           powershell -NoProfile -Command "Compress-Archive -Path '${{ matrix.platdir }}/pli.exe' -DestinationPath '${{ matrix.asset }}.zip'"
+          # Publish a sha256 for the zip so the one-line install.ps1 flow can
+          # verify it. sha256sum is provided by Git for Windows on the runner;
+          # fall back to PowerShell Get-FileHash if it is not present.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.asset }}.zip > ${{ matrix.asset }}.zip.sha256
+          else
+            powershell -NoProfile -Command "Get-FileHash -Algorithm SHA256 '${{ matrix.asset }}.zip' | ForEach-Object { Write-Output ($_.Hash.ToLowerInvariant() + '  ' + \$_.Path) }" > ${{ matrix.asset }}.zip.sha256
+          fi
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'
@@ -204,6 +212,7 @@ jobs:
           path: |
             ${{ matrix.asset }}.tar.gz
             ${{ matrix.asset }}.zip
+            ${{ matrix.asset }}.zip.sha256
           retention-days: 1
 
   publish:
@@ -212,11 +221,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Check out the tag so we can ship scripts/install.ps1 (the one-line
+      # installer consumed via `irm ... | iex`) alongside the binaries.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
           merge-multiple: true
+
+      - name: Add one-line install script
+        run: |
+          cp scripts/install.ps1 release-artifacts/install.ps1
+          ls -la release-artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
