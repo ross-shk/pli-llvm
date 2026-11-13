@@ -156,6 +156,9 @@ jobs:
           cp build/cmake/pli.stripped ${{ matrix.platdir }}/pli
           sh scripts/bundle_standalone.sh --assert-static ${{ matrix.platdir }}/pli
           tar czf ${{ matrix.asset }}.tar.gz ${{ matrix.platdir }}/pli
+          # Publish a sha256 for the tarball so the one-line install.sh flow can
+          # verify it on Linux/macOS, mirroring the Windows zip checksum.
+          sha256sum ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256
 
       - name: Pack into archives (Windows)
         if: runner.os == 'Windows'
@@ -201,7 +204,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}.tar.gz
+          path: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.tar.gz.sha256
           retention-days: 1
 
       - name: Upload artifact (Windows)
@@ -233,9 +238,10 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: Add one-line install script
+      - name: Add one-line install scripts
         run: |
           cp scripts/install.ps1 release-artifacts/install.ps1
+          cp scripts/install.sh release-artifacts/install.sh
           ls -la release-artifacts
 
       - name: Create Release

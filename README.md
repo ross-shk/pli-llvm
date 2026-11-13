@@ -8,9 +8,24 @@ Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/late
 
 Linux (x86_64 or aarch64) and macOS (Apple Silicon):
 
+Recommended (one-liner, downloads the release `install.sh` and runs it):
+
+```sh
+curl -fsSL https://github.com/ross-shk/pli-llvm/releases/latest/download/install.sh | sh
+```
+
+This detects your OS and architecture, downloads the matching tarball, verifies it against the published sha256, installs `pli` to `~/.pli/bin`, and adds that dir to your `PATH` in `~/.profile` (and `~/.bashrc` / `~/.zshrc` where applicable), skipping it if already present. Open a new shell afterwards. Options:
+
+- `--version <tag>`: install a specific release (e.g. `v0.7.0`) instead of latest
+- `--dir <path>`: install elsewhere
+- `--skip-verify`: skip the sha256 integrity check
+- `--no-path`: do not touch your shell rc files / PATH
+
+Manual install (system-wide):
+
 ```sh
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
-arch=$(uname -m)          
+arch=$(uname -m)
 curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$arch.tar.gz" \
   | tar xzf - && sudo install -m 755 "$os-$arch/pli" /usr/local/bin/pli
 ```
