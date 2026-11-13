@@ -97,6 +97,24 @@ jobs:
           else
             cmake --build build/cmake -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
           fi
+      # Windows-only: the mingw sysroot is the only set compiled at build time
+      # (gs_stubs.o, chkstk.o, ...) then embedded via gen_sysroot_embed.py. A
+      # build-generated file dropped from PLI_SYSROOT_FILES would silently
+      # produce an incomplete embedded set that only fails later at the Test
+      # (user-program link) stage. Assert the generated manifest here, right
+      # after the build, so seam regressions fail fast (scripts/check_sysroot_embed.py).
+      - name: Assert embedded sysroot complete (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Expected set mirrors PLI_SYSROOT_FILES in CMakeLists.txt
+          # (Windows/x86_64: the 16 checked-in mingw files + build-generated
+          # gs_stubs.o). Keep these two lists in sync.
+          python scripts/check_sysroot_embed.py build/cmake/embedded_sysroot.inc \
+            crt2.o crtbegin.o crtend.o fltused.o chkstk.o gs_stubs.o \
+            libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a \
+            libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a \
+            libws2_32.a
+
       - name: Test
         run: |
           # --output-on-failure: ctest captures the runner's stdout, so without
