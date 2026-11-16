@@ -424,6 +424,23 @@ void pli_display_bit(unsigned char b) {
   display_end();
   rt_out_unlock();
 }
+/* DISPLAY of a BIT(n>1) value: print its packed bits (rule 114). */
+void pli_display_bit_string(const char *p, long long len) {
+  rt_out_lock();
+  display_begin();
+  if (len > 0) {
+    long long num_bytes = (len + 7) / 8;
+    for (long long i = 0; i < num_bytes; ++i) {
+      unsigned char byte = (unsigned char)p[i];
+      int bits_in_byte = (i == num_bytes - 1 && (len % 8) != 0) ? (len % 8) : 8;
+      for (int bit = bits_in_byte - 1; bit >= 0; --bit) {
+        rt_put_raw((byte & (1 << bit)) ? "1" : "0", 1);
+      }
+    }
+  }
+  display_end();
+  rt_out_unlock();
+}
 void pli_display_complex(double re, double im) {
   char buf[128];
   int n = pli_snprintf(buf, sizeof buf, "%.6g%+.6gI", re, im);

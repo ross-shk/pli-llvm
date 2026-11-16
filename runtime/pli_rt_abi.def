@@ -54,6 +54,7 @@ PLI_FN(pli_display_fixed, VOID, (I64))
 PLI_FN(pli_display_fixed_scaled, VOID, (I64, I64)) /* scaled binary (ADR-284) */
 PLI_FN(pli_display_float, VOID, (DOUBLE))
 PLI_FN(pli_display_bit, VOID, (I8))
+PLI_FN(pli_display_bit_string, VOID, (CPTR, I64))
 PLI_FN(pli_display_complex, VOID, (DOUBLE, DOUBLE)) /* CM5 (ADR-085) */
 
 /* Edit-directed output (rules (108),(44)-(54)): F(w,d), A(w), and the control

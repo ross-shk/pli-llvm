@@ -7647,8 +7647,17 @@ void IRGen::emitStmt(HStmt* s) {
       deferCall("pli_display_float", {v.reg});
       break;
     case TK::Bit: {
-      llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
-      deferCall("pli_display_bit", {bit});
+      if (v.ty.len == 1) {
+        llvm::Value* bit = b_.CreateZExt(v.reg, b_.getInt8Ty(), "bit");
+        deferCall("pli_display_bit", {bit});
+      } else {
+        // BIT(n>1): v.reg is the packed byte aggregate (i8 array). Store to
+        // an alloca and pass the pointer, mirroring PUT list bit strings.
+        llvm::Type* bitArrTy = llvmTy(v.ty);
+        llvm::Value* bitPtr = entryAlloca(bitArrTy, "bitarr");
+        b_.CreateStore(v.reg, bitPtr);
+        deferCall("pli_display_bit_string", {bitPtr, i64(v.ty.len)});
+      }
       break;
     }
     case TK::FixedBin:

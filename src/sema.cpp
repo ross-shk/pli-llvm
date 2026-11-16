@@ -5034,8 +5034,6 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
     typeExpr(s->value.get(), sc, p);
     if (s->value && (s->value->ty.isArray() || s->value->ty.isStruct()))
       d_.error(s->loc, "DISPLAY takes a scalar value", "(114)");
-    else if (s->value && s->value->ty.isBit() && s->value->ty.len > 1)
-      d_.error(s->loc, "DISPLAY of a BIT(n>1) value is not implemented in this stage", "(114)");
     // DISPLAY ... REPLY ( reference ) (rule 114): the reply line lands in a
     // NONVARYING scalar character variable.
     if (s->replyTarget) {

@@ -1,0 +1,6 @@
+ /* rule (114): DISPLAY of a BIT(n>1) value. */
+ display_bitn: procedure options(main);
+    declare b bit(8);
+    b = '10101010'b;
+    display(b);
+ end display_bitn;
