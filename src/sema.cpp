@@ -3499,11 +3499,28 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
       // (returns from the establishing procedure). No extra restriction here.
       break;
     case Stmt::Leave:
-      d_.error(s->loc, "LEAVE inside an ON-unit is not implemented in this stage", "(91)");
+    case Stmt::Iterate: {
+      // LEAVE/ITERATE as an ON-unit (rule 91): escape from the handler back
+      // to the establishing frame's labeled iterative DO-group's exit block.
+      // IRGen emits the handler escape via the label-based dispatch (ADR-105),
+      // keyed by label; an unlabeled target has no key and cannot be served.
+      const char* what = s->kind == Stmt::Leave ? "LEAVE" : "ITERATE";
+      if (s->name.empty()) {
+        d_.error(s->loc, std::string(what) + " inside an ON-unit must name a "
+                        "loop target (ADR-105)", "(91)");
+        break;
+      }
+      bool found = false;
+      for (auto it = loopStack_.rbegin(); it != loopStack_.rend(); ++it)
+        if (std::find(it->begin(), it->end(), s->name) != it->end()) {
+          found = true;
+          break;
+        }
+      if (!found)
+        d_.error(s->loc, "no enclosing iterative DO-group named '" + s->name +
+                            "' (ADR-105)", "(91)");
       break;
-    case Stmt::Iterate:
-      d_.error(s->loc, "ITERATE inside an ON-unit is not implemented in this stage", "(91)");
-      break;
+    }
     case Stmt::Declare:
       // Declarations in a BEGIN unit are block-locals of that block (rule
       // (68)): sema gave it its own scope, and codegen captures the storage

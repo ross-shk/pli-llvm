@@ -1,0 +1,27 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule 91 + ADR-105: LEAVE inside an ON-unit handler escapes back to the
+    establishing frame's labeled iterative DO-group's exit block. Verified
+    that after the handler's LEAVE, execution resumes at the loop's end. */
+   leave_on_unit_test: procedure options(main);
+      declare i fixed bin(31);
+      declare seen fixed bin(31);
+
+     i = 0;
+     seen = 0;
+     outer: do i = 1 to 5;
+        on condition(x) leave outer;
+        signal condition(x);
+        seen = i;   /* should never run after SIGNAL triggers LEAVE */
+     end;
+     /* After LEAVE outer, i should be 5 (the loop was left on first iter) */
+     if i ^= 1 then do;
+        put skip list('FAIL leave_on_unit: expected i=1 after leave outer, got', i);
+        stop;
+     end;
+     if seen ^= 0 then do;
+        put skip list('FAIL leave_on_unit: body ran after leave outer');
+        stop;
+     end;
+    put skip list('PASS leave_on_unit');
+   end leave_on_unit_test;

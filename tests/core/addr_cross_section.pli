@@ -1,0 +1,58 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (126): ADDR of a cross-section A(i, *) returns the address of the
+    first element of the cross-section (star axes at their lower bound).
+    Verified by write-through: storing through ADDR(cross-section) must
+    update the corresponding element. */
+   addr_cross_section_test: procedure options(main);
+      declare a(3, 4) fixed bin(31);
+      declare p pointer;
+      declare cell fixed bin(31) based(p);
+      declare i fixed bin(31);
+      declare j fixed bin(31);
+
+      /* initialize the array */
+      do i = 1 to 3;
+        do j = 1 to 4;
+          a(i, j) = i * 10 + j;
+        end;
+      end;
+
+      /* ADDR of cross-section A(2, *) is &A(2, 1): write through hits a(2,1) */
+      p = addr(a(2, *));
+      cell = 999;
+      if a(2, 1) ^= 999 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(2,*)) missed a(2,1)');
+         stop;
+      end;
+      if a(2, 2) ^= 22 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(2,*)) corrupted a(2,2)');
+         stop;
+      end;
+
+      /* ADDR of cross-section A(*, 3) is &A(1, 3): write through hits a(1,3) */
+      p = addr(a(*, 3));
+      cell = 888;
+      if a(1, 3) ^= 888 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(*,3)) missed a(1,3)');
+         stop;
+      end;
+      if a(2, 3) ^= 23 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(*,3)) corrupted a(2,3)');
+         stop;
+      end;
+
+      /* ADDR of whole array A(*, *) is &A(1, 1): write through hits a(1,1) */
+      p = addr(a(*, *));
+      cell = 777;
+      if a(1, 1) ^= 777 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(*,*)) missed a(1,1)');
+         stop;
+      end;
+      if a(1, 2) ^= 12 then do;
+         put skip list('FAIL addr_cross_section: ADDR(A(*,*)) corrupted a(1,2)');
+         stop;
+      end;
+
+     put skip list('PASS addr_cross_section');
+   end addr_cross_section_test;

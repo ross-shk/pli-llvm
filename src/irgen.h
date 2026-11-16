@@ -1087,6 +1087,15 @@ private:
   // HProc so emitEscapeGotoBlock can look up the right procedure's labels
   // (curProc_ is the establishing procedure during escape-block emission).
   std::map<HProc*, std::map<std::string, llvm::BasicBlock*>> procLabelBlocks_;
+  // B5: snapshot of each establishing procedure's loop label -> exit/continue
+  // block map, taken before emitOnHandlers clears the working maps. Used by
+  // LEAVE/ITERATE escape from an ON-unit handler back to the establishing
+  // frame's iterative DO-group (rule 91, ADR-105).
+  std::map<HProc*, std::map<std::string, llvm::BasicBlock*>> procLoopExitBlocks_;
+  std::map<HProc*, std::map<std::string, llvm::BasicBlock*>> procLoopContBlocks_;
+  // Working maps, cleared per procedure and populated during DO-loop emission.
+  std::map<std::string, llvm::BasicBlock*> loopExitBlocks_;
+  std::map<std::string, llvm::BasicBlock*> loopContBlocks_;
   // Enclosing iterative groups for LEAVE/ITERATE (extension, ADR-105):
   // labels with the break (end) and continue (re-entry) blocks, innermost last.
   struct LoopTargets {
@@ -1176,8 +1185,16 @@ private:
   // edges to label blocks) in procedures that don't need them, which would
   // otherwise break SSA dominance.
   bool hasHandlerGoto_ = false;
+  // B5: true if any ON-unit in the current procedure contains a LEAVE or
+  // ITERATE statement. Used to avoid creating leave/iterate escape blocks in
+  // procedures that don't need them.
+  bool hasHandlerLeave_ = false;
+  bool hasHandlerIterate_ = false;
   // Scan the procedure body for ON-units that contain a GO TO statement.
   static bool hasHandlerGotoStmt(HStmt* s);
+  // Scan the procedure body for ON-units that contain a LEAVE/ITERATE statement.
+  static bool hasHandlerLeaveStmt(HStmt* s);
+  static bool hasHandlerIterateStmt(HStmt* s);
   // B4: ON-unit RETURN(value)/GO TO non-local exit escape slots. The handler
   // stores escape info in these module-level globals and returns void; the
   // trap/signal dispatch reads the code after the handler returns and branches
@@ -1205,6 +1222,12 @@ private:
   // Fill the goto-label escape block: reset depth, then indirect-br to the
   // target label block.
   void emitEscapeGotoBlock();
+  // Fill the LEAVE escape block: reset depth, then indirect-br to the target
+  // loop's exit block (selected by escapeLabelIdxGlobal).
+  void emitEscapeLeaveBlock();
+  // Fill the ITERATE escape block: reset depth, then indirect-br to the
+  // target loop's continue block (selected by escapeLabelIdxGlobal).
+  void emitEscapeIterateBlock();
   // Per-procedure tracking for implicit ALLOCATE of CONTROLLED variables
   // (IBM Enterprise PL/I): one bit per symbol prevents duplicate pushes.
   std::unordered_set<Symbol*> ctlImplicitAlloc_;

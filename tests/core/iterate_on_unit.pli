@@ -1,0 +1,26 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule 91 + ADR-105: ITERATE inside an ON-unit handler escapes back to the
+    establishing frame's labeled iterative DO-group's continue block. Verified
+    that after the handler's ITERATE, execution re-tests the condition. */
+   iterate_on_unit_test: procedure options(main);
+      declare i fixed bin(31);
+      declare count fixed bin(31);
+
+     i = 0;
+     count = 0;
+     inner: do i = 1 to 3;
+        on condition(y) iterate inner;
+        count = count + 1;
+        signal condition(y);
+        /* the body below should never run since ITERATE re-tests the cond */
+        count = count + 100;
+     end;
+     /* Each iteration signals y, ITERATEs, re-tests. Loop runs 3 times,
+        count increments once per iteration. */
+     if count ^= 3 then do;
+        put skip list('FAIL iterate_on_unit: expected count=3, got', count);
+        stop;
+     end;
+    put skip list('PASS iterate_on_unit');
+   end iterate_on_unit_test;

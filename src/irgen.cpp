@@ -3835,11 +3835,11 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
     return;
   }
   b_.CreateCall(dispatch, {});
-  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
-  // code is non-zero; branch to the escape block instead of resuming at okBB.
-  // Only create escape blocks when the procedure can return a value or has a
-  // handler with GO TO; otherwise the extra CFG edges break SSA dominance.
-  if (curProc_->isFunction || hasHandlerGoto_)
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO/LEAVE/ITERATE),
+  // the escape code is non-zero; branch to the escape block instead of resuming
+  // at okBB. Only create escape blocks when needed; otherwise the extra CFG
+  // edges break SSA dominance.
+  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_)
     emitEscapeCheck(okBB);
   else
     b_.CreateBr(okBB);
@@ -6296,12 +6296,19 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   for (Symbol* sym : sema_.storage())
     if (sym && sym->controlled && sym->ctlDirect && sym->owner == p->src)
       ctlAnchorSlot(sym);
+  // Clear per-procedure loop escape maps before body emission populates them.
+  loopExitBlocks_.clear();
+  loopContBlocks_.clear();
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
   // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks,
   // which are created during statement emission (before emitOnHandlers runs).
   procLabelBlocks_[p] = labelBlocks_;
+  // B5: snapshot this procedure's loop exit/continue maps for ON-unit
+  // LEAVE/ITERATE escape blocks.
+  procLoopExitBlocks_[p] = loopExitBlocks_;
+  procLoopContBlocks_[p] = loopContBlocks_;
   // B4: check if any ON-unit in this procedure contains a GO TO statement; if
   // not, skip creating goto escape blocks (their CFG edges to label blocks
   // would break SSA dominance).
@@ -6309,6 +6316,18 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   for (auto& st : p->body)
     if (hasHandlerGotoStmt(st.get())) {
       hasHandlerGoto_ = true;
+      break;
+    }
+  hasHandlerLeave_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerLeaveStmt(st.get())) {
+      hasHandlerLeave_ = true;
+      break;
+    }
+  hasHandlerIterate_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerIterateStmt(st.get())) {
+      hasHandlerIterate_ = true;
       break;
     }
 
@@ -6441,13 +6460,32 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   std::vector<int> beginChain;
   for (auto& st : p->body)
     collectGotoBlocks(st.get(), beginChain);
+  // Clear per-procedure loop escape maps before body emission populates them.
+  loopExitBlocks_.clear();
+  loopContBlocks_.clear();
   // B4: snapshot this procedure's label map for ON-unit GO TO escape blocks.
   procLabelBlocks_[p] = labelBlocks_;
+  // B5: snapshot this procedure's loop exit/continue maps for ON-unit
+  // LEAVE/ITERATE escape blocks.
+  procLoopExitBlocks_[p] = loopExitBlocks_;
+  procLoopContBlocks_[p] = loopContBlocks_;
   // B4: check if any ON-unit in this procedure contains a GO TO statement.
   hasHandlerGoto_ = false;
   for (auto& st : p->body)
     if (hasHandlerGotoStmt(st.get())) {
       hasHandlerGoto_ = true;
+      break;
+    }
+  hasHandlerLeave_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerLeaveStmt(st.get())) {
+      hasHandlerLeave_ = true;
+      break;
+    }
+  hasHandlerIterate_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerIterateStmt(st.get())) {
+      hasHandlerIterate_ = true;
       break;
     }
 
@@ -6664,6 +6702,81 @@ bool IRGen::hasHandlerGotoStmt(HStmt* s) {
   return false;
 }
 
+// B5: scan for any LEAVE or ITERATE statement in a statement tree.
+static bool hasLeaveStmt(HStmt* s);
+static bool hasIterateStmt(HStmt* s);
+
+bool IRGen::hasHandlerLeaveStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::On && !s->isSystem && s->unit)
+    if (hasLeaveStmt(s->unit.get()))
+      return true;
+  if (s->thenS && hasHandlerLeaveStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasHandlerLeaveStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasHandlerLeaveStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasHandlerLeaveStmt(b.get()))
+      return true;
+  return false;
+}
+
+bool IRGen::hasHandlerIterateStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::On && !s->isSystem && s->unit)
+    if (hasIterateStmt(s->unit.get()))
+      return true;
+  if (s->thenS && hasHandlerIterateStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasHandlerIterateStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasHandlerIterateStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasHandlerIterateStmt(b.get()))
+      return true;
+  return false;
+}
+
+// B5: scan for any LEAVE or ITERATE statement in a statement tree.
+static bool hasLeaveStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Leave)
+    return true;
+  if (s->thenS && hasLeaveStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasLeaveStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasLeaveStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasLeaveStmt(b.get()))
+      return true;
+  return false;
+}
+
+static bool hasIterateStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Iterate)
+    return true;
+  if (s->thenS && hasIterateStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasIterateStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasIterateStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasIterateStmt(b.get()))
+      return true;
+  return false;
+}
+
 // B4: scan for any GO TO statement in a statement tree.
 static bool hasGotoStmt(HStmt* s) {
   if (!s)
@@ -6803,6 +6916,8 @@ void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
   // Switch on the escape code; default is unreachable (should not happen).
   llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
   unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+  numCases += hasHandlerLeave_ ? 1 : 0;
+  numCases += hasHandlerIterate_ ? 1 : 0;
   llvm::SwitchInst* sw = b_.CreateSwitch(esc, badBB, numCases);
   llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
   sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
@@ -6811,6 +6926,18 @@ void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
     sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
     b_.SetInsertPoint(gotoBB);
     emitEscapeGotoBlock();
+  }
+  if (hasHandlerLeave_) {
+    llvm::BasicBlock* leaveBB = llvm::BasicBlock::Create(ctx_, "on.escape.leave", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(3)), leaveBB);
+    b_.SetInsertPoint(leaveBB);
+    emitEscapeLeaveBlock();
+  }
+  if (hasHandlerIterate_) {
+    llvm::BasicBlock* itBB = llvm::BasicBlock::Create(ctx_, "on.escape.iterate", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(4)), itBB);
+    b_.SetInsertPoint(itBB);
+    emitEscapeIterateBlock();
   }
   b_.SetInsertPoint(badBB);
   b_.CreateUnreachable();
@@ -6943,6 +7070,72 @@ void IRGen::emitEscapeGotoBlock() {
     ib->addDestination(d);
 }
 
+// B5: LEAVE escape block: indirect branch to the target loop's exit block,
+// selected by the dense label index stored in escapeLabelIdxGlobal().
+void IRGen::emitEscapeLeaveBlock() {
+  // Restore the handler's own depth (the unit was a block activation).
+  if (curOnUnitDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
+  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(), "esc.idx");
+  llvm::Value* idx64 = b_.CreateZExt(idx, b_.getInt64Ty(), "esc.idx64");
+  // Build targets in the same label order used to compute escapeLabelIdxGlobal
+  // (procLabelBlocks_), looking each label up in the live loop-exit map.
+  std::vector<llvm::BasicBlock*> dests;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls) {
+    auto it = loopExitBlocks_.find(kv.first);
+    if (it != loopExitBlocks_.end())
+      dests.push_back(it->second);
+  }
+  if (dests.empty()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* target = llvm::ConstantPointerNull::get(b_.getPtrTy());
+  for (size_t i = 0; i < dests.size(); ++i) {
+    llvm::Value* addr = llvm::BlockAddress::get(curFn_, dests[i]);
+    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"), addr, target,
+                             "esc.addr");
+  }
+  auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
+  for (llvm::BasicBlock* d : dests)
+    ib->addDestination(d);
+}
+
+// B5: ITERATE escape block: indirect branch to the target loop's continue
+// block, selected by the dense label index stored in escapeLabelIdxGlobal().
+void IRGen::emitEscapeIterateBlock() {
+  // Restore the handler's own depth (the unit was a block activation).
+  if (curOnUnitDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
+  llvm::Value* idx = b_.CreateLoad(b_.getInt32Ty(), escapeLabelIdxGlobal(), "esc.idx");
+  llvm::Value* idx64 = b_.CreateZExt(idx, b_.getInt64Ty(), "esc.idx64");
+  // Build targets in the same label order used to compute escapeLabelIdxGlobal
+  // (procLabelBlocks_), looking each label up in the live loop-continue map.
+  std::vector<llvm::BasicBlock*> dests;
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls) {
+    auto it = loopContBlocks_.find(kv.first);
+    if (it != loopContBlocks_.end())
+      dests.push_back(it->second);
+  }
+  if (dests.empty()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  llvm::Value* target = llvm::ConstantPointerNull::get(b_.getPtrTy());
+  for (size_t i = 0; i < dests.size(); ++i) {
+    llvm::Value* addr = llvm::BlockAddress::get(curFn_, dests[i]);
+    target = b_.CreateSelect(b_.CreateICmpEQ(idx64, i64((long long)i), "esc.sel"), addr, target,
+                             "esc.addr");
+  }
+  auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
+  for (llvm::BasicBlock* d : dests)
+    ib->addDestination(d);
+}
+
 void IRGen::declareOnHandlers(HProgram& prog) {
   std::map<std::pair<int, int>, HStmt*> byId;
   for (auto& p : prog.procs)
@@ -7012,6 +7205,8 @@ void IRGen::emitOnHandlers(HProgram& prog) {
       stmtBlocks_.clear();
       onScopes_.clear();
       symAddr_.clear();
+      loopExitBlocks_.clear();
+      loopContBlocks_.clear();
       ctlImplicitAlloc_.clear(); // a handler allocates/frees nothing implicitly
       ctlAddrHoist_.clear();
       ctlLenHoist_.clear();
@@ -7172,10 +7367,10 @@ void IRGen::emitSignal(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_set_oncode"), {i32(1)});
   llvm::FunctionType* hft = llvm::FunctionType::get(b_.getVoidTy(), {b_.getPtrTy()}, false);
   b_.CreateCall(hft, fn, {ctx});
-  // B4: if the handler did a non-local exit (RETURN(value)/GO TO), the escape
-  // code is non-zero; branch to the escape block instead of the normal resume
-  // path. Only create escape blocks when needed to avoid extraneous CFG edges.
-  if (curProc_->isFunction || hasHandlerGoto_) {
+  // B4: if the handler did a non-local exit (RETURN(value)/GO TO/LEAVE/ITERATE),
+  // the escape code is non-zero; branch to the escape block instead of the normal
+  // resume path. Only create escape blocks when needed to avoid extraneous CFG edges.
+  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_) {
     llvm::Value* escCode = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc.code");
     llvm::Value* escNone = b_.CreateICmpEQ(escCode, i32(0), "esc.none");
     llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
@@ -7193,7 +7388,10 @@ void IRGen::emitSignal(HStmt* s) {
     // Escape block: switch on the code and fill the return/goto targets.
     b_.SetInsertPoint(escBB);
     llvm::BasicBlock* badBB = llvm::BasicBlock::Create(ctx_, "on.escape.bad", curFn_);
-    unsigned numCases = hasHandlerGoto_ ? 2 : 1;
+    unsigned numCases = 1;
+    numCases += hasHandlerGoto_ ? 1 : 0;
+    numCases += hasHandlerLeave_ ? 1 : 0;
+    numCases += hasHandlerIterate_ ? 1 : 0;
     llvm::SwitchInst* sw = b_.CreateSwitch(escCode, badBB, numCases);
     llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
     sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
@@ -7202,6 +7400,18 @@ void IRGen::emitSignal(HStmt* s) {
       sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
       b_.SetInsertPoint(gotoBB);
       emitEscapeGotoBlock();
+    }
+    if (hasHandlerLeave_) {
+      llvm::BasicBlock* leaveBB = llvm::BasicBlock::Create(ctx_, "on.escape.leave", curFn_);
+      sw->addCase(llvm::cast<llvm::ConstantInt>(i32(3)), leaveBB);
+      b_.SetInsertPoint(leaveBB);
+      emitEscapeLeaveBlock();
+    }
+    if (hasHandlerIterate_) {
+      llvm::BasicBlock* itBB = llvm::BasicBlock::Create(ctx_, "on.escape.iterate", curFn_);
+      sw->addCase(llvm::cast<llvm::ConstantInt>(i32(4)), itBB);
+      b_.SetInsertPoint(itBB);
+      emitEscapeIterateBlock();
     }
     b_.SetInsertPoint(badBB);
     b_.CreateUnreachable();
@@ -7655,6 +7865,36 @@ void IRGen::emitStmt(HStmt* s) {
     // Extension (ADR-105): branch to the enclosing iterative group's end
     // (LEAVE) or re-entry (ITERATE: condition for WHILE, step for DO-loop).
     // Sema validated the target, so it is always present here.
+    if (inHandler_) {
+      // Escape from the ON-unit handler back to the establishing frame's
+      // iterative DO-group. Store the target label index and escape code,
+      // then return void from the handler; the dispatch branches to the
+      // loop's exit (LEAVE) or continue (ITERATE) block.
+      if (s->name.empty()) {
+        // Unlabeled LEAVE/ITERATE inside an ON-unit: the innermost loop's
+        // label isn't available to the handler, so it stays diagnosed.
+        d_.error(s->loc, "unlabeled LEAVE/ITERATE inside an ON-unit is not implemented in this stage",
+                 "(91)");
+        b_.CreateRetVoid();
+        break;
+      }
+      int idx = 0;
+      auto& lbls = procLabelBlocks_[curProc_];
+      bool found = false;
+      for (auto& kv : lbls) {
+        if (kv.first == s->name) {
+          b_.CreateStore(i32(idx), escapeLabelIdxGlobal());
+          b_.CreateStore(i32(s->kind == HStmt::Leave ? 3 : 4), escapeCodeGlobal());
+          found = true;
+          break;
+        }
+        ++idx;
+      }
+      if (!found)
+        d_.error(s->loc, "LEAVE/ITERATE target label not found in this procedure", "(91)");
+      b_.CreateRetVoid();
+      break;
+    }
     const LoopTargets* t = nullptr;
     for (auto it = loopStack_.rbegin(); it != loopStack_.rend(); ++it)
       if (s->name.empty() ||
@@ -10047,6 +10287,10 @@ void IRGen::emitDoWhile(HStmt* s) {
     branch(bodyL);
     startBlock(bodyL);
     loopStack_.push_back({s->labels, endL, bodyL});
+    for (const auto& l : s->labels) {
+      loopExitBlocks_[l] = endL;
+      loopContBlocks_[l] = bodyL;
+    }
     for (auto& b : s->body)
       emitStmt(b.get());
     loopStack_.pop_back();
@@ -10076,6 +10320,10 @@ void IRGen::emitDoWhile(HStmt* s) {
     branch(bodyL);
     startBlock(bodyL);
     loopStack_.push_back({s->labels, endL, condL});
+    for (const auto& l : s->labels) {
+      loopExitBlocks_[l] = endL;
+      loopContBlocks_[l] = condL;
+    }
     for (auto& b : s->body)
       emitStmt(b.get());
     loopStack_.pop_back();
@@ -10093,6 +10341,10 @@ void IRGen::emitDoWhile(HStmt* s) {
   b_.CreateCondBr(toI1(c, s->loc), bodyL, endL);
   startBlock(bodyL);
   loopStack_.push_back({s->labels, endL, condL});
+  for (const auto& l : s->labels) {
+    loopExitBlocks_[l] = endL;
+    loopContBlocks_[l] = condL;
+  }
   for (auto& b : s->body)
     emitStmt(b.get());
   loopStack_.pop_back();
@@ -10260,6 +10512,10 @@ void IRGen::emitDoIter(HStmt* s) {
     nonNegDoIndices_.insert(ctl);
   startBlock(bodyL);
   loopStack_.push_back({s->labels, endL, stepL});
+  for (const auto& l : s->labels) {
+    loopExitBlocks_[l] = endL;
+    loopContBlocks_[l] = stepL;
+  }
   for (auto& b : s->body)
     emitStmt(b.get());
   loopStack_.pop_back();

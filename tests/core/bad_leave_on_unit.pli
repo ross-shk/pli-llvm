@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule 91 + ADR-105: unlabeled LEAVE inside an ON-unit stays diagnosed. */
+   bad_leave_on_unit: procedure options(main);
+      declare i fixed bin(31);
+      do i = 1 to 5;
+         on condition(z) leave;   /* unlabeled LEAVE inside ON-unit */
+         signal condition(z);
+      end;
+   end bad_leave_on_unit;

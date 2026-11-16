@@ -1,0 +1,31 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* rule (86): multiple assignment to whole arrays — the RHS is evaluated
+      once into a temp, then copied to every same-shaped whole-array target. */
+   multiassign_whole_array_test: procedure options(main);
+      declare a(3) fixed bin(31);
+      declare b(3) fixed bin(31);
+      declare c(3) fixed bin(31);
+      declare i fixed bin(31);
+
+      /* scalar RHS broadcast into each whole-array target */
+      a, b = 7;
+      do i = 1 to 3;
+         if a(i) ^= 7 or b(i) ^= 7 then do;
+            put skip list('FAIL multiassign_whole_array: scalar broadcast at', i);
+            stop;
+         end;
+      end;
+
+      /* array-valued RHS copied once into each whole-array target */
+      c(1) = 1; c(2) = 2; c(3) = 3;
+      a, b = c;
+      do i = 1 to 3;
+         if a(i) ^= i or b(i) ^= i then do;
+            put skip list('FAIL multiassign_whole_array: array copy at', i);
+            stop;
+         end;
+      end;
+
+     put skip list('PASS multiassign_whole_array');
+   end multiassign_whole_array_test;
