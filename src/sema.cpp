@@ -5203,6 +5203,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "IGNORE is valid only on READ", "(113)");
     if (s->setTarget)
       d_.error(s->loc, "SET is valid only on READ or LOCATE", "(113)");
+    if ((s->fileSym->openKeyed || s->fileSym->openDirect) &&
+        !s->keyOpt && !s->keyFromOpt)
+      d_.error(s->loc, "KEY or KEYFROM required on a KEYED or DIRECT file", "(113)");
     break;
   }
   case Stmt::Delete: {
@@ -5254,6 +5257,9 @@ void Sema::checkStmt(Stmt* s, Scope* sc, Proc* p) {
       d_.error(s->loc, "IGNORE is valid only on READ", "(113)");
     if (s->setTarget)
       d_.error(s->loc, "SET is valid only on READ or LOCATE", "(113)");
+    if ((s->fileSym->openKeyed || s->fileSym->openDirect) &&
+        !s->keyOpt && !s->keyFromOpt)
+      d_.error(s->loc, "KEY or KEYFROM required on a KEYED or DIRECT file", "(113)");
     break;
   }
   case Stmt::Allocate:

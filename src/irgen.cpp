@@ -10051,6 +10051,10 @@ void IRGen::emitRecordReadKeyed(HStmt* s) {
 void IRGen::emitRecordRewriteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
+  HExpr* keyExpr = s->keyOpt ? s->keyOpt.get() : s->keyFromOpt.get();
+  if (!keyExpr)
+    return;
+
   // EVENT(ev): reset before the operation.
   llvm::Value* eventAddr =
       s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
@@ -10058,7 +10062,7 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
   Val v = emitExpr(s->value.get());
-  Val k = emitExpr(s->keyFromOpt.get());
+  Val k = emitExpr(keyExpr);
   switch (v.ty.k) {
   case TK::FixedBin:
   case TK::FixedDec:
@@ -10093,13 +10097,17 @@ void IRGen::emitRecordRewriteKeyed(HStmt* s) {
 void IRGen::emitRecordDeleteKeyed(HStmt* s) {
   llvm::Value* slot = fileSlotValue(s->fileSym);
 
+  HExpr* keyExpr = s->keyOpt ? s->keyOpt.get() : s->keyFromOpt.get();
+  if (!keyExpr)
+    return;
+
   // EVENT(ev): reset before the operation.
   llvm::Value* eventAddr =
       s->recordEventTarget ? taskEventAddr(s->recordEventTarget.get(), s->loc) : nullptr;
   if (eventAddr)
     b_.CreateCall(runtimeFn("pli_event_reset"), {eventAddr});
 
-  Val k = emitExpr(s->keyFromOpt.get());
+  Val k = emitExpr(keyExpr);
   b_.CreateCall(runtimeFn("pli_record_delete_keyed"), {slot, k.ptr, k.len});
 
   // EVENT(ev): complete after the operation.

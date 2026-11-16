@@ -1,0 +1,45 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* rule (112): standalone sequential DELETE - remove the current record. */
+ record_delete: procedure options(main);
+    declare f file;
+    declare rec fixed binary(31);
+    declare i fixed binary(31);
+
+    open file(f) record sequential output
+       title('tests/core/out/record_delete.dat');
+    do i = 1 to 3;
+       write file(f) from(i);
+    end;
+    close file(f);
+
+    open file(f) record sequential update
+       title('tests/core/out/record_delete.dat');
+    read file(f) into(rec);          /* current record = 1 */
+    if rec ^= 1 then do;
+       put skip list('FAIL read1 got', rec);
+       stop;
+    end;
+    delete file(f);                  /* remove record 1 */
+    read file(f) into(rec);          /* record 2 */
+    if rec ^= 2 then do;
+       put skip list('FAIL after delete got', rec);
+       stop;
+    end;
+    close file(f);
+
+    open file(f) record sequential input
+       title('tests/core/out/record_delete.dat');
+    read file(f) into(rec);
+    if rec ^= 2 then do;
+       put skip list('FAIL first got', rec);
+       stop;
+    end;
+    read file(f) into(rec);
+    if rec ^= 3 then do;
+       put skip list('FAIL second got', rec);
+       stop;
+    end;
+    close file(f);
+    put skip list('PASS record_delete');
+ end record_delete;
