@@ -1,0 +1,18 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* rule (91): indirect GO TO (label variable) inside an ON-unit. */
+ on_goto_indirect: procedure options(main);
+   declare lab label;
+   declare i fixed bin(31) init(0);
+   lab = fin;
+   on zerodivide begin;
+      put skip list('handler fired');
+      i = 1;
+      go to (lab);
+   end;
+   declare z fixed bin(31);
+   z = 5 / 0;
+   put skip list('should not print');
+fin:
+   put skip list('i=', i);
+   put skip list('PASS on_goto_indirect');
+ end on_goto_indirect;

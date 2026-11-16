@@ -1190,8 +1190,15 @@ private:
   // procedures that don't need them.
   bool hasHandlerLeave_ = false;
   bool hasHandlerIterate_ = false;
+  // B4: true if any ON-unit in the current procedure contains an indirect
+  // GO TO (label-variable) statement. Used to create the indirect-goto escape
+  // block in procedures that need it.
+  bool hasHandlerIndirectGoto_ = false;
   // Scan the procedure body for ON-units that contain a GO TO statement.
   static bool hasHandlerGotoStmt(HStmt* s);
+  // Scan the procedure body for ON-units that contain an indirect GO TO
+  // (label-variable) statement.
+  static bool hasHandlerIndirectGotoStmt(HStmt* s);
   // Scan the procedure body for ON-units that contain a LEAVE/ITERATE statement.
   static bool hasHandlerLeaveStmt(HStmt* s);
   static bool hasHandlerIterateStmt(HStmt* s);
@@ -1200,7 +1207,7 @@ private:
   // trap/signal dispatch reads the code after the handler returns and branches
   // to the return-with-value or goto-label target in the establishing
   // procedure.
-  llvm::GlobalVariable* escapeCodeGlobal(); // @onEscapeCode (i32): 0=none,1=return,2=goto
+  llvm::GlobalVariable* escapeCodeGlobal(); // @onEscapeCode (i32): 0=none,1=return,2=goto,5=indirect goto
   llvm::GlobalVariable*
   escapeRetKindGlobal(); // @onEscapeRetKind (i32): 0=i64,1=double,2=struct,3=char
   llvm::GlobalVariable* escapeRetI64Global();   // @onEscapeRetI64 (i64)
@@ -1208,6 +1215,7 @@ private:
   llvm::GlobalVariable* escapeRetBufGlobal();   // @onEscapeRetBuf ([4096 x i8])
   llvm::GlobalVariable* escapeRetSizeGlobal();  // @onEscapeRetSize (i64)
   llvm::GlobalVariable* escapeLabelIdxGlobal(); // @onEscapeLabelIdx (i32)
+  llvm::GlobalVariable* escapeLabelAddrGlobal(); // @onEscapeLabelAddr (i64): runtime label address for indirect goto
   // Emit escape code inside a handler unit: RETURN(value) stores the converted
   // value in the escape globals and returns void from the handler.
   void emitEscapeReturn(Val v);
@@ -1222,6 +1230,9 @@ private:
   // Fill the goto-label escape block: reset depth, then indirect-br to the
   // target label block.
   void emitEscapeGotoBlock();
+  // Fill the indirect goto-label escape block: reset depth, then indirect-br
+  // to the runtime label address stored in escapeLabelAddrGlobal().
+  void emitEscapeGotoIndirectBlock();
   // Fill the LEAVE escape block: reset depth, then indirect-br to the target
   // loop's exit block (selected by escapeLabelIdxGlobal).
   void emitEscapeLeaveBlock();

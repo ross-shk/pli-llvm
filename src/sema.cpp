@@ -2079,14 +2079,14 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
         // TASK/EVENT names (rules (15),(79),(82), QR2.8): scalars or
         // constant-bound arrays of handles; dynamic extents, INITIAL/VALUE,
         // LIKE/DEFINED/BASED stay diagnosed.
-        if (item.ty.isTask() || item.ty.isEvent()) {
-          const char* what = item.ty.isTask() ? "TASK" : "EVENT";
-          if (item.ty.isDynamic())
-            d_.error(item.loc,
-                     std::string("dynamic ") + what +
-                         " array bounds are not implemented in this stage",
-                     "(15)");
-          if (item.init || !item.initItems.empty() || item.initCall || item.valueInit)
+         if (item.ty.isTask() || item.ty.isEvent()) {
+           const char* what = item.ty.isTask() ? "TASK" : "EVENT";
+           if (item.ty.isTask() && item.ty.isDynamic())
+             d_.error(item.loc,
+                      std::string("dynamic ") + what +
+                          " array bounds are not implemented in this stage",
+                      "(15)");
+           if (item.init || !item.initItems.empty() || item.initCall || item.valueInit)
             d_.error(item.loc,
                      std::string("INITIAL/VALUE on a ") + what +
                          " variable is not implemented in this stage",
@@ -3539,11 +3539,14 @@ void Sema::checkOnUnit(Stmt* on, Proc* p) {
     case Stmt::Entry:
       d_.error(s->loc, "ENTRY inside an ON-unit is not implemented in this stage", "(91)");
       break;
-    case Stmt::Goto:
-      // GO TO target validation happens in checkStmt; an ON-unit may GO TO a
-      // label in the same procedure (rule 77). Non-local GO TO to an enclosing
-      // procedure remains M4/M5 and is rejected by the label-resolution above.
-      break;
+     case Stmt::Goto:
+       // Capture any LABEL variable the indirect GO TO reads (rule 77).
+       if (s->gotoTarget)
+         checkExpr(s->gotoTarget.get());
+       // GO TO target validation happens in checkStmt; an ON-unit may GO TO a
+       // label in the same procedure (rule 77). Non-local GO TO to an enclosing
+       // procedure remains M4/M5 and is rejected by the label-resolution above.
+       break;
     case Stmt::DoIter:
       // The control variable lives in the establishing frame.
       if (s->sym && s->sym->owner)

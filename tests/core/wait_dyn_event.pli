@@ -1,0 +1,12 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* rule (82): WAIT over a dynamic EVENT array. */
+ wait_dyn_event: procedure options(main);
+   call check(4);
+   put skip list('PASS wait_dyn_event');
+   check: procedure(n);
+      declare n fixed bin(31);
+      declare e(n) event;
+      wait(e);
+      put skip list('PASS wait_dyn_event inner', n);
+   end check;
+ end wait_dyn_event;

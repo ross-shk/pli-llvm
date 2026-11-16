@@ -3839,7 +3839,8 @@ void IRGen::emitCondTrap(int key, const std::string& abortFn, llvm::BasicBlock* 
   // the escape code is non-zero; branch to the escape block instead of resuming
   // at okBB. Only create escape blocks when needed; otherwise the extra CFG
   // edges break SSA dominance.
-  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_)
+  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_ ||
+      hasHandlerIndirectGoto_)
     emitEscapeCheck(okBB);
   else
     b_.CreateBr(okBB);
@@ -5153,6 +5154,25 @@ void IRGen::allocaLocals(HProc* p) {
     symAddr_[s] = buf;
     dynUb_[s] = std::move(ubs);
     dynLb_[s] = std::move(lbs);
+    // A dynamic EVENT array starts complete (1) per element (rule (79)):
+    // initialize the runtime-sized buffer at entry, since pass 1 only
+    // covers constant-bound arrays.
+    if (el.isEvent()) {
+      llvm::Function* F = b_.GetInsertBlock()->getParent();
+      llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "evinit.loop", F);
+      llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "evinit.done", F);
+      b_.CreateCondBr(b_.CreateICmpEQ(extent, i64(0), "evinit.empty"), doneBB, loopBB);
+      llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+      startBlock(loopBB);
+      llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "evinit.i");
+      iPhi->addIncoming(i64(0), preLoopBB);
+      llvm::Value* ep = b_.CreateGEP(llvmTy(el), buf, {iPhi}, "evinit.ep");
+      b_.CreateStore(i32(1), ep);
+      llvm::Value* iNext = b_.CreateAdd(iPhi, i64(1), "evinit.next");
+      iPhi->addIncoming(iNext, loopBB);
+      b_.CreateCondBr(b_.CreateICmpULT(iNext, extent, "evinit.more"), loopBB, doneBB);
+      startBlock(doneBB);
+    }
   }
   // Pass 2b: BASED overlays with runtime bounds (rules (13),(25)). The
   // bound expressions are evaluated at entry into the dope slots, exactly
@@ -6330,6 +6350,12 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
       hasHandlerIterate_ = true;
       break;
     }
+  hasHandlerIndirectGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerIndirectGotoStmt(st.get())) {
+      hasHandlerIndirectGoto_ = true;
+      break;
+    }
 
   // Parameter arguments become their symbols' addresses (PL/I by reference);
   // each `*`-extent parameter (rule 13) then reads its hidden i64 extent into a
@@ -6486,6 +6512,12 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
   for (auto& st : p->body)
     if (hasHandlerIterateStmt(st.get())) {
       hasHandlerIterate_ = true;
+      break;
+    }
+  hasHandlerIndirectGoto_ = false;
+  for (auto& st : p->body)
+    if (hasHandlerIndirectGotoStmt(st.get())) {
+      hasHandlerIndirectGoto_ = true;
       break;
     }
 
@@ -6742,6 +6774,42 @@ bool IRGen::hasHandlerIterateStmt(HStmt* s) {
   return false;
 }
 
+// B4: scan for any indirect GO TO (label variable) statement in a statement tree.
+static bool hasIndirectGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::Goto && s->gotoTarget)
+    return true;
+  if (s->thenS && hasIndirectGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasIndirectGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasIndirectGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasIndirectGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
+bool IRGen::hasHandlerIndirectGotoStmt(HStmt* s) {
+  if (!s)
+    return false;
+  if (s->kind == HStmt::On && !s->isSystem && s->unit)
+    if (hasIndirectGotoStmt(s->unit.get()))
+      return true;
+  if (s->thenS && hasHandlerIndirectGotoStmt(s->thenS.get()))
+    return true;
+  if (s->elseS && hasHandlerIndirectGotoStmt(s->elseS.get()))
+    return true;
+  if (s->unit && hasHandlerIndirectGotoStmt(s->unit.get()))
+    return true;
+  for (auto& b : s->body)
+    if (hasHandlerIndirectGotoStmt(b.get()))
+      return true;
+  return false;
+}
+
 // B5: scan for any LEAVE or ITERATE statement in a statement tree.
 static bool hasLeaveStmt(HStmt* s) {
   if (!s)
@@ -6843,6 +6911,13 @@ llvm::GlobalVariable* IRGen::escapeLabelIdxGlobal() {
                                   llvm::ConstantInt::get(b_.getInt32Ty(), 0), "onEscapeLabelIdx");
 }
 
+llvm::GlobalVariable* IRGen::escapeLabelAddrGlobal() {
+  if (auto* g = mod_.getNamedGlobal("onEscapeLabelAddr"))
+    return g;
+  return new llvm::GlobalVariable(mod_, b_.getInt64Ty(), false, llvm::GlobalValue::InternalLinkage,
+                                  llvm::ConstantInt::get(b_.getInt64Ty(), 0), "onEscapeLabelAddr");
+}
+
 // B4: inside a handler unit, RETURN(value) stores the converted value in the
 // escape globals and returns void from the handler. The trap/signal dispatch
 // later performs the actual procedure return from emitEscapeReturnBlock().
@@ -6918,6 +6993,7 @@ void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
   unsigned numCases = hasHandlerGoto_ ? 2 : 1;
   numCases += hasHandlerLeave_ ? 1 : 0;
   numCases += hasHandlerIterate_ ? 1 : 0;
+  numCases += hasHandlerIndirectGoto_ ? 1 : 0;
   llvm::SwitchInst* sw = b_.CreateSwitch(esc, badBB, numCases);
   llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
   sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
@@ -6926,6 +7002,12 @@ void IRGen::emitEscapeCheck(llvm::BasicBlock* resumeBB) {
     sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
     b_.SetInsertPoint(gotoBB);
     emitEscapeGotoBlock();
+  }
+  if (hasHandlerIndirectGoto_) {
+    llvm::BasicBlock* gotoIBB = llvm::BasicBlock::Create(ctx_, "on.escape.goto.indirect", curFn_);
+    sw->addCase(llvm::cast<llvm::ConstantInt>(i32(5)), gotoIBB);
+    b_.SetInsertPoint(gotoIBB);
+    emitEscapeGotoIndirectBlock();
   }
   if (hasHandlerLeave_) {
     llvm::BasicBlock* leaveBB = llvm::BasicBlock::Create(ctx_, "on.escape.leave", curFn_);
@@ -7066,6 +7148,33 @@ void IRGen::emitEscapeGotoBlock() {
                              "esc.addr");
   }
   auto* ib = b_.CreateIndirectBr(target, (unsigned)dests.size());
+  for (llvm::BasicBlock* d : dests)
+    ib->addDestination(d);
+}
+
+// B4: indirect goto-label escape block: reset depth, then indirect-br to the
+// runtime label address stored in escapeLabelAddrGlobal().
+void IRGen::emitEscapeGotoIndirectBlock() {
+  if (curOnUnitDepth_)
+    b_.CreateCall(runtimeFn("pli_on_reset_error"),
+                  {b_.CreateLoad(b_.getInt64Ty(), curOnUnitDepth_, "onunitdepth")});
+  llvm::Value* addr = b_.CreateLoad(b_.getInt64Ty(), escapeLabelAddrGlobal(), "esc.la");
+  addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "goto.addr");
+  // Build an indirect branch whose targets are every label block in this
+  // procedure.
+  std::vector<llvm::BasicBlock*> dests;
+  auto addDest = [&](llvm::BasicBlock* bb) {
+    if (bb && std::find(dests.begin(), dests.end(), bb) == dests.end())
+      dests.push_back(bb);
+  };
+  auto& lbls = procLabelBlocks_[curProc_];
+  for (auto& kv : lbls)
+    addDest(kv.second);
+  if (dests.empty()) {
+    b_.CreateUnreachable();
+    return;
+  }
+  auto* ib = b_.CreateIndirectBr(addr, (unsigned)dests.size());
   for (llvm::BasicBlock* d : dests)
     ib->addDestination(d);
 }
@@ -7370,7 +7479,8 @@ void IRGen::emitSignal(HStmt* s) {
   // B4: if the handler did a non-local exit (RETURN(value)/GO TO/LEAVE/ITERATE),
   // the escape code is non-zero; branch to the escape block instead of the normal
   // resume path. Only create escape blocks when needed to avoid extraneous CFG edges.
-  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_) {
+  if (curProc_->isFunction || hasHandlerGoto_ || hasHandlerLeave_ || hasHandlerIterate_ ||
+      hasHandlerIndirectGoto_) {
     llvm::Value* escCode = b_.CreateLoad(b_.getInt32Ty(), escapeCodeGlobal(), "esc.code");
     llvm::Value* escNone = b_.CreateICmpEQ(escCode, i32(0), "esc.none");
     llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx_, "on.normal", curFn_);
@@ -7392,6 +7502,7 @@ void IRGen::emitSignal(HStmt* s) {
     numCases += hasHandlerGoto_ ? 1 : 0;
     numCases += hasHandlerLeave_ ? 1 : 0;
     numCases += hasHandlerIterate_ ? 1 : 0;
+    numCases += hasHandlerIndirectGoto_ ? 1 : 0;
     llvm::SwitchInst* sw = b_.CreateSwitch(escCode, badBB, numCases);
     llvm::BasicBlock* retBB = llvm::BasicBlock::Create(ctx_, "on.escape.ret", curFn_);
     sw->addCase(llvm::cast<llvm::ConstantInt>(i32(1)), retBB);
@@ -7400,6 +7511,12 @@ void IRGen::emitSignal(HStmt* s) {
       sw->addCase(llvm::cast<llvm::ConstantInt>(i32(2)), gotoBB);
       b_.SetInsertPoint(gotoBB);
       emitEscapeGotoBlock();
+    }
+    if (hasHandlerIndirectGoto_) {
+      llvm::BasicBlock* gotoIBB = llvm::BasicBlock::Create(ctx_, "on.escape.goto.indirect", curFn_);
+      sw->addCase(llvm::cast<llvm::ConstantInt>(i32(5)), gotoIBB);
+      b_.SetInsertPoint(gotoIBB);
+      emitEscapeGotoIndirectBlock();
     }
     if (hasHandlerLeave_) {
       llvm::BasicBlock* leaveBB = llvm::BasicBlock::Create(ctx_, "on.escape.leave", curFn_);
@@ -7923,9 +8040,20 @@ void IRGen::emitStmt(HStmt* s) {
     // the handler; the dispatch performs the indirect branch.
     if (inHandler_) {
       if (s->gotoTarget) {
-        // Indirect GO TO (label variable) from a handler is not yet served.
-        d_.error(s->loc, "indirect GO TO inside an ON-unit is not implemented in this stage",
-                 "(91)");
+        // Indirect GO TO (label variable) from a handler: evaluate the label
+        // value (a block address), store it as an i64, set the indirect-goto
+        // escape code, and return void from the handler; the trap/signal
+        // dispatch performs the indirect branch through the label blocks.
+        Val v = emitExpr(s->gotoTarget.get());
+        llvm::Value* addr = v.reg;
+        if (!addr)
+          addr = llvm::ConstantPointerNull::get(b_.getPtrTy());
+        if (!addr->getType()->isPointerTy())
+          addr = b_.CreateIntToPtr(addr, b_.getPtrTy(), "gotoptr");
+        b_.CreateStore(b_.CreatePtrToInt(addr, b_.getInt64Ty(), "esc.la"),
+                       escapeLabelAddrGlobal());
+        b_.CreateStore(i32(5), escapeCodeGlobal());
+        hasHandlerIndirectGoto_ = true;
         b_.CreateRetVoid();
       } else {
         emitEscapeGoto(s);
@@ -13118,6 +13246,12 @@ void IRGen::appendWaitAddrs(HExpr* e, std::vector<llvm::Value*>& out, SourceLoc 
     for (const auto& d : ty.dims)
       if (d.dyn || d.lbDyn)
         dynamic = true;
+    if (e->sym && e->sym->ty.isDynamic())
+      dynamic = true;
+    // A dynamic EVENT array is expanded at runtime by emitWait; skip here so
+    // the static address list stays compile-time.
+    if (dynamic && ty.elementType().isEvent())
+      return;
     if (dynamic) {
       d_.error(loc, "WAIT over a dynamic EVENT array is not implemented in this stage", "(82)");
       return;
@@ -13141,15 +13275,130 @@ void IRGen::appendWaitAddrs(HExpr* e, std::vector<llvm::Value*>& out, SourceLoc 
 void IRGen::emitWait(HStmt* s) {
   // WAIT (rule (82)): no count waits for every event; WAIT(evs)(k) waits for
   // any k of them through pli_wait_n. An EVENT array operand expands to its
-  // elements, so WAIT(ev) waits for all of them.
+  // elements, so WAIT(ev) waits for all of them. Dynamic (runtime-extent)
+  // EVENT arrays are expanded at runtime below.
+  auto isDynEventArray = [&](HExpr* e) -> bool {
+    if (!e || !e->ty.isArray() || !e->ty.elementType().isEvent())
+      return false;
+    if (!e->sym)
+      return false;
+    bool dynamic = e->sym->ty.isDynamic();
+    for (const auto& d : e->ty.dims)
+      if (d.dyn || d.lbDyn)
+        dynamic = true;
+    return dynamic;
+  };
+  auto extentOf = [&](HExpr* e) -> llvm::Value* {
+    const Type& ty = e->ty;
+    Symbol* sym = e->sym;
+    llvm::Value* ext = i64(1);
+    size_t rank = ty.dims.size();
+    if (sym && dynUb_.count(sym)) {
+      for (size_t k = 0; k < rank; ++k) {
+        llvm::Value* ub = (k < dynUb_[sym].size() && dynUb_[sym][k])
+                              ? dynUb_[sym][k]
+                              : i64(ty.dims[k].ub);
+        llvm::Value* lb = (k < dynLb_[sym].size() && dynLb_[sym][k])
+                              ? dynLb_[sym][k]
+                              : i64(ty.dims[k].lb);
+        llvm::Value* ek = b_.CreateAdd(b_.CreateSub(ub, lb, "we"), i64(1), "wext");
+        ext = b_.CreateMul(ext, ek, "wextall");
+      }
+    } else {
+      ext = i64(arrayExtent(ty));
+    }
+    return ext;
+  };
+
   std::vector<llvm::Value*> addrs;
-  for (auto& e : s->waitEvents)
-    appendWaitAddrs(e.get(), addrs, s->loc);
+  bool hasDyn = false;
+  for (auto& e : s->waitEvents) {
+    if (isDynEventArray(e.get())) {
+      hasDyn = true;
+    } else {
+      appendWaitAddrs(e.get(), addrs, s->loc);
+    }
+  }
+
+  // No-count form: wait for every event.
   if (!s->waitCount) {
     for (llvm::Value* addr : addrs)
       b_.CreateCall(runtimeFn("pli_event_wait"), {addr});
+    for (auto& e : s->waitEvents) {
+      if (!isDynEventArray(e.get()))
+        continue;
+      llvm::Value* base = taskEventAddr(e.get(), s->loc);
+      if (!base)
+        continue;
+      llvm::Value* ext = extentOf(e.get());
+      llvm::Function* F = b_.GetInsertBlock()->getParent();
+      llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "waitev.loop", F);
+      llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "waitev.done", F);
+      b_.CreateCondBr(b_.CreateICmpEQ(ext, i64(0), "waitev.empty"), doneBB, loopBB);
+      llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+      startBlock(loopBB);
+      llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "waitev.i");
+      iPhi->addIncoming(i64(0), preLoopBB);
+      llvm::Value* ep = b_.CreateGEP(llvmTy(e->ty.elementType()), base, {iPhi}, "waitev.ep");
+      b_.CreateCall(runtimeFn("pli_event_wait"), {ep});
+      llvm::Value* iNext = b_.CreateAdd(iPhi, i64(1), "waitev.next");
+      iPhi->addIncoming(iNext, loopBB);
+      b_.CreateCondBr(b_.CreateICmpULT(iNext, ext, "waitev.more"), loopBB, doneBB);
+      startBlock(doneBB);
+    }
     return;
   }
+
+  // Count form with at least one dynamic array: build a runtime-sized address
+  // buffer holding every event, then call pli_wait_n.
+  if (hasDyn) {
+    size_t staticCount = addrs.size();
+    llvm::Value* total = i64((long long)staticCount);
+    std::vector<std::pair<HExpr*, llvm::Value*>> dyns;
+    for (auto& e : s->waitEvents) {
+      if (!isDynEventArray(e.get()))
+        continue;
+      llvm::Value* ext = extentOf(e.get());
+      dyns.push_back({e.get(), ext});
+      total = b_.CreateAdd(total, ext, "waittot");
+    }
+    llvm::Value* buf = b_.CreateAlloca(b_.getPtrTy(), total, "wait.dynbuf");
+    // Fill static addresses.
+    for (size_t i = 0; i < staticCount; ++i) {
+      llvm::Value* slot = b_.CreateGEP(b_.getPtrTy(), buf, {i64((long long)i)}, "waits");
+      b_.CreateStore(addrs[i], slot);
+    }
+    // Fill dynamic arrays, tracking the running offset.
+    llvm::Value* offset = i64((long long)staticCount);
+    for (auto& de : dyns) {
+      HExpr* e = de.first;
+      llvm::Value* ext = de.second;
+      llvm::Value* base = taskEventAddr(e, s->loc);
+      if (!base)
+        continue;
+      llvm::Function* F = b_.GetInsertBlock()->getParent();
+      llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(ctx_, "waitdyn.loop", F);
+      llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx_, "waitdyn.done", F);
+      b_.CreateCondBr(b_.CreateICmpEQ(ext, i64(0), "waitdyn.empty"), doneBB, loopBB);
+      llvm::BasicBlock* preLoopBB = b_.GetInsertBlock();
+      startBlock(loopBB);
+      llvm::PHINode* iPhi = b_.CreatePHI(b_.getInt64Ty(), 2, "waitdyn.i");
+      iPhi->addIncoming(i64(0), preLoopBB);
+      llvm::Value* addr = b_.CreateGEP(llvmTy(e->ty.elementType()), base, {iPhi}, "waitdyn.ep");
+      llvm::Value* idx = b_.CreateAdd(offset, iPhi, "waitdyn.idx");
+      llvm::Value* slot = b_.CreateGEP(b_.getPtrTy(), buf, {idx}, "waitdyn.slot");
+      b_.CreateStore(addr, slot);
+      llvm::Value* iNext = b_.CreateAdd(iPhi, i64(1), "waitdyn.next");
+      iPhi->addIncoming(iNext, loopBB);
+      b_.CreateCondBr(b_.CreateICmpULT(iNext, ext, "waitdyn.more"), loopBB, doneBB);
+      startBlock(doneBB);
+      offset = b_.CreateAdd(offset, ext, "waitdyn.off");
+    }
+    Val need = emitExpr(s->waitCount.get());
+    b_.CreateCall(runtimeFn("pli_wait_n"), {buf, total, toI64(need)});
+    return;
+  }
+
   size_t n = addrs.size();
   if (n == 0)
     return;
@@ -16444,14 +16693,6 @@ bool IRGen::emitBuiltin(HExpr* e, Val& result) {
       return true;
     }
     if (a->kind == HExpr::Subscript && a->sym) {
-      for (const auto& ix : a->args)
-        if (ix->kind == HExpr::Star) {
-          d_.error(a->loc, "ADDR of a cross-section is not implemented in this stage", "(126)");
-          v.ty = e->ty;
-          v.reg = llvm::ConstantPointerNull::get(b_.getPtrTy());
-          result = v;
-          return true;
-        }
       v.ty = e->ty;
       // An array of structures arr(i).x: index to the element struct,
       // then GEP through the member path from that element address.
