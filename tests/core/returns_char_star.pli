@@ -6,7 +6,10 @@
  returns_char_star: procedure options(main);
     declare s character(20);
     s = show();
-    put skip list(s);
+    if s = 'hello' then
+      put skip list('PASS returns_char_star');
+    else
+      put skip list('FAIL returns_char_star', s);
  end returns_char_star;
 
  show: procedure returns(character(*));
