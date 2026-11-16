@@ -1,0 +1,14 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (34): a function returns a non-VARYING CHAR(*) value through a
+    caller-sized max buffer; the callee blank-pads/truncates to the live
+    length and the caller sees the full returned string. */
+ returns_char_star: procedure options(main);
+    declare s character(20);
+    s = show();
+    put skip list(s);
+ end returns_char_star;
+
+ show: procedure returns(character(*));
+    return('hello');
+ end show;

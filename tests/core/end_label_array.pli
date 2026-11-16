@@ -1,0 +1,16 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (7): an END clause takes a labellist; an element of a label array
+    (AR(1):) prefixes the END and labels the group's exit. A GO TO to that
+    element leaves the loop at once (TR 25.084 2.3.2.2). */
+ end_label_array: procedure options(main);
+    declare i fixed binary(31);
+    declare ar(3) label;
+    do i = 1 to 10;
+       if i = 3 then go to (ar(1));
+    ar(1): end;
+    if i ^= 3 then
+       put skip list('FAIL end_label_array', i);
+    else
+       put skip list('PASS end_label_array');
+ end end_label_array;

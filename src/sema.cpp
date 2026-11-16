@@ -2691,7 +2691,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           bool isControlled = item.controlled;
           if (item.slenExpr && item.sym)
             item.sym->declHasLen = true;
-          if (!isParam && !isControlled)
+          if (!isParam && !isControlled && !item.slenExpr)
             d_.error(item.loc,
                      "an adjustable CHARACTER length is only valid on a parameter or CONTROLLED "
                      "variable",

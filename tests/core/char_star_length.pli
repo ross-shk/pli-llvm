@@ -1,0 +1,13 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (18): an adjustable-length CHARACTER on a non-parameter automatic
+    variable takes its length from a runtime expression at block entry. */
+ char_star_length: procedure options(main);
+    declare n fixed bin(31) init(5);
+    declare s character(n);
+    s = 'abcde';
+    if length(s) ^= 5 then
+      put skip list('FAIL char_star_length', length(s));
+    else
+      put skip list('PASS char_star_length');
+ end char_star_length;

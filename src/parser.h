@@ -17,6 +17,10 @@ struct EndInfo {
   // Labels prefixed to the END (`nxt: end;`, rule (7)): they label the group's
   // exit, so the parser places a labelled null statement after the group.
   std::vector<std::string> endLabels;
+  // Label-array elements prefixed to the END (`AR(1): end;`, rule (7)): they
+  // label the group's exit the same way; sema binds each element to the exit
+  // statement's address (rule (65)).
+  std::vector<LabelElem> labelElems;
   SourceLoc loc{};
 };
 
@@ -240,6 +244,9 @@ private:
   // End-clause labels (rule (7)) collected by the closing group: a following
   // labelled null statement marks the group's exit for a GO TO.
   std::vector<std::string> endClauseLabels_;
+  // End-clause label-array elements (rule (7)) collected by the closing
+  // group: bound to the exit statement's address by sema (rule (65)).
+  std::vector<LabelElem> endClauseLabelElems_;
   StmtP closeWithEndLabels(StmtP base);
   // Scope of a condition prefix on a PROCEDURE statement (rules (60)-(63)):
   // 0 = inherit, 1 = enabled, -1 = disabled. Every statement parsed inside

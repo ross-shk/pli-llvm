@@ -5026,6 +5026,15 @@ void IRGen::allocaLocals(HProc* p) {
       const Type& el = s->ty.elementType();
       a = entryAlloca(llvm::ArrayType::get(llvmTy(el), (unsigned)arrayExtent(s->ty)),
                       s->irName.substr(1));
+    } else if (s->ty.isChar() && s->ty.starLen && !s->ty.isArray() && s->dynLenExpr) {
+      // An adjustable-length automatic CHAR(expr) (rule (18)): size the buffer
+      // at block entry from the length expression and record the live length so
+      // loadSym/storeTo report it via adjustLen().
+      llvm::Value* len = toI64(emitExpr(s->dynLenExpr), s->loc);
+      llvm::Value* allocLen =
+          b_.CreateSelect(b_.CreateICmpEQ(len, i64(0), "zcl"), i64(1), len, "acl");
+      a = b_.CreateAlloca(b_.getInt8Ty(), allocLen, s->irName.substr(1) + ".dyn");
+      dynLen_[s] = len;
     } else {
       a = entryAlloca(llvmTy(s->ty), s->irName.substr(1));
     }
@@ -5087,7 +5096,7 @@ void IRGen::allocaLocals(HProc* p) {
     // uninitialized read of a member would be LLVM poison; zero-fill at entry.
     else if (s->ty.isStruct())
       b_.CreateStore(llvm::ConstantAggregateZero::get(llvmTy(s->ty)), a);
-    if (s->ty.isChar() && !s->ty.isArray()) { // blank fill (scalar char only)
+    if (s->ty.isChar() && !s->ty.isArray() && !(s->ty.starLen && s->dynLenExpr)) { // blank fill (scalar char only)
       std::string blanks(s->ty.len, ' ');
       llvm::Value* g = globalString(blanks);
       if (s->ty.varying) {

@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (18): a bare '*' CHARACTER length on a non-parameter automatic has no
+    length source, so it is diagnosed rather than silently defaulted. */
+ bad_char_star_length: procedure options(main);
+    declare s character(*);   /* no length source on a non-parameter */
+ end bad_char_star_length;

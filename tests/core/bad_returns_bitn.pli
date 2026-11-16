@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (34): RETURNS of BIT(n>1) stays diagnosed (wide bit results are not
+    yet returned through a hidden sret buffer). */
+ bad_returns_bitn: procedure options(main);
+ end bad_returns_bitn;
+
+ show: procedure returns(bit(8));
+    return('11110000'b);
+ end show;

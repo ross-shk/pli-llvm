@@ -1,0 +1,10 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /* Rule (65): a label-array element prefix on an END clause whose subscript
+    is outside the declared bounds is diagnosed, never silently accepted. */
+ bad_end_label_array: procedure options(main);
+    declare i fixed binary(31);
+    declare ar(3) label;
+    do i = 1 to 10;
+    ar(5): end;   /* subscript 5 outside ar's bounds (1..3) */
+ end bad_end_label_array;

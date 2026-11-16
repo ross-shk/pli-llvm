@@ -662,10 +662,9 @@ void Parser::parseProcOptions(Proc* p) {
                      "(34)");
             p->retTy = Type::bit(1);
           } else if (p->retTy.starLen && !p->retTy.varying) {
-            // RETURNS of adjustable non-VARYING CHARACTER stays out (rule
-            // (18)/(34)); CHAR(*) VARYING is served with a caller-sized max.
-            d_.error(p->loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
-            p->retTy = Type::chr(1);
+            // RETURNS of CHAR(*) (non-VARYING): returned through a
+            // caller-sized max buffer (rule (34)); IRGen writes up to
+            // kStarRetMax bytes (rule (18)).
           }
         }
         expect(Tok::RParen, "(34)");
@@ -900,7 +899,7 @@ bool Parser::parseCondPrefixes(Stmt* st) {
 // target the group's exit. Place a labelled null right after the group so a
 // GO TO branches past the loop's step/test blocks instead of into them.
 StmtP Parser::closeWithEndLabels(StmtP base) {
-  if (endClauseLabels_.empty() || !base)
+  if ((endClauseLabels_.empty() && endClauseLabelElems_.empty()) || !base)
     return base;
   auto g = std::make_unique<Stmt>();
   g->kind = Stmt::Group;
@@ -910,7 +909,9 @@ StmtP Parser::closeWithEndLabels(StmtP base) {
   n->kind = Stmt::Null;
   n->loc = g->loc;
   n->labels = std::move(endClauseLabels_);
+  n->labelElems = std::move(endClauseLabelElems_);
   endClauseLabels_.clear();
+  endClauseLabelElems_.clear();
   g->body.push_back(std::move(n));
   return g;
 }
@@ -995,20 +996,21 @@ StmtP Parser::parseStatement(Proc* owner) {
 
   // end-clause labellist (rule (7)): `nxt: end;` labels the enclosing group's
   // exit. The group parser turns the labels into a labelled null after the
-  // group, so a GO TO jumps out of a loop instead of re-entering its body.
-  if (!st->labels.empty() && atStmtKeyword("END")) {
-    if (!st->labelElems.empty())
-      d_.error(st->loc, "a label array on an END clause is not implemented in this stage", "(7)");
+  // group, so a GO TO jumps out of a loop instead of re-entering its body. A
+  // label-array element (`AR(1): end;`) labels the exit the same way: sema
+  // binds the element to this statement's address (rule (65)).
+  if ((!st->labels.empty() || !st->labelElems.empty()) && atStmtKeyword("END")) {
     EndInfo e;
     e.present = true;
     e.loc = cur().loc;
+    e.endLabels = std::move(st->labels);
+    e.labelElems = std::move(st->labelElems);
     advance(); // END
     if (at(Tok::Word)) {
       e.label = cur().text;
       advance();
     }
     expect(Tok::Semi, "(7)");
-    e.endLabels = std::move(st->labels);
     pendingEnd_ = std::move(e);
     auto n = std::make_unique<Stmt>();
     n->kind = Stmt::Null;
@@ -1227,8 +1229,10 @@ StmtP Parser::keywordStatement(Proc* owner, const std::vector<std::string>& labe
     EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
     if (e.present && !e.label.empty())
       pendingEnd_ = std::move(e);
-    else if (e.present)
+    else if (e.present) {
       endClauseLabels_ = std::move(e.endLabels);
+      endClauseLabelElems_ = std::move(e.labelElems);
+    }
     return st;
   }
   if (kw("FORMAT")) {
@@ -2506,9 +2510,14 @@ void Parser::parseDeclTail(DeclItem& item) {
             advance();
           } else {
             parseDescriptorType(item.entryRetTy);
-            if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
-              d_.error(item.loc, "RETURNS of CHAR(*) is not implemented in this stage", "(34)");
-              item.entryRetTy = Type::chr(1);
+            if (item.entryRetTy.isBit() && item.entryRetTy.len > 1) {
+              d_.error(item.loc, "RETURNS of a BIT(n>1) value is not implemented in this stage",
+                       "(34)");
+              item.entryRetTy = Type::bit(1);
+            } else if (item.entryRetTy.starLen && !item.entryRetTy.varying) {
+              // RETURNS of CHAR(*) (non-VARYING) via an entry attribute:
+              // caller-sized max buffer (rule (34)); IRGen writes up to
+              // kStarRetMax bytes (rule (18)).
             }
           }
           expect(Tok::RParen, "(34)");
@@ -3661,9 +3670,10 @@ StmtP Parser::parseSelect(Proc* owner) {
   auto closeFromBody = [&] {
     EndInfo e = std::move(pendingEnd_);
     pendingEnd_ = {};
-    if (e.label.empty())
+    if (e.label.empty()) {
       endClauseLabels_ = std::move(e.endLabels);
-    else
+      endClauseLabelElems_ = std::move(e.labelElems);
+    } else
       pendingEnd_ = std::move(e);
     return std::move(head);
   };
@@ -3967,8 +3977,10 @@ StmtP Parser::parseDo(Proc* owner, const std::vector<std::string>& labels) {
   EndInfo e = parseBody(owner, st->body, labels.empty() ? std::string() : labels.front());
   if (e.present && !e.label.empty())
     pendingEnd_ = std::move(e); // multiple closure
-  else if (e.present)
+  else if (e.present) {
     endClauseLabels_ = std::move(e.endLabels);
+    endClauseLabelElems_ = std::move(e.labelElems);
+  }
   return st;
 }
 
