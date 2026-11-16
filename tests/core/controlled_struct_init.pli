@@ -1,0 +1,39 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* rule (26): a top-level INITIAL itemlist on a CONTROLLED structure is
+      assigned into each fresh generation — the implicit entry generation and
+      every explicit ALLOCATE — so a popped generation re-exposes the initial
+      values. */
+   controlled_struct_init_test: procedure options(main);
+      declare 1 rec controlled initial(1, 2, 3),
+              2 x fixed bin(31),
+              2 y fixed bin(31),
+              2 z fixed bin(31);
+
+      /* the implicit entry generation holds the itemlist values */
+      if rec.x ^= 1 or rec.y ^= 2 or rec.z ^= 3 then do;
+         put skip list('FAIL controlled_struct_init: entry generation');
+         stop;
+      end;
+
+      /* an explicit ALLOCATE pushes a fresh, re-initialised generation */
+      allocate rec;
+      if rec.x ^= 1 or rec.y ^= 2 or rec.z ^= 3 then do;
+         put skip list('FAIL controlled_struct_init: allocate');
+         stop;
+      end;
+
+      /* modify the current generation, then pop back to the entry generation */
+      rec.x = 7; rec.y = 8; rec.z = 9;
+      if rec.x ^= 7 or rec.y ^= 8 or rec.z ^= 9 then do;
+         put skip list('FAIL controlled_struct_init: modify');
+         stop;
+      end;
+      free rec;
+      if rec.x ^= 1 or rec.y ^= 2 or rec.z ^= 3 then do;
+         put skip list('FAIL controlled_struct_init: free');
+         stop;
+      end;
+
+     put skip list('PASS controlled_struct_init');
+   end controlled_struct_init_test;

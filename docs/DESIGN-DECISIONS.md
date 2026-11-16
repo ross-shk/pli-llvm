@@ -14635,3 +14635,47 @@ and synthesize `undef` only for a union parameter the thunk does not own.
 multi-axis lowering, including forwarding through a thunk. ADR-185's
 "Rejected" note about per-axis hidden extents still holds: `*` stays
 first-axis-only, and later axes remain dynamic-bound, not `*`.
+
+---
+## ADR-390 — Character PICTURE variables stay diagnosed (rule 19)
+
+**Context.** TR 25.084 rule (19) covers the PICTURE attribute. Row (19) in
+GRAMMAR-COVERAGE.md serves numeric PICTURE variables via ADR-290 (the
+declaration is a `CHARACTER(width)` value with the template, formatted
+through the shared runtime picture interpreter). Character PICTURE
+variables (`PICTURE 'A...'`, `PICTURE 'X...'`) are diagnosed at
+`sema.cpp:1831` with rule (19): "character PICTURE variables are not
+implemented in this stage". The numeric picture formatter does not cover
+character classes, so serving them would require a separate character
+picture interpretation path in IRGen — that is an extension, not TR
+25.084 rule-19 scope.
+
+**Decision.** Keep character PICTURE variables diagnosed with rule (19)
+at `sema.cpp:1831`. No codegen path is added. `tests/core/bad_picture_char.pli`
+pins the diagnostic.
+
+**Consequences.** No GRAMMAR-COVERAGE.md extensions row (this is not a
+served feature). Serving character pictures later requires a new ADR,
+a character-picture interpretation path in the runtime picture
+formatter, and IRGen lowering; it is out of TR 25.084 scope until then.
+
+---
+## ADR-391 — PICTURE scaling factor F(n) stays diagnosed (rule 19)
+
+**Context.** TR 25.084 rule (19) covers the PICTURE attribute. Row (19)
+in GRAMMAR-COVERAGE.md serves numeric pictures including digit/point,
+suppression, insertion, sign, credit/debit, overpunched, exponent and
+sterling classes via ADR-209/274/288/293. The `F(n)` scaling factor is
+diagnosed at `sema.cpp:1836` with rule (19): "the PICTURE scaling factor
+F(n) is not implemented in this stage". Serving it would require the
+picture interpreter to apply a 10^n scale to the formatted value on both
+input and output paths, plus scale handling in arithmetic conversion —
+an extension beyond the served numeric-picture subset.
+
+**Decision.** Keep `F(n)` diagnosed with rule (19) at `sema.cpp:1836`.
+No codegen path is added. `tests/core/bad_scaled_picture_scale.pli` pins the diagnostic.
+
+**Consequences.** No GRAMMAR-COVERAGE.md extensions row. Serving `F(n)`
+later requires a new ADR, scale handling in the picture formatter and in
+FIXED/PICTURE conversion (`convert()`), and is out of TR 25.084 scope
+until then.

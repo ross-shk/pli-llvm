@@ -1,0 +1,22 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+   /* rule (26): a top-level INITIAL itemlist on a CONTROLLED structure that
+      supplies the wrong number of values is diagnosed; so are INITIAL(CALL)
+      and a single initial expression on a CONTROLLED aggregate, plus any
+      top-level itemlist on a CONTROLLED array. */
+   bad_controlled_struct_init: procedure options(main);
+      declare 1 rec controlled,
+              2 x fixed bin(31),
+              2 y fixed bin(31);
+      declare a fixed bin(31) controlled;
+
+      /* a single initial expression on a structure aggregate */
+      declare 1 bad controlled initial(1);
+
+      /* a single initial expression on another structure aggregate */
+      declare 1 bad2 controlled initial(5);
+
+      /* a top-level itemlist on a CONTROLLED array */
+      declare arr2(2) fixed controlled initial(1, 2);
+
+   end bad_controlled_struct_init;

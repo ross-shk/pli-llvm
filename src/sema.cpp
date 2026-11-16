@@ -2426,10 +2426,15 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           };
           // A scalar CONTROLLED initial value (rule (26)) is assigned with each
           // allocation (implicit entry generation and every ALLOCATE), like a
-          // CONTROLLED structure's per-member INITIAL (ADR-175); a top-level
-          // array itemlist or INITIAL(CALL) stays diagnosed.
+          // CONTROLLED structure's per-member INITIAL (ADR-175). A top-level
+          // INITIAL itemlist on a CONTROLLED structure is also served: the
+          // structure path below populates initElems and emitCtlInit assigns it
+          // into each fresh generation. INITIAL(CALL), a single initial
+          // expression on an aggregate, and any top-level itemlist on a
+          // CONTROLLED array stay diagnosed.
           if (item.initCall ||
-              ((item.ty.isArray() || item.ty.isStruct()) && (item.init || !item.initItems.empty())))
+              (item.ty.isArray() && (item.init || !item.initItems.empty())) ||
+              (item.ty.isStruct() && item.init))
             ctlErr("INITIAL", "(26)");
           if (item.valueInit)
             ctlErr("VALUE", "(ADR-108)");
