@@ -145,10 +145,10 @@ static void parseDecConstant(const std::string& text, Expr& e) {
 // so `RETURNS(fixed)`/`RETURNS(float)` mean a scalar descriptor rather than a
 // structure template reference (rule 127).
 static bool isScalarTypeWord(const std::string& w) {
-  return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
-         w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
-         w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "ALIGNED" || w == "UNALIGNED" ||
-         w == "POINTER" || w == "AREA" || w == "OFFSET";
+  return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" || w == "DEC" ||
+         w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" || w == "VAR" ||
+         w == "VARYINGZ" || w == "VARZ" || w == "ALIGNED" || w == "UNALIGNED" ||
+         w == "POINTER" || w == "PTR" || w == "AREA" || w == "OFFSET";
 }
 
 // ---------------------------------------------------------------------------
@@ -839,28 +839,28 @@ bool Parser::parseCondPrefixes(Stmt* st) {
       }
       // Classify the word: a condition name, its NO... form, or ALL.
       int state = 0;
-      if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOZERODIVIDE" || w == "NOCONVERSION" ||
-          w == "NOSTRINGRANGE" || w == "NOUNDERFLOW" || w == "NOOVERFLOW" ||
-          w == "NOFIXEDOVERFLOW") {
+      if (w == "NOSIZE" || w == "NOSUBSCRIPTRANGE" || w == "NOSUBRG" || w == "NOZERODIVIDE" || w == "NOZDIV" || w == "NOCONVERSION" || w == "NOCONV" ||
+          w == "NOSTRINGRANGE" || w == "NOSTRG" || w == "NOUNDERFLOW" || w == "NOUFL" || w == "NOOVERFLOW" || w == "NOOFL" ||
+          w == "NOFIXEDOVERFLOW" || w == "NOFOFL") {
         w = w.substr(2);
         state = -1;
       }
       int which;
       if (w == "SIZE")
         which = 0;
-      else if (w == "SUBSCRIPTRANGE")
+      else if (w == "SUBSCRIPTRANGE" || w == "SUBRG")
         which = 1;
-      else if (w == "ZERODIVIDE")
+      else if (w == "ZERODIVIDE" || w == "ZDIV")
         which = 2;
-      else if (w == "CONVERSION")
+      else if (w == "CONVERSION" || w == "CONV")
         which = 3;
-      else if (w == "UNDERFLOW")
+      else if (w == "UNDERFLOW" || w == "UFL")
         which = 4;
-      else if (w == "STRINGRANGE")
+      else if (w == "STRINGRANGE" || w == "STRG")
         which = 5;
-      else if (w == "OVERFLOW")
+      else if (w == "OVERFLOW" || w == "OFL")
         which = 6;
-      else if (w == "FIXEDOVERFLOW")
+      else if (w == "FIXEDOVERFLOW" || w == "FOFL")
         which = 7;
       else if (w == "ALL")
         which = -1;
@@ -1355,6 +1355,25 @@ void Parser::skipParen(const char* rule) {
 // CONVERSION, STRINGRANGE, FINISH, AREA, UNDERFLOW, OVERFLOW and
 // FIXEDOVERFLOW are served; every other condition is diagnosed with its rule
 // number, never silently accepted.
+static std::string canonCondition(const std::string& w) {
+  if (w == "SUBRG") return "SUBSCRIPTRANGE";
+  if (w == "ZDIV") return "ZERODIVIDE";
+  if (w == "CONV") return "CONVERSION";
+  if (w == "STRG") return "STRINGRANGE";
+  if (w == "UFL") return "UNDERFLOW";
+  if (w == "OFL") return "OVERFLOW";
+  if (w == "FOFL") return "FIXEDOVERFLOW";
+  if (w == "UNDF") return "UNDEFINEDFILE";
+  if (w == "NOSTRG") return "NOSTRINGRANGE";
+  if (w == "NOSUBRG") return "NOSUBSCRIPTRANGE";
+  if (w == "NOUFL") return "NOUNDERFLOW";
+  if (w == "NOOFL") return "NOOVERFLOW";
+  if (w == "NOFOFL") return "NOFIXEDOVERFLOW";
+  if (w == "NOCONV") return "NOCONVERSION";
+  if (w == "NOZDIV") return "NOZERODIVIDE";
+  return w;
+}
+
 std::string Parser::parseCondition(std::string* fileArg) {
   if (!at(Tok::Word)) {
     d_.error(cur().loc, "expected a condition", "(94)");
@@ -1370,50 +1389,50 @@ std::string Parser::parseCondition(std::string* fileArg) {
     advance();
     return "SIZE";
   }
-  if (w == "SUBSCRIPTRANGE" || w == "ZERODIVIDE") {
+  if (w == "SUBSCRIPTRANGE" || w == "SUBRG" || w == "ZERODIVIDE" || w == "ZDIV") {
     advance();
-    return w;
+    return canonCondition(w);
   }
-  if (w == "CONVERSION") {
+  if (w == "CONVERSION" || w == "CONV") {
     advance();
-    return w;
+    return canonCondition(w);
   }
-  if (w == "STRINGRANGE") {
+  if (w == "STRINGRANGE" || w == "STRG") {
     // IBM's opt-in condition (rules (60)-(63),(94)): detection is enabled by
     // a (STRINGRANGE) prefix, but ON/SIGNAL/REVERT are always accepted.
     advance();
-    return w;
+    return canonCondition(w);
   }
   if (w == "FINISH") {
     // FINISH (rule 94): raised in a task when the task's procedure returns
     // (ADR-322); ON/SIGNAL/REVERT are accepted and the runtime raises it.
     advance();
-    return w;
+    return canonCondition(w);
   }
   if (w == "AREA") {
     // AREA (rule 94): raised by the region runtime when an ALLOCATE cannot be
     // satisfied or a pointer does not belong to the region (ADR-323).
     advance();
-    return w;
+    return canonCondition(w);
   }
-  if (w == "UNDERFLOW") {
+  if (w == "UNDERFLOW" || w == "UFL") {
     // UNDERFLOW (rule 94): a floating-point result below the smallest normal
     // is set to zero and the condition is raised (ADR-326).
     advance();
-    return w;
+    return canonCondition(w);
   }
-  if (w == "OVERFLOW") {
+  if (w == "OVERFLOW" || w == "OFL") {
     // OVERFLOW (rule 94): a floating-point result larger in magnitude than the
     // double range; the implicit action is a message plus ERROR (ADR-333).
     advance();
-    return w;
+    return canonCondition(w);
   }
-  if (w == "FIXEDOVERFLOW") {
+  if (w == "FIXEDOVERFLOW" || w == "FOFL") {
     // FIXEDOVERFLOW (rule 94): a FIXED DECIMAL arithmetic result longer than
     // the 31-digit maximum; the implicit action is a message plus ERROR
     // (ADR-334).
     advance();
-    return w;
+    return canonCondition(w);
   }
   if (w == "CHECK") {
     advance();
@@ -1445,7 +1464,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
     }
     return name;
   }
-  if (w == "ENDFILE" || w == "UNDEFINEDFILE") {
+  if (w == "ENDFILE" || w == "UNDEFINEDFILE" || w == "UNDF") {
     // ENDFILE(file) and UNDEFINEDFILE(file) (rule 97) are file conditions:
     // each names its file, and sema keys the handler per file slot
     // (Stmt::kEndfileBaseCondKey / kUndefinedfileBaseCondKey).
@@ -1464,7 +1483,7 @@ std::string Parser::parseCondition(std::string* fileArg) {
       *fileArg = cur().text;
     advance();
     expect(Tok::RParen, "(97)");
-    return cond;
+    return canonCondition(cond);
   }
   if (w == "ENDPAGE") {
     // ENDPAGE(file) (rule 97) is a file condition: it names its file, and
@@ -2051,7 +2070,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     }
     return true;
   }
-  if (w == "BINARY" || w == "BIN") {
+  if (w == "BINARY" || w == "BIN" || w == "BIN") {
     bag.binary = true;
     advance();
     if (at(Tok::LParen)) {
@@ -2065,7 +2084,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     }
     return true;
   }
-  if (w == "DECIMAL" || w == "DEC") {
+  if (w == "DECIMAL" || w == "DEC" || w == "DEC") {
     bag.decimal = true;
     advance();
     if (at(Tok::LParen)) {
@@ -2079,7 +2098,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     }
     return true;
   }
-  if (w == "CHARACTER" || w == "CHAR") {
+  if (w == "CHARACTER" || w == "CHAR" || w == "CHAR") {
     bag.character = true;
     advance();
     if (at(Tok::LParen) && peek().kind == Tok::Star) {
@@ -2143,7 +2162,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     return true;
   }
-  if (w == "VARYING" || w == "VAR") {
+  if (w == "VARYING" || w == "VAR" || w == "VAR") {
     bag.varying = true;
     advance();
     return true;
@@ -2152,7 +2171,7 @@ bool Parser::parseScalarAttr(AttrBag& bag, const char* rule) {
     advance();
     return true;
   }
-  if (w == "CONTROLLED" || w == "CTL") {
+  if (w == "CONTROLLED" || w == "CTL" || w == "CTL") {
     bag.controlled = true;
     advance();
     return true;
@@ -2177,17 +2196,17 @@ bool Parser::parseWhenType(Type& out) {
       fixed = true;
     else if (w == "FLOAT")
       floating = true;
-    else if (w == "BINARY" || w == "BIN")
+    else if (w == "BINARY" || w == "BIN" || w == "BIN")
       binary = true;
-    else if (w == "DECIMAL" || w == "DEC")
+    else if (w == "DECIMAL" || w == "DEC" || w == "DEC")
       decimal = true;
-    else if (w == "CHARACTER" || w == "CHAR")
+    else if (w == "CHARACTER" || w == "CHAR" || w == "CHAR")
       character = true;
     else if (w == "BIT")
       bit = true;
-    else if (w == "POINTER" || w == "PTR")
+    else if (w == "POINTER" || w == "PTR" || w == "PTR")
       pointer = true;
-    else if (w == "COMPLEX" || w == "CPLX")
+    else if (w == "COMPLEX" || w == "CPLX" || w == "CPLX")
       complex = true;
     else if (w == "ENTRY")
       entry = true;
@@ -2301,7 +2320,7 @@ void Parser::parseDeclTail(DeclItem& item) {
       continue;
     if (at(Tok::Word)) {
       const std::string& w = cur().text;
-      if (w == "INITIAL" || w == "INIT") {
+      if (w == "INITIAL" || w == "INIT" || w == "INIT") {
         if (item.valueInit)
           d_.error(cur().loc, "VALUE cannot be combined with INITIAL or a second VALUE (ADR-108)",
                    "");
@@ -2422,7 +2441,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         advance();
         continue;
       }
-      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "INTERNAL" || w == "INT") {
+      if (w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" || w == "AUTO" || w == "INTERNAL" || w == "INT" || w == "INT") {
         // STATIC (rule 23): true static storage for all types (not just AREA).
         // Non-AREA STATIC variables get true static storage (LLVM global).
         // STATIC AREA (rule (20)) keeps its region for the whole program.
@@ -2436,7 +2455,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         advance();
         continue;
       }
-      if (w == "EXTERNAL" || w == "EXT") {
+      if (w == "EXTERNAL" || w == "EXT" || w == "EXT") {
         // EXTERNAL (rule (42)): the variable is a module-wide (linkage) name,
         // shared with other object files. The extended external-name form
         // EXTERNAL('symbol') gives the exact, case-sensitive C symbol for
@@ -2571,12 +2590,12 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "ABNORMAL" || w == "NORMAL") {
+      if (w == "ABNORMAL" || w == "ABNL" || w == "NORMAL") {
         // entry-name-attribute { ABNORMAL ( label-name ) | NORMAL } (rule (38)):
         // ABNORMAL names the label control passes to when a CALL through this
         // entry returns, in place of the statement after the CALL. NORMAL names
         // the ordinary return point and cancels an inherited ABNORMAL.
-        bool isAbnormal = (w == "ABNORMAL");
+        bool isAbnormal = (w == "ABNORMAL" || w == "ABNL");
         advance();
         if (isAbnormal) {
           if (expect(Tok::LParen, "(38)")) {
@@ -2593,13 +2612,13 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "REDUCIBLE" || w == "IRREDUCIBLE") {
+      if (w == "REDUCIBLE" || w == "RED" || w == "IRREDUCIBLE" || w == "IRRED") {
         // entry-name-attribute { REDUCIBLE | IRREDUCIBLE } (rule (34)): an
         // optimization hint about repeating a call with the same arguments.
         // The declaration is a hint, not a constraint, so a later attribute
         // overrides an earlier one; validity (an ENTRY declaration) is
         // checked in sema.
-        item.reducible = (w == "REDUCIBLE") ? 1 : -1;
+        item.reducible = (w == "REDUCIBLE" || w == "RED") ? 1 : -1;
         advance();
         continue;
       }
@@ -2627,7 +2646,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "DEFINED" || w == "DEF") {
+      if (w == "DEFINED" || w == "DEF" || w == "DEF") {
         // defined-attribute ::= DEFINED basic-reference [ POSITION(integer) ]
         // (rule 24): the declared item overlays the storage of the base
         // reference. The base is resolved in sema; POSITION is diagnosed.
@@ -2717,7 +2736,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "POINTER" || w == "PTR") {
+      if (w == "POINTER" || w == "PTR" || w == "PTR") {
         advance();
         bag.pointer = true;
         continue;
@@ -2729,7 +2748,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.file = true;
         continue;
       }
-      if (w == "ENVIRONMENT") {
+      if (w == "ENVIRONMENT" || w == "ENV") {
         // ENVIRONMENT (rule 39): implementation-defined file attribute.
         // Accepted on DECLARE and treated as a file variable; the option list
         // is skipped and has no runtime effect (ADR-373).
@@ -2739,19 +2758,19 @@ void Parser::parseDeclTail(DeclItem& item) {
           skipParen("(39)");
         continue;
       }
-      if (w == "BUFFERED") {
+      if (w == "BUFFERED" || w == "BUF") {
         // BUFFERED (rule 39): implementation-dependent file attribute.
         advance();
         item.buffered = true;
         continue;
       }
-      if (w == "UNBUFFERED") {
+      if (w == "UNBUFFERED" || w == "UNBUF") {
         // UNBUFFERED (rule 39): implementation-dependent file attribute.
         advance();
         item.unbuffered = true;
         continue;
       }
-      if (w == "EXCLUSIVE") {
+      if (w == "EXCLUSIVE" || w == "EXCL") {
         // EXCLUSIVE (rule 39): implementation-dependent file attribute.
         advance();
         item.exclusive = true;
@@ -2790,7 +2809,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "COMPLEX" || w == "CPLX") {
+      if (w == "COMPLEX" || w == "CPLX" || w == "CPLX") {
         // complex-attribute (QR2.2/CM5, rules (14),(15)): a value with real and
         // imaginary parts. Consumed like the other scalar data attributes.
         advance();
@@ -2805,7 +2824,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         bag.imaginary = true;
         continue;
       }
-      if (w == "CONTROLLED" || w == "CTL") {
+      if (w == "CONTROLLED" || w == "CTL" || w == "CTL") {
         // controlled-attribute (rule (15), ADR-140): storage managed by an
         // explicit generation stack; consumed like the other storage classes.
         advance();
@@ -2854,7 +2873,7 @@ void Parser::parseDeclTail(DeclItem& item) {
         }
         continue;
       }
-      if (w == "PICTURE" || w == "PIC") {
+      if (w == "PICTURE" || w == "PIG" || w == "PIC") {
         // picture-attribute ::= PICTURE ( 'picture-string' )  rules (19),(146)-(148)
         // PICTURE names a declared variable whose type is implied by the picture.
         advance();
@@ -3256,16 +3275,16 @@ bool Parser::tryParseDimension(std::vector<Dim>& out, std::vector<ExprP>& dynBou
   // DEFINED rides here so `DCL X(3) FIXED BIN(31) DEFINED B;` declares a
   // 3-element overlay instead of reading `(3)` as a precision (ADR-339).
   auto isAttrWord = [&](const std::string& w) {
-    return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "DECIMAL" ||
-           w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "BIT" || w == "VARYING" ||
-           w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "STATIC" || w == "AUTOMATIC" ||
-           w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INITIAL" ||
-           w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" ||
-           w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "BASED" || w == "CONTROLLED" ||
+    return w == "FIXED" || w == "FLOAT" || w == "BINARY" || w == "BIN" || w == "BIN" || w == "DECIMAL" || w == "DEC" ||
+           w == "DEC" || w == "CHARACTER" || w == "CHAR" || w == "CHAR" || w == "BIT" || w == "VARYING" || w == "VAR" ||
+           w == "VARYINGZ" || w == "VAR" || w == "VARZ" || w == "STATIC" || w == "AUTOMATIC" || w == "AUTO" ||
+           w == "AUTO" || w == "ALIGNED" || w == "UNALIGNED" || w == "INTERNAL" || w == "INT" || w == "INITIAL" || w == "INIT" ||
+           w == "INIT" || w == "VALUE" || w == "TYPE" || w == "EXTERNAL" || w == "EXT" || w == "EXT" ||
+           w == "OPTIONAL" || w == "POINTER" || w == "PTR" || w == "PTR" || w == "BASED" || w == "CONTROLLED" || w == "CTL" ||
            w == "CTL" || w == "AREA" || w == "OFFSET" || w == "VARIABLE" || w == "TASK" ||
-           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" || w == "PICTURE" ||
-           w == "PIC" || w == "LABEL" || w == "COMPLEX" || w == "CPLX" || w == "REAL" ||
-           w == "LIKE" || w == "FILE" || w == "ENTRY" || w == "DEFINED" || w == "DEF";
+           w == "EVENT" || w == "CELL" || w == "UNION" || w == "SECONDARY" || w == "PICTURE" || w == "PIG" ||
+           w == "PIC" || w == "LABEL" || w == "COMPLEX" || w == "CPLX" || w == "CPLX" || w == "REAL" ||
+           w == "LIKE" || w == "FILE" || w == "ENTRY" || w == "DEFINED" || w == "DEF" || w == "DEF";
   };
   if (at(Tok::Word) && isAttrWord(cur().text)) {
     out = std::move(axes);
@@ -3398,7 +3417,7 @@ bool Parser::parseDescriptorType(Type& out) {
   }
   // A POINTER descriptor (rule (38)): C `void*` parameters ride as the
   // pointer value itself under LINKAGE(SYSTEM)/BYVALUE.
-  if (atWord("POINTER") || atWord("PTR")) {
+  if (atWord("POINTER") || atWord("PTR") || atWord("PTR")) {
     advance();
     if (isSingleStar()) {
       if (hasStar)
@@ -4532,7 +4551,7 @@ bool Parser::parseSingleFormatItem(FormatItem& fi) {
     fi.kind = FormatItem::Page;
   } else if (w == "LINE") {
     fi.kind = FormatItem::Line;
-  } else if (w == "COL" || w == "COLUMN") {
+  } else if (w == "COL" || w == "COLUMN" || w == "COL") {
     // Column positioning (rule (48)): COL(n) and COLUMN(n) both start the
     // next item at 1-based column n.
     fi.kind = FormatItem::Column;
@@ -4947,7 +4966,7 @@ StmtP Parser::parseAllocate() {
         char hasChar = 0;
         char varying = 0;
         for (;;) {
-          if (atWord("CHARACTER") || atWord("CHAR")) {
+          if (atWord("CHARACTER") || atWord("CHAR") || atWord("CHAR")) {
             hasChar = 1;
             advance();
             if (at(Tok::LParen)) {
@@ -4969,12 +4988,12 @@ StmtP Parser::parseAllocate() {
             }
             continue;
           }
-          if (atWord("VARYING") || atWord("VAR")) {
+          if (atWord("VARYING") || atWord("VAR") || atWord("VAR")) {
             varying = 1;
             advance();
             continue;
           }
-          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
+          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") || atWord("INIT") ||
               atWord("INIT")) {
             d_.error(cur().loc,
                      std::string("ALLOCATE ") + cur().text + " is not implemented in this stage",
@@ -5027,7 +5046,7 @@ StmtP Parser::parseAllocate() {
         char varying = 0;
         bool sawAttr = false;
         for (;;) {
-          if (atWord("CHARACTER") || atWord("CHAR")) {
+          if (atWord("CHARACTER") || atWord("CHAR") || atWord("CHAR")) {
             hasChar = 1;
             sawAttr = true;
             advance();
@@ -5050,13 +5069,13 @@ StmtP Parser::parseAllocate() {
             }
             continue;
           }
-          if (atWord("VARYING") || atWord("VAR")) {
+          if (atWord("VARYING") || atWord("VAR") || atWord("VAR")) {
             varying = 1;
             sawAttr = true;
             advance();
             continue;
           }
-          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") ||
+          if (atWord("BIT") || atWord("CELL") || atWord("AREA") || atWord("INITIAL") || atWord("INIT") ||
               atWord("INIT")) {
             d_.error(cur().loc,
                      std::string("ALLOCATE ") + cur().text + " is not implemented in this stage",
@@ -5390,7 +5409,7 @@ StmtP Parser::parseOpen() {
       advance();
       continue;
     }
-    if (atWord("RECORD") || atWord("SEQUENTIAL")) {
+    if (atWord("RECORD") || atWord("SEQUENTIAL") || atWord("SEQL")) {
       // Sequential record organisation (rules (101),(112)): the only record
       // form served in this stage; DIRECT/KEYED stay diagnosed below.
       st->openRecord = true;
@@ -5467,7 +5486,7 @@ StmtP Parser::parseOpen() {
       }
       continue;
     }
-    if (atWord("ENVIRONMENT")) {
+    if (atWord("ENVIRONMENT") || atWord("ENV")) {
       // ENVIRONMENT (rule 101): an implementation-defined file attribute. It
       // belongs to DECLARE (rule (39)), not to OPEN, so it is recorded here
       // and diagnosed below.
@@ -5477,19 +5496,19 @@ StmtP Parser::parseOpen() {
         skipParen("(101)");
       continue;
     }
-    if (atWord("BUFFERED")) {
+    if (atWord("BUFFERED") || atWord("BUF")) {
       // BUFFERED (rule (101)): a buffered sequential record file.
       advance();
       st->openBuffered = true;
       continue;
     }
-    if (atWord("UNBUFFERED")) {
+    if (atWord("UNBUFFERED") || atWord("UNBUF")) {
       // UNBUFFERED (rule (101)): an unbuffered sequential record file.
       advance();
       st->openUnbuffered = true;
       continue;
     }
-    if (atWord("EXCLUSIVE")) {
+    if (atWord("EXCLUSIVE") || atWord("EXCL")) {
       // EXCLUSIVE (rule (101)): exclusive access to a direct update file.
       advance();
       st->openExclusive = true;

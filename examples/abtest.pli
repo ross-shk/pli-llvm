@@ -1,0 +1,9 @@
+ abtest: proc options(main);
+    dcl x fixed bin(31);
+    dcl y fixed dec(5,2);
+    (conv): x = fixed('abc');
+    put skip list('x=', x);
+    (ofl): y = 99999.99;
+    put skip list('y=', y);
+    put skip list('PASS abtest');
+ end abtest;
