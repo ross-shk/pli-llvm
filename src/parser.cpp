@@ -279,7 +279,9 @@ bool Parser::looksLikeAssignment() const {
   for (;;) {
     for (;;) {
       bool moved = false;
-      while (j + 1 < t_.size() && (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow) &&
+      while (j + 1 < t_.size() &&
+             (t_[j].kind == Tok::Dot || t_[j].kind == Tok::Arrow ||
+              (t_[j].kind == Tok::Word && t_[j].text == "PT")) &&
              t_[j + 1].kind == Tok::Word) {
         j += 2;
         moved = true;
@@ -5656,7 +5658,8 @@ ExprP Parser::parseUnary() {
   if (at(Tok::Plus) || at(Tok::Minus) || at(Tok::Not) ||
       (at(Tok::Word) && cur().text == "NOT" &&
        (peek().kind == Tok::Word || peek().kind == Tok::Number || peek().kind == Tok::LParen ||
-        peek().kind == Tok::CharLit || peek().kind == Tok::BitLit))) {
+        peek().kind == Tok::CharLit || peek().kind == Tok::BitLit || peek().kind == Tok::Plus ||
+        peek().kind == Tok::Minus || peek().kind == Tok::Not))) {
     Tok op = at(Tok::Word) ? Tok::Not : cur().kind;
     SourceLoc loc = cur().loc;
     advance();
@@ -5924,8 +5927,9 @@ ExprP Parser::parsePrimary() {
     // rule (124, left-recursive): the locator is any
     // pointer-valued reference (e.g. s.handles(i)), not
     // only a plain pointer variable. Chain for a -> b -> c.
-    while (at(Tok::Arrow)) {
-      advance(); // ->
+    // PT is the §2.3.3 48-character-set word for '->'.
+    while (at(Tok::Arrow) || (at(Tok::Word) && cur().text == "PT")) {
+      advance(); // -> | PT
       if (!at(Tok::Word)) {
         d_.error(cur().loc, "expected a based variable after '->'", "(124)");
         break;

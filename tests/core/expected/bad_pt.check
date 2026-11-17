@@ -1,0 +1,1 @@
+CHECK: expected a based variable after '->'.*\(124\)

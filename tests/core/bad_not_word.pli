@@ -1,0 +1,6 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: NOT word operand class, §2.3.3 */
+  bad_not_word: proc options(main);
+    dcl c char(4);
+    c = not 'ab';
+  end bad_not_word;

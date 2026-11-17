@@ -1,0 +1,1 @@
+CHECK: operand of NOT must be a bit or arithmetic value.*\(122\)

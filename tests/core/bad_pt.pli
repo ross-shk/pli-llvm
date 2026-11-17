@@ -1,0 +1,7 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: PT word needs a based variable */
+  bad_pt: proc options(main);
+    dcl p pointer;
+    dcl c fixed bin(31);
+    c = p pt 5;
+  end bad_pt;

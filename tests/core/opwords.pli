@@ -1,0 +1,34 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: 48-character-set words */
+ /* The word forms of the thirteen TR 25.084 §2.3.3 notation variables:
+    the twelve letter sequences (NOT AND OR GT LT GE LE NG NL NE CAT PT)
+    in every operator position, beside the symbol forms. */
+  opwords: proc options(main);
+    dcl (a, b, c) fixed bin(31);
+    dcl x char(4);
+    dcl p pointer;
+    dcl 1 s based(p),
+          2 fd fixed bin(31);
+    a = 5;
+    b = 3;
+    c = 0;
+    /* comparison words beside their symbols */
+    if a gt b then c = c + 1;
+    if a lt b then c = c + 10;
+    if a ge b then c = c + 100;
+    if a le b then c = c + 1000;
+    if a ne b then c = c + 10000;
+    if a ng b then c = c + 100000;
+    if a nl b then c = c + 1000000;
+    /* boolean and concatenation words */
+    if (a gt b) and (b lt a) then c = c + 10000000;
+    if not (b gt a) or a gt b then c = c + 100000000;
+    if not -0 then c = c + 1000000000;
+    x = 'ab' cat 'cd';
+    /* PT: the word form of the locator-qualification arrow */
+    allocate s set(p);
+    p pt s.fd = 7;
+    c = c + p pt s.fd;
+    put skip list(c);
+    put skip list(x);
+  end opwords;
