@@ -703,6 +703,36 @@ EndInfo Parser::parseProcBody(Proc* p) {
   return e;
 }
 
+// compoundend [procedure-optionslist] (TR §2.3.2.2): an END clause may repeat
+// the compoundhead's options. Accepted as metadata — the compound's options
+// were already declared at its head — with the same (5) option set the
+// procedure clause takes.
+void Parser::parseEndOptions() {
+  while (!at(Tok::Semi) && !at(Tok::Eof)) {
+    if (atWord("OPTIONS")) {
+      advance();
+      if (expect(Tok::LParen, "(5)")) {
+        int depth = 1;
+        while (depth > 0 && !at(Tok::Eof)) {
+          if (at(Tok::LParen))
+            ++depth;
+          else if (at(Tok::RParen))
+            --depth;
+          advance();
+        }
+      }
+      continue;
+    }
+    if (eatWord("RECURSIVE"))
+      continue;
+    d_.warn(cur().loc,
+            "ignoring unsupported END option '" +
+                (cur().kind == Tok::Word ? cur().text : std::string(tokName(cur().kind))) + "'",
+            "(5)");
+    advance();
+  }
+}
+
 // sentencelist ::= [sentence•••] end-clause                     rules (6),(7)
 //
 // Implements multiple closure (TR §2.3.2.2): an END bearing a label that names
@@ -724,10 +754,12 @@ EndInfo Parser::parseBody(Proc* owner, std::vector<StmtP>& body, const std::stri
       e.present = true;
       e.loc = cur().loc;
       advance();
-      if (at(Tok::Word)) {
+      if (at(Tok::Word) && cur().text != "RECURSIVE" &&
+          !(cur().text == "OPTIONS" && peek().kind == Tok::LParen)) {
         e.label = cur().text;
         advance();
       }
+      parseEndOptions();
       expect(Tok::Semi, "(7)");
       if (e.label.empty() || e.label == ownName) {
         e.label.clear();
@@ -1008,10 +1040,12 @@ StmtP Parser::parseStatement(Proc* owner) {
     e.endLabels = std::move(st->labels);
     e.labelElems = std::move(st->labelElems);
     advance(); // END
-    if (at(Tok::Word)) {
+    if (at(Tok::Word) && cur().text != "RECURSIVE" &&
+        !(cur().text == "OPTIONS" && peek().kind == Tok::LParen)) {
       e.label = cur().text;
       advance();
     }
+    parseEndOptions();
     expect(Tok::Semi, "(7)");
     pendingEnd_ = std::move(e);
     auto n = std::make_unique<Stmt>();

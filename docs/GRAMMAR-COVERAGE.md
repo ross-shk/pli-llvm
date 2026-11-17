@@ -96,7 +96,7 @@ not imply that every alternative in the same rule is implemented.
 | §2.3.1 | statement-keyword disambiguation | M1 | ADR-004 step 3: `WORD ( … ) =` resolves by a speculative parse of the keyword reading (`ambiguity.pli`); `WORD =` stays an assignment |
 | §2.3.2.1 | keyword abbreviations (`DCL`, `PROC`, `BIN`, …) | M8 | all TR §2.3.2.1 abbreviations of served keywords now recognized (`ABNL`, `FOFL`, `RED`, `SEQL`, `UNBUF`, `NOCONV`, `NOFOFL`, `NOSTRG`, `UNDF`, `UFL`, `NOZDIV`, `NOSUBRG`, `CONV`, `OFL`, `ENV`, `PIG`, `POS`, `STRG`, plus the previously pinned set) pinned by `abbrev.pli` |
 | §2.3.2.2 | multiple closure | M0 |
-| §2.3.2.2 | `compoundend [procedure-optionslist]` | **print-gated** — attested `END [label]` kept; `END OPTIONS(...)` form from printed TR unavailable (Gate 0 item) |
+| §2.3.2.2 | `compoundend [procedure-optionslist]` | served — the scan prints `[ procedure-optionslist ]` after `END`, so an END clause accepts the compoundhead's option set again: `OPTIONS(...)` (balanced-paren skip), `RECURSIVE`, other words warned with rule (5) — metadata with no runtime effect (`end_options.pli`, malformed in `bad_end_options.pli`; ADR-392). The `END identifier` multiple-closure prose is served by `END [label]` |
 | §2.3.3 | 48-character set: operator words, deletions, colon rules | served | the twelve §2.3.3 letter sequences work in every operator position beside their symbol forms — `GT LT GE LE NE NG NL` as infix comparisons, `AND OR` as infix booleans, `CAT` for concatenation, prefix `NOT` (also before a sign: `NOT -0`), and `PT` as the locator-qualification word of rule (124), on both sides of an assignment (`opwords.pli`; malformed uses diagnosed in `bad_not_word.pli`, `bad_pt.pli`); the delimiter replacements are served by the lexer: `,.` → `;` and `..` → `:` (`fortyeight.pli`), with the blank-before-`..` refinement left to the source (`A.B ..`); the four un-substitutable characters `@ # _ ?` stay invalid-character diagnostics; `%` ↔ `//` is not served as a substitution because `%` is the preprocessor introducer here (QR2.9, ADR-083) and `//` is the documented line-comment extension (ADR-156) |
 
 ## C28-6571-3 supplemental coverage
@@ -169,16 +169,16 @@ entry points below are where that chain terminates.
 | `RESEXP` (ADR-259) | rejected / not built — recorded | condition-raising opt-in rejected by plan §21 (OB §12.6 / WS-K9); no surface syntax or semantics accepted into the tree; not TR 25.084 scope |
 | `INLIST` / `INARRAY` (ADR-369) | rejected / not built — recorded | membership operators rejected by plan §21 (OB §12.8 / K11); `CHAR(n≤4)` word-compare idea stays in the string path; no surface syntax accepted into the tree; not TR 25.084 scope |
 
-## Gate 0 Unresolved Items (scan-uncertain)
+## Gate 0 Resolutions (scan-uncertain / print-gated items, ADR-392)
 
-| Gate | Issue | Status |
+| Gate | Issue | Resolution |
 |---|---|---|
-| Rule (65) | Extra OCR bracketing for label-array prefix | Core form served (ADR-336); alternatives `scan-uncertain` |
-| Rule (113) | Exact printed rule list unrecoverable | Evidenced forms implemented; matrix from Y33 used |
-| Rule (115) | Circular middle alternative (comma expressions) | Preserved precedence; no conjectured forms |
-| §2.3.2.2 | `compoundend [procedure-optionslist]` | Attested `END [label]` kept; `END OPTIONS(...)` print-gated |
-| Rule (150) | OCR repetition damaged | `/*...*/` behavior evidenced; printed repetition uncertain |
-| §2.3.1 | Delimiter quote ambiguity | Contemporary examples used; lexer keyword-neutral |
+| Rule (65) | Extra OCR bracketing for label-array prefix | Core form served (ADR-336); remaining bracketing unrecoverable from any available source — report-text limitation, no compiler gap |
+| Rule (113) | Exact printed rule list unrecoverable | Evidenced forms implemented; Y33-6003 option matrix is the authority (the report validates against Y33) |
+| Rule (115) | Circular middle alternative (comma expressions) | Recovered precedence hierarchy fully served; middle alternative unrecoverable (cross-check negative) — no conjectured forms |
+| §2.3.2.2 | `compoundend [procedure-optionslist]` | Served per the scan's own placement: `END [label] [OPTIONS(...)|RECURSIVE] ;` accepted as metadata (`end_options.pli`, `bad_end_options.pli`; ADR-392) |
+| Rule (150) | OCR repetition damaged | `/*...*/` comment behavior fully served and attested; only the printed production's repetition notation was lost |
+| §2.3.1 | Delimiter quote ambiguity | Quote handling (`''` escape) served per contemporary examples; lexer keyword-neutral |
 
 ## Updating this ledger
 

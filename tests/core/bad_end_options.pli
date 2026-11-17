@@ -1,0 +1,5 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: unterminated END options list */
+  badend: proc options(main);
+    put skip list('never');
+  end badend options(main;

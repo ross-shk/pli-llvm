@@ -71,6 +71,7 @@ private:
   Proc* startProc(const std::string& name, SourceLoc loc, Proc* parent);
   EndInfo parseProcBody(Proc* p);
   EndInfo parseBody(Proc* owner, std::vector<StmtP>& body, const std::string& ownName);
+  void parseEndOptions(); // compoundend [procedure-optionslist] (TR §2.3.2.2)
   StmtP parseStatement(Proc* owner);
   // condition-prefix-list (rules (60)-(63)): consume `(cond [, cond]*) :`
   // and record the enables/disables on the statement. False after a

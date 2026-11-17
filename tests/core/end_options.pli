@@ -1,0 +1,15 @@
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: compoundend options list */
+ /* §2.3.2.2 compoundend ::= ... END [ procedure-optionslist ] ; an END
+    clause may carry the compoundhead's options again. */
+  endopt: proc options(main);
+    dcl k fixed bin(31);
+    begin;
+      put skip list('in begin');
+    end options(main);
+    do k = 1 to 1;
+      put skip list(k);
+    nxt: end options(main);
+    put skip list('after loop');
+    put skip list('PASS end_options');
+  end endopt options(main);

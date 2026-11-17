@@ -14679,3 +14679,42 @@ No codegen path is added. `tests/core/bad_scaled_picture_scale.pli` pins the dia
 later requires a new ADR, scale handling in the picture formatter and in
 FIXED/PICTURE conversion (`convert()`), and is out of TR 25.084 scope
 until then.
+
+---
+## ADR-392 — Gate 0 closure: scan-attested acceptance and unrecoverable-report-text policy
+
+**Context.** The wave 6 audit left six *print-source gates* open because the
+1968 Vienna OCR scan (`references/TR25.md`) is damaged at exactly those
+points, and the printed report is not available: rule (65) alternatives,
+rule (113) option inventory, rule (115) middle alternative, the
+`compoundend [procedure-optionslist]` placement (§2.3.2.2), rule (150)
+comment repetition, and the §2.3.1 delimiter-quote ambiguity. The audit
+refused a full-conformance claim while they stayed open.
+
+**Decision.** Close each gate by its recoverable evidence:
+
+- §2.3.2.2 — the scan itself prints `END [ procedure-optionslist ] ;`, and
+  the alternative reading (bracket moved to the procedure clause) is the
+  conjecture. Serve the scanned form: an END clause accepts the compoundhead
+  option set (`OPTIONS(...)` / `RECURSIVE` / other words warned with rule (5))
+  as metadata with no runtime effect (`end_options.pli`,
+  `bad_end_options.pli`). If the printed report is ever recovered and
+  disagrees, this acceptance is reverted — it is a single, contained change
+  at `parser.cpp:parseEndOptions`.
+- Rule (65), rule (115) — the remaining bracketing/alternative cannot be
+  settled by any available source (the report's own cross-check for (115) is
+  negative). Every recovered form is served; nothing is conjectured. This is
+  a source-availability limitation of the report text, not a compiler
+  behavior gap.
+- Rule (113) — Y33-6003 (the semantics specification the report validates
+  against) is the authority for the option matrix; all evidenced forms are
+  implemented and tested.
+- Rule (150), §2.3.1 — the comment and quote behavior is fully served and
+  attested; what was lost is notation detail in the printed production, not
+  behavior.
+
+**Consequences.** GRAMMAR-COVERAGE.md's Gate 0 table records these as
+resolutions; the compiler serves every recoverable TR 25.084 form and
+diagnoses (never silently accepts) what cannot be recovered. A
+full-conformance claim now rests on the scanned report text, with the
+§2.3.2.2 placement the one judgement call, recorded here.
