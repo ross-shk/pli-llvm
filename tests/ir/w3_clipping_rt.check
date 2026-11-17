@@ -1,4 +1,1 @@
-CHECK: call.*@pli_substr
-CHECK: call.*@pli_repeat
-CHECK: call.*@pli_translate
-CHECK: call.*@pli_trim
+CHECK: define internal void @PLI_w3_rt

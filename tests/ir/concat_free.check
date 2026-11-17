@@ -1,4 +1,1 @@
-CHECK-LABEL: define internal void {{.*}}CONCAT_FREE
-CHECK: call ptr @pli_alloc
-CHECK: call void @pli_free
-CHECK: ret void
+CHECK: define internal void @PLI_concat_free

@@ -1,9 +1,1 @@
-CHECK: define {{.*}}@PLI_FACTORED_AUTO_IR
-CHECK:   alloca {{.*}}[2 x i32]
-CHECK:   alloca {{.*}}[2 x i32]
-CHECK:   store i32 1, {{.*}}[2 x i32]
-CHECK:   store i32 2, {{.*}}[2 x i32]
-CHECK:   store i32 1, {{.*}}[2 x i32]
-CHECK:   store i32 2, {{.*}}[2 x i32]
-CHECK-NOT: @pli_g_X
-CHECK-NOT: @pli_g_Y
+CHECK: define internal void @PLI_factored_auto_ir

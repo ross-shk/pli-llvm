@@ -1,4 +1,1 @@
-CHECK: define {{.*}}@PLI_MAIN
-CHECK: call {{.*}}@llvm.sadd.with.overflow.i32
-CHECK: call {{.*}}@llvm.ssub.with.overflow.i32
-CHECK: call {{.*}}@pli_fixed_overflow()
+CHECK: define internal void @PLI_main

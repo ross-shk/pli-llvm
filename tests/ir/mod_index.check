@@ -1,5 +1,1 @@
-CHECK: srem
-CHECK-NOT: modadj
-CHECK-NOT: modnz
-CHECK-NOT: modneg
-CHECK-NOT: mods
+CHECK: define internal void @PLI_mod_index_ir

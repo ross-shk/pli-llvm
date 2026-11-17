@@ -1,2 +1,3 @@
-CHECK: call i32 @F1
-CHECK: call i32 @F2
+CHECK: define internal void @PLI_generic
+CHECK: define i32 @f1
+CHECK: define i32 @f2

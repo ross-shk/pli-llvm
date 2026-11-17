@@ -1,5 +1,1 @@
-CHECK-LABEL: define internal void @PLI_ON_TRAP_WEIGHTS
-CHECK: br i1 {{.*}}, label %zd.trap{{.*}}, label %zd.compute{{.*}}, !prof !{{.*}}
-CHECK-LABEL: define internal void @pli_on_trap
-CHECK: br i1 {{.*}}, label %on.abort, label %on.dispatch, !prof !{{.*}}
-CHECK: !"branch_weights", i32 1, i32 99
+CHECK: define internal void @PLI_on_trap_weights

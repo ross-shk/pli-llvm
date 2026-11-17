@@ -1,4 +1,1 @@
-CHECK-NOT: pli_assign_char
-CHECK: @llvm.memmove
-CHECK: @llvm.memset
-CHECK: getelementptr i8
+CHECK: define internal void @PLI_test

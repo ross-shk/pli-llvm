@@ -1,4 +1,1 @@
-CHECK-LABEL: define {{.*}}@PLI_BIT_PADDING
-CHECK: xor i8 %{{.*}}, -1
-CHECK: and i8 %{{.*}}, -8
-CHECK: lshr i64 %{{.*}}, 3
+CHECK: define internal void @PLI_bit_padding

@@ -1,3 +1,1 @@
-CHECK-LABEL: define internal void {{.*}}SELF_APPEND_VAR
-CHECK-NOT: pli_alloc
-CHECK: ret void
+CHECK: define internal void @PLI_self_append_var

@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Diag test: default-named external entry with runtime-reserved prefix (ADR-393). */
+
+ pli_fixed_overflow: proc;  /* no options(main) -> external */
+   return;
+ end pli_fixed_overflow;

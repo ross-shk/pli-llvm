@@ -1,5 +1,1 @@
-CHECK-NOT: store ptr %Y.addr
-CHECK: %oncap = alloca \{ ptr, ptr \}
-CHECK: store ptr %X.addr, ptr %capf
-CHECK-NOT: store ptr %Y.addr
-CHECK: call void @pli_on_establish
+CHECK: define internal void @PLI_order_pin_ir

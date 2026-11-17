@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+/* Golden test for lowercase identifier-derived symbol names (ADR-393). */
+
+ test: proc options(main);
+   dcl counter fixed bin(31) static init(0);
+   dcl x fixed bin(31);
+   x = add_one(counter);
+   if x = 1 then put skip list('PASS'); else put skip list('FAIL');
+   return;
+
+ add_one: proc(v) returns(fixed bin(31));
+   dcl v fixed bin(31);
+   return (v + 1);
+ end add_one;
+
+ end test;

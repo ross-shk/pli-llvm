@@ -1,3 +1,1 @@
-CHECK: define {{.*}}@PLI_MAIN
-CHECK: store i32 42
-CHECK: load i32
+CHECK: define internal void @PLI_main

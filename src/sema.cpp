@@ -469,9 +469,11 @@ Symbol* Sema::declare(Scope* sc, const std::string& n, Type t, SourceLoc l, Symb
   // The irName must be unique module-wide: a name declared in a nested
   // BEGIN block shadows an outer one of the same spelling (rule (68)), and the
   // two symbols still need distinct storage. Disambiguate with a numeric suffix.
-  std::string base = (k == Symbol::Param) ? "%" + n + ".ptr"
-                     : isStatic           ? "@pli_g_" + n
-                                          : "%" + n + ".addr";
+  // ADR-393: the LLVM-facing name spells the identifier lowercase; the lookup
+  // key `n` keeps the internal upper-cased fold.
+  std::string base = (k == Symbol::Param) ? "%" + pli::extSymbol(n) + ".ptr"
+                     : isStatic           ? "@pli_g_" + pli::extSymbol(n)
+                                          : "%" + pli::extSymbol(n) + ".addr";
   std::string ir = base;
   for (int d = 1; !irNames_.insert(ir).second; ++d)
     ir = base + "$" + std::to_string(d);
@@ -569,14 +571,22 @@ bool Sema::run(Program& prog, bool compileOnly) {
     if (p->isPackage)
       continue; // packages declare no symbol and need no irName
     // Rule (42): a top-level non-MAIN procedure is externally linked under
-    // its upper-cased name (already upper-cased by the lexer), so another
-    // translation unit's ENTRY reference resolves at link time. The MAIN
-    // procedure keeps its module-private name: only its own `main` shim
-    // invokes it. Nested procedures stay module-private unless exported.
+    // its lower-cased name (ADR-393: the identifier's external spelling; the
+    // internal fold stays upper-cased), so another translation unit's ENTRY
+    // reference resolves at link time. The MAIN procedure keeps its
+    // module-private name: only its own `main` shim invokes it. Nested
+    // procedures stay module-private unless exported.
     p->isExternal = p->isExternal || (!p->parent && !p->isMain);
-    p->irName = p->isExternal
-                    ? "@" + p->name
-                    : "@PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + p->name;
+    if (p->isExternal) {
+      p->irName = "@" + pli::extSymbol(p->name);
+      // A default-named external proc spelled into the runtime namespace
+      // collides at link time (ADR-393); EXTERNAL('...') avoids the fold.
+      if (pli::reservedPrefix(pli::extSymbol(p->name)))
+        d_.warn(p->loc, "'" + p->name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
+                            p->irName + "); rename it or use EXTERNAL('...')");
+    } else {
+      p->irName = "@PLI_" + (p->parent ? pli::extSymbol(p->parent->name) + "$" : std::string()) + pli::extSymbol(p->name);
+    }
     // A function procedure's symbol carries its result type so that a
     // function reference (rule (123)) types as the returned value.
     Scope* outer = p->parent ? scopeFor(p->parent) : rootScope_;
@@ -1245,7 +1255,7 @@ void Sema::resolveParams(Scope* sc, Proc* p, const std::vector<std::string>& nam
       s = it->second;
       s->kind = Symbol::Param;
       s->isStatic = false;
-      s->irName = "%" + pname + ".ptr";
+      s->irName = "%" + pli::extSymbol(pname) + ".ptr";
       storage_.erase(std::remove(storage_.begin(), storage_.end(), s), storage_.end());
     } else {
       char c = pname.empty() ? 'X' : pname[0];
@@ -1772,7 +1782,12 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           sym->entryUses = item.uses;
           sym->entrySets = item.sets;
           sym->reducible = item.reducible;
-          sym->irName = "@" + (item.extName.empty() ? item.name : item.extName);
+          // ADR-393: the default external spelling folds to lowercase;
+          // EXTERNAL('exact') keeps the exact C symbol.
+          sym->irName = "@" + (item.extName.empty() ? pli::extSymbol(item.name) : item.extName);
+          if (item.extName.empty() && pli::reservedPrefix(pli::extSymbol(item.name)))
+            d_.warn(item.loc, "'" + item.name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
+                                  sym->irName + "); rename it or use EXTERNAL('...')");
           item.sym = sym;
           entries_.push_back(sym);
           if (!item.abnormalLabel.empty())
@@ -2059,7 +2074,7 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // common global, so every module resolves the same symbol.
           item.sym->external = true;
           item.sym->isStatic = true;
-          item.sym->irName = "@" + (item.extName.empty() ? "pli_g_" + item.name : item.extName);
+          item.sym->irName = "@" + (item.extName.empty() ? "pli_g_" + pli::extSymbol(item.name) : item.extName);
         }
         if (item.fileAttr) {
           // A FILE variable carries no runtime storage of its own: its identity

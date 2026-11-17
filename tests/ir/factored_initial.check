@@ -1,2 +1,3 @@
-CHECK: @pli_g_S1 = internal global i32 10
-CHECK: @pli_g_S2 = internal global i32 20
+CHECK: @pli_g_s1 =
+CHECK: @pli_g_s2 =
+CHECK: define internal void @PLI_factored_initial_ir

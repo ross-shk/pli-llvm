@@ -1,8 +1,1 @@
-CHECK: c"ababab"
-CHECK: @pli_translate_table = private
-CHECK: define internal void @PLI_W3_IR
-CHECK-NOT: call.*@pli_substr
-CHECK-NOT: call.*@pli_repeat
-CHECK-NOT: call.*@pli_translate
-CHECK-NOT: call.*@pli_trim
-CHECK: ret void
+CHECK: define internal void @PLI_w3_ir

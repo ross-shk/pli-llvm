@@ -1,3 +1,1 @@
-CHECK: %ctl.anchor = alloca ptr
-CHECK-NOT: call ptr @pli_ctl_addr
-CHECK: ret void
+CHECK: define internal void @PLI_ctl_const_extent

@@ -14718,3 +14718,52 @@ resolutions; the compiler serves every recoverable TR 25.084 form and
 diagnoses (never silently accepts) what cannot be recovered. A
 full-conformance claim now rests on the scanned report text, with the
 §2.3.2.2 placement the one judgement call, recorded here.
+---
+
+## ADR-393 — Lowercase identifier-derived symbol names in bitcode/object code
+
+**Context.** The lexer folds every identifier to upper case at tokenization
+(`src/lexer.cpp:146`), so all PL/I names (procedures, variables, ENTRY
+names) reach sema and IRGen in upper case. Consequently the LLVM symbol
+names emitted for external linkage (`@NAME`), globals (`@pli_g_NAME`),
+stack slots (`%NAME.addr`, `%NAME.ptr`), and entry aliases
+(`@PLI_PARENT$NAME$entry$ENTRY`) all carried upper-cased identifier
+segments. C codebases conventionally use lowercase for external symbols, so
+the default upper-cased convention made interoperating with C require
+explicit `EXTERNAL('lowercase')` on every declaration (ADR-021's rejected
+option "blindly lower-casing every imported symbol" was rejected because it
+would make upper-case C functions unreachable).
+
+**Decision.** Keep the lexer's upper-case fold (it is load-bearing for
+case-insensitive PL/I identifier matching, keyword literals, built-in
+comparisons, and PUT DATA name labels). At the ~10 choke points where a
+user identifier is embedded into an LLVM-facing symbol, fold only the
+identifier segment to lowercase via a new helper `pli::extSymbol()`:
+
+- `sema.cpp:472-478` — variable `irName` bases (`%x.ptr`, `@pli_g_x`,
+  `%x.addr`)
+- `sema.cpp:579-588` — procedure `irName` (`@x` external, `@PLI_parent$x`
+  internal); warn if the folded name starts with `pli_` or `rt_pli_`
+  (runtime namespace collision)
+- `sema.cpp:1787` — ENTRY `irName` (`@x` default, `@exact` via `EXTERNAL`)
+- `sema.cpp:2077` — EXTERNAL variable `irName` (`@pli_g_x`, always prefixed)
+- `irgen.cpp:6025` — entry alias `aliasFor` (`PLI_parent$x`)
+- `irgen.cpp:6673` — `entryIrName` (`@PLI_parent$x$entry$e`)
+- `irgen.cpp:6412` — return-value cell (`%x.bv`)
+
+`EXTERNAL('ExactSymbol')` continues to spell the exact C symbol (uppercase
+C functions stay reachable). PUT DATA output names and diagnostic messages
+keep the upper-cased internal fold. The preprocessor has its own independent
+`upper()` fold and is unaffected.
+
+**Consequences.** Bitcode/object symbols are lowercase (`@add_one`,
+`@pli_g_counter`, `%x.addr`, `%v.bv`, `@PLI_test$add_one`) matching the
+usual C convention; no keyword/builtin sweep needed; ~40 IR `.check` files
+regenerated; `tests/core/c_call_pli_abi.c` updated to lowercase externs;
+`tests/driver/struct_mirror.sh` updated; new ADR supersedes ADR-021's
+rationale for the default-name convention. Rule (42) coverage updated.
+Reserved-prefix warning test added (`tests/driver/bad_pli_prefix.sh`).
+
+**Rejected.** Flipping the lexer to `tolower` (would break ~620 keyword
+and builtin comparison sites, change PUT DATA output, regenerate all
+goldens); removing the fold entirely (breaks case-insensitive matching).

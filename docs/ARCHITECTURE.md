@@ -374,8 +374,10 @@ use additional hidden extent or length arguments. Internal procedures use a
 static link to access enclosing automatic storage. Storage classes and
 aggregate descriptors have restrictions documented in the coverage ledger.
 
-**Linkage.** External procedures use their upper-cased PL/I name for linkage.
-Package exports and other naming restrictions are described in the coverage
+**Linkage.** External procedures use their lower-cased PL/I name for linkage
+(ADR-393: the identifier's external spelling folds to lowercase; the
+internal fold stays upper-cased for case-insensitive matching). Package
+exports and other naming restrictions are described in the coverage
 ledger.
 
 **Entry point.** An `OPTIONS(MAIN)` procedure is exposed through a C `main`

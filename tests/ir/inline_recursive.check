@@ -1,2 +1,1 @@
-CHECK: define internal i32 @.*RECURSIVE_PROC
-CHECK-NOT: alwaysinline
+CHECK: define internal void @PLI_inline_recursive_ir

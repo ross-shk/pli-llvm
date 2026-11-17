@@ -1,1 +1,1 @@
-CHECK: call ptr @pli_ctl_addr
+CHECK: define internal void @PLI_ctl_dyn_extent

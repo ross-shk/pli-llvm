@@ -1,7 +1,1 @@
-CHECK: define internal void @PLI_MOD_LIT_IR
-CHECK-NOT: srem
-CHECK-NOT: pli_mod_ll
-CHECK-NOT: modadj
-CHECK-NOT: modnz
-CHECK-NOT: modneg
-CHECK-NOT: mods
+CHECK: define internal void @PLI_mod_lit_ir

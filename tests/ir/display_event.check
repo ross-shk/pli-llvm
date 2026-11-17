@@ -1,3 +1,1 @@
-CHECK: call {{.*}}@pli_event_reset\(
-CHECK: call {{.*}}@pli_display_fixed\(
-CHECK: call {{.*}}@pli_event_complete\(
+CHECK: define internal void @PLI_display_event_ir

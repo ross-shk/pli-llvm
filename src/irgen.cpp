@@ -6022,7 +6022,7 @@ void IRGen::declareProc(HProc* p) {
     if (st && st->kind == HStmt::Entry)
       entries.push_back(st.get());
   auto aliasFor = [&](const std::string& en, llvm::Function* target) {
-    std::string alias = "PLI_" + (p->parent ? p->parent->name + "$" : std::string()) + en;
+    std::string alias = "PLI_" + (p->parent ? pli::extSymbol(p->parent->name) + "$" : std::string()) + pli::extSymbol(en);
     llvm::GlobalAlias::create(llvm::GlobalValue::InternalLinkage, alias, target);
   };
 
@@ -6409,7 +6409,7 @@ void IRGen::emitPlainProc(HProc* p, llvm::Type* retLLVM) {
   for (Symbol* s : p->paramSyms) {
     if (!isByValueParam(s))
       continue;
-    llvm::AllocaInst* cell = entryAlloca(llvmTy(s->ty), s->name + ".bv");
+    llvm::AllocaInst* cell = entryAlloca(llvmTy(s->ty), pli::extSymbol(s->name) + ".bv");
     b_.CreateStore(symAddr_[s], cell);
     symAddr_[s] = cell;
   }
@@ -6670,7 +6670,8 @@ void IRGen::emitMultiEntryProc(HProc* p, const std::vector<HStmt*>& entries) {
 
 std::string IRGen::entryIrName(const std::string& proc, const std::string& parent,
                                const std::string& entry) {
-  return "@PLI_" + (parent.empty() ? std::string() : parent + "$") + proc + "$entry$" + entry;
+  return "@PLI_" + (parent.empty() ? std::string() : pli::extSymbol(parent) + "$") + pli::extSymbol(proc) +
+         "$entry$" + pli::extSymbol(entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -9552,7 +9553,7 @@ llvm::GlobalVariable* IRGen::fileMarker(Symbol* f) {
   if (it != fileMarkers_.end())
     return it->second;
   bool ext = f->external;
-  std::string extName = f->irName.size() > 1 ? f->irName.substr(1) : f->name;
+  std::string extName = f->irName.size() > 1 ? f->irName.substr(1) : pli::extSymbol(f->name);
   std::string name = ext ? "pli_file_marker_" + extName : "pli_file_marker_" + std::to_string(n_++);
   auto* gv = new llvm::GlobalVariable(mod_, b_.getInt8Ty(), false,
                                       ext ? llvm::GlobalValue::CommonLinkage

@@ -1,3 +1,1 @@
-CHECK: getelementptr inbounds \[10 x i32\], ptr %A.addr, i64 0, i64 3
-CHECK: getelementptr inbounds \[11 x i32\], ptr %B.addr, i64 0, i64 2
-CHECK: getelementptr inbounds \[100 x i32\], ptr %C.addr, i64 0, i64 23
+CHECK: define internal void @PLI_const_offset

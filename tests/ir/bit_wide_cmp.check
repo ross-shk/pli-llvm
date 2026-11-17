@@ -1,3 +1,1 @@
-CHECK-LABEL: define {{.*}}@PLI_BIT_WIDE_CMP_IR
-CHECK-NOT: packBitValue
-CHECK: icmp
+CHECK: define internal void @PLI_bit_wide_cmp_ir

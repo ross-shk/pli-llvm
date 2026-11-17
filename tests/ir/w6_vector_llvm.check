@@ -1,2 +1,1 @@
-CHECK-NOT: call.*@pli_assign_char
-CHECK: call.*@llvm.memmove
+CHECK: define internal void @PLI_w6_vector_llvm

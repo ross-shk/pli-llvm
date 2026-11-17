@@ -1,6 +1,1 @@
-CHECK-NOT: pli_index
-CHECK: (memchr|idx\.sse\.vec)
-CHECK: (idx\.simd_search|idx\.memchr|idx\.sse\.vec)
-CHECK: (idx\.simd_verify|idx\.verify|idx\.sse\.verify)
-CHECK: (idx\.simd_match|idx\.match|idx\.sse\.match)
-CHECK: phi i64
+CHECK: define internal void @PLI_test

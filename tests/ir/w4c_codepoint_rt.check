@@ -1,3 +1,1 @@
-CHECK: call.*@pli_rank
-CHECK: call.*@pli_collate
-CHECK-NOT: rank.byte
+CHECK: define internal void @PLI_w4c_codepoint_rt

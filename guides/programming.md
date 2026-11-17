@@ -579,7 +579,7 @@ An element prefix takes constant subscripts only, and the array must have a fixe
 
 ## Procedures & functions
 
-Top-level procedures link externally (upper-cased name). Nested procedures see the enclosing procedure's variables through a static link — like a closure that captures its surroundings.
+Top-level procedures link externally (lower-cased name; ADR-393). Nested procedures see the enclosing procedure's variables through a static link — like a closure that captures its surroundings.
 
 ```pli
  main: proc options(main);
@@ -1550,6 +1550,8 @@ Dates, addresses, and friends: `date()` gives `YYYYMMDD`, `time()` gives `HHMMSS
 ## C interoperability
 
 Call C like `ctypes` (Python) or `cgo` (Go). Declare the C function as an `entry` with `options(linkage(system))` (or `byvalue`), then call it. PL/I passes scalars by reference by default; the linkage option marshals them as C values.
+
+The default external symbol name is the lower-cased PL/I identifier (ADR-393); an upper-case C function requires EXTERNAL('ExactName').
 
 ```pli
  dcl c_add entry(fixed bin(31), fixed bin(31))

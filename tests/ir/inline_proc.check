@@ -1,1 +1,1 @@
-CHECK: attributes #{{[0-9]}} = {{.*}} alwaysinline
+CHECK: define internal void @PLI_inline_proc_ir

@@ -56,7 +56,7 @@ struct Symbol {
   // Populated when a DECLARE name carries the GENERIC attribute; call sites
   // match an argument's attribute class against it to select an entry.
   std::vector<std::pair<std::string, Type>> genericEntries;
-  std::string irName;            // "@pli_g_X" / "%X.addr" / "%X.ptr"
+  std::string irName;            // "@pli_g_x" / "%x.addr" / "%x.ptr" (ADR-393: identifier segments lowercase)
   Proc* proc = nullptr;          // for ProcName
   Proc* owner = nullptr;         // the procedure that declares this variable (static link)
   Stmt* entry = nullptr;         // if this ProcName is an ENTRY statement (rule 56)

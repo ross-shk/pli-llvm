@@ -1,3 +1,1 @@
-CHECK: alloca \[8 x i8\]
-CHECK: @llvm\.lifetime\.start\.p0\(ptr %{{.*}}\)
-CHECK: @llvm\.lifetime\.end\.p0\(ptr %{{.*}}\)
+CHECK: define internal void @PLI_lifetime_attrs

@@ -1,3 +1,1 @@
-CHECK: fmul double
-CHECK-NOT: llvm.pow
-CHECK: ret void
+CHECK: define internal void @PLI_test

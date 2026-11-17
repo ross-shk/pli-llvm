@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 #include <functional>
+#include <cctype>
 
 struct HProc;
 struct HProgram;
@@ -302,5 +303,25 @@ struct BitTestMerge {
 };
 BitTestMerge mergeBitTests(const std::string& mask1, const std::string& want1,
                             const std::string& mask2, const std::string& want2);
+
+// ADR-393: the LLVM-facing spelling of an identifier-derived symbol name.
+// The internal representation keeps the lexer's upper-cased fold (case-
+// insensitive PL/I matching, keyword and built-in literals); only the symbol
+// name folds to lowercase. Prefixes such as "pli_g_" / "PLI_" are attached by
+// the caller and stay as written.
+inline std::string extSymbol(const std::string& n) {
+  std::string out = n;
+  for (char& c : out)
+    c = (char)std::tolower((unsigned char)c);
+  return out;
+}
+
+// ADR-393: a default-named external symbol landing in the pli_runtime
+// namespace collides at link time, so a name spelled into it gets a warning.
+// The runtime exports both pli_* (pli_abort, pli_on_establish, ...) and
+// rt_pli_* (rt_pli_on_push, rt_pli_on_pop) symbols.
+inline bool reservedPrefix(const std::string& n) {
+  return n.rfind("pli_", 0) == 0 || n.rfind("rt_pli_", 0) == 0;
+}
 
 } // namespace pli
