@@ -93,8 +93,19 @@ static std::string defaultExecutableName(const std::string& triple) {
   return isCOFFTargetTriple(triple) ? "a.exe" : "a.out";
 }
 
-static std::string normalizeExecutableOutput(const std::string& name, const std::string& triple) {
-  if (!isCOFFTargetTriple(triple))
+static std::string defaultSharedLibName(const std::string& triple) {
+  llvm::Triple t(triple.empty() ? llvm::sys::getDefaultTargetTriple() : triple);
+  if (t.getObjectFormat() == llvm::Triple::COFF)
+    return "a.dll";
+  if (t.getObjectFormat() == llvm::Triple::MachO)
+    return "a.dylib";
+  return "a.so";
+}
+
+static std::string normalizeExecutableOutput(const std::string& name,
+                                             const std::string& triple,
+                                             bool shared = false) {
+  if (shared || !isCOFFTargetTriple(triple))
     return name;
   fs::path p(name);
   if (p.filename().empty() || !p.filename().extension().empty())
@@ -168,6 +179,8 @@ static void usage() {
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
          "  -static          produce a statically linked binary\n"
+         "  -shared          produce a shared library (.so/.dylib/.dll) instead of an\n"
+         "                   executable; exports all defined external symbols\n"
          "  --subsystem <s>  Windows PE subsystem: console (default) or windows\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
          "  --explain <n>    print TR 25.084 rule (n)'s production and exit\n"
@@ -596,7 +609,8 @@ int main(int argc, char** argv) {
   bool subsystemExplicit = false;
   std::vector<std::string> linkArgs;    // extra args appended to the link step
   std::vector<std::string> includeDirs; // %INCLUDE search dirs (-I, repeatable)
-  bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false;
+  bool emitLLVM = false, syntaxOnly = false, keepLL = false, verbose = false, compileOnly = false,
+       buildSharedLib = false;
   bool print_hir = false, print_facts = false, release = false, debug = false;
   bool marchNative = false;
   bool noSizeChecks = false, noSizeChecksExplicit = false, noZdivChecks = false,
@@ -676,6 +690,8 @@ int main(int argc, char** argv) {
       linkArgs.push_back(a);
     else if (a == "-static")
       linkArgs.push_back(a);
+    else if (a == "-shared")
+      buildSharedLib = true;
     else if (a == "--subsystem") {
       subsystem = next("--subsystem");
       subsystemExplicit = true;
@@ -974,6 +990,13 @@ int main(int argc, char** argv) {
   // --print-hir, -fsyntax-only) stop after all inputs are handled.
   const bool terminalMode =
       compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts;
+  // -shared produces a linked shared library, so it conflicts with terminal
+  // output modes that stop before linking.
+  if (buildSharedLib && terminalMode) {
+    std::cerr << "pli: -shared is incompatible with -c, -emit-llvm, --emit-mlir,\n"
+                 "                   -fsyntax-only, --print-hir, or --print-facts\n";
+    return 2;
+  }
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
@@ -1029,9 +1052,9 @@ int main(int argc, char** argv) {
   if (triple.empty())
     triple = llvm::sys::getDefaultTargetTriple();
   if (output.empty())
-    output = defaultExecutableName(triple);
+    output = buildSharedLib ? defaultSharedLibName(triple) : defaultExecutableName(triple);
   else
-    output = normalizeExecutableOutput(output, triple);
+    output = normalizeExecutableOutput(output, triple, buildSharedLib);
 
   {
     llvm::Triple llt(triple);
@@ -1077,13 +1100,16 @@ int main(int argc, char** argv) {
         return emb.dir + "/" + logical;
       };
 
-      // Link-mode scan: PIE unless -static/-no-pie.
+      // Link-mode scan: PIE unless -static/-no-pie. Shared libs are not PIE
+      // executables, so force wantPIE off when -shared is in effect.
       bool wantPIE = true;
       for (const std::string& la : linkArgs) {
         std::string f = la.rfind("-Wl,", 0) == 0 ? la.substr(4) : la;
         if (f == "-static" || f == "-no-pie" || f == "-nopie" || f == "-no-pic")
           wantPIE = false;
       }
+      if (buildSharedLib)
+        wantPIE = false;
 
       std::vector<std::string> argStore = {"ld.lld"};
       if (isMachO) {
@@ -1110,31 +1136,45 @@ int main(int argc, char** argv) {
           else
             argStore.push_back(s);
         }
+        if (buildSharedLib)
+          argStore.push_back("-dynamiclib");
       } else if (objFmt == llvm::Triple::ELF) {
-        // Linux/musl: static link, every sysroot artifact an explicit path arg;
-        // no -L<sysroot>, no -lc (libc.a already explicit).
+        // Linux/musl: every sysroot artifact an explicit path arg; no -L<sysroot>,
+        // no -lc (libc.a already explicit). Shared libs drop CRT objects and
+        // -static/-pie, and add -shared instead of -pie.
         const std::string arch = llt.getArchName().str();
-        std::string crt1 = sysrootPath("crt1.o");
-        std::string crti = sysrootPath("crti.o");
-        std::string crtn = sysrootPath("crtn.o");
         std::string libc = sysrootPath("libc.a");
         std::string builtins = sysrootPath("libpli_builtins-" + arch + ".a");
         std::string libm = sysrootPath("libm.a");
-        if (crt1.empty() || crti.empty() || crtn.empty() || libc.empty() || builtins.empty() ||
-            libm.empty()) {
+        if (libc.empty() || builtins.empty() || libm.empty()) {
           std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
           removeTempObjects();
           if (!useMemSysroot)
             pli::cleanupMaterializedSysroot(emb.dir);
           return 1;
         }
-        argStore.push_back("-static");
-        wantPIE = false;
-        argStore.push_back(crt1);
-        argStore.push_back(crti);
-        for (const std::string& o : objs)
-          argStore.push_back(o);
-        argStore.push_back(crtn);
+        if (!buildSharedLib) {
+          std::string crt1 = sysrootPath("crt1.o");
+          std::string crti = sysrootPath("crti.o");
+          std::string crtn = sysrootPath("crtn.o");
+          if (crt1.empty() || crti.empty() || crtn.empty()) {
+            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            removeTempObjects();
+            if (!useMemSysroot)
+              pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          argStore.push_back("-static");
+          wantPIE = false;
+          argStore.push_back(crt1);
+          argStore.push_back(crti);
+          for (const std::string& o : objs)
+            argStore.push_back(o);
+          argStore.push_back(crtn);
+        } else {
+          for (const std::string& o : objs)
+            argStore.push_back(o);
+        }
         argStore.push_back(libc);
         argStore.push_back(builtins);
         // systemLibs: -lm -> libm.a; -lc covered by explicit libc.a.
@@ -1146,7 +1186,9 @@ int main(int argc, char** argv) {
           else
             argStore.push_back(s);
         }
-        if (wantPIE) {
+        if (buildSharedLib) {
+          argStore.push_back("-shared");
+        } else if (wantPIE) {
           argStore.push_back("-pie");
           argStore.push_back("--eh-frame-hdr");
           argStore.push_back("--hash-style=gnu");
@@ -1154,30 +1196,52 @@ int main(int argc, char** argv) {
         }
       } else if (isCOFF) {
         // Windows/mingw: MinGW driver (GNU-ld-compatible). Use explicit mem
-        // blob paths for all sysroot artifacts; no -L sysroot dir.
+        // blob paths for all sysroot artifacts; no -L sysroot dir. Shared libs
+        // drop CRT objects and --subsystem, and add /DLL + --export-all-symbols.
         argStore.push_back("-m");
         argStore.push_back("i386pep");
-        std::string crt2 = sysrootPath("crt2.o");
-        std::string crtbegin = sysrootPath("crtbegin.o");
-        std::string fltused = sysrootPath("fltused.o");
-        std::string chkstk = sysrootPath("chkstk.o");
-        std::string gsStubs = sysrootPath("gs_stubs.o");
-        std::string crtend = sysrootPath("crtend.o");
-        if (crt2.empty() || crtbegin.empty() || fltused.empty() || chkstk.empty() ||
-            gsStubs.empty() || crtend.empty()) {
-          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
-          removeTempObjects();
-          if (!useMemSysroot)
-            pli::cleanupMaterializedSysroot(emb.dir);
-          return 1;
+        if (!buildSharedLib) {
+          std::string crt2 = sysrootPath("crt2.o");
+          std::string crtbegin = sysrootPath("crtbegin.o");
+          std::string fltused = sysrootPath("fltused.o");
+          std::string chkstk = sysrootPath("chkstk.o");
+          std::string gsStubs = sysrootPath("gs_stubs.o");
+          std::string crtend = sysrootPath("crtend.o");
+          if (crt2.empty() || crtbegin.empty() || fltused.empty() || chkstk.empty() ||
+              gsStubs.empty() || crtend.empty()) {
+            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            removeTempObjects();
+            if (!useMemSysroot)
+              pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          argStore.push_back(crt2);
+          argStore.push_back(crtbegin);
+          for (const std::string& o : objs)
+            argStore.push_back(o);
+          argStore.push_back(fltused);
+          argStore.push_back(chkstk);
+          argStore.push_back(gsStubs);
+          argStore.push_back(crtend);
+        } else {
+          for (const std::string& o : objs)
+            argStore.push_back(o);
+          // The PL/I runtime references __chkstk (stack probes) and _fltused;
+          // keep those objects but drop the entry/CRT objects (crt2, crtbegin,
+          // crtend, gsStubs) and --subsystem. A shared DLL has no entry point,
+          // so pass /NOENTRY so lld-link does not require DllMainCRTStartup.
+          std::string fltused = sysrootPath("fltused.o");
+          std::string chkstk = sysrootPath("chkstk.o");
+          if (fltused.empty() || chkstk.empty()) {
+            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            removeTempObjects();
+            if (!useMemSysroot)
+              pli::cleanupMaterializedSysroot(emb.dir);
+            return 1;
+          }
+          argStore.push_back(fltused);
+          argStore.push_back(chkstk);
         }
-        argStore.push_back(crt2);
-        argStore.push_back(crtbegin);
-        for (const std::string& o : objs)
-          argStore.push_back(o);
-        argStore.push_back(fltused);
-        argStore.push_back(chkstk);
-        argStore.push_back(gsStubs);
         // Import libs + GCC helpers: pass as explicit file paths.
         for (const char* lib : {"libmingw32.a", "libgcc.a", "libmoldname.a", "libmingwex.a",
                                 "libucrt.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a",
@@ -1192,8 +1256,13 @@ int main(int argc, char** argv) {
           }
           argStore.push_back(p);
         }
-        argStore.push_back(crtend);
-        argStore.push_back("--subsystem=" + subsystem);
+        if (!buildSharedLib)
+          argStore.push_back("--subsystem=" + subsystem);
+        else {
+          argStore.push_back("/DLL");
+          argStore.push_back("--export-all-symbols");
+          argStore.push_back("/NOENTRY");
+        }
       } else {
         std::cerr << "pli: unsupported object format for link\n";
         removeTempObjects();
