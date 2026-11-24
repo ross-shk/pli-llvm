@@ -67,8 +67,8 @@ $PLI "$OUT.lib.pli" -c -o "$OUT.lib.o" || { echo "FAIL package: lib compile"; ex
 $PLI "$OUT.main.pli" -c -o "$OUT.main.o" || { echo "FAIL package: main compile"; exit 1; }
 # Symbol prefix: ELF has none, Mach-O prepends _ (C calling convention).
 SYM_PREFIX=$([ "$(uname -s)" = "Darwin" ] && echo "_" || echo "")
-nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PUB" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}PUB not exported"; exit 1; }
-if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}PRIV" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}PRIV leaked"; exit 1; fi
+nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}pub" >/dev/null || { echo "FAIL package: ${SYM_PREFIX}pub not exported"; exit 1; }
+if nm "$OUT.lib.o" | grep " T ${SYM_PREFIX}priv" >/dev/null; then echo "FAIL package: ${SYM_PREFIX}priv leaked"; exit 1; fi
 # The merged runtime needs libm on Linux (a no-op on macOS and Windows).
 $LINKER "$OUT.main.o" "$OUT.lib.o" $MATHLIB $RTLIBFLAGS -o "$OUT$EXE" || { echo "FAIL package: link"; exit 1; }
 "$OUT$EXE"

@@ -182,7 +182,7 @@ pout=$(echo "$out" | grep '^checksum ' | head -1)
 $PLI --keep-ll -O2 -c "$OUT.pli" -o "$OUT/struct_mirror.o" 2>"$OUT.pli.err" || fail "PL/I -O2 build failed"
 $CLANG -O2 -DSM_STANDALONE -emit-llvm -S "$OUT.c" -o "$OUT.vec.ll" 2>"$OUT.c.err" || fail "C -O2 IR failed"
 
-pli_fn=$(awk '/^define .*@pli_struct_mirror/,/^}/' "$OUT/struct_mirror.ll")
+pli_fn=$(awk '/^define .*@PLI_struct_mirror/,/^}/' "$OUT/struct_mirror.ll")
 c_fn=$(awk '/^define .*@main/,/^}/' "$OUT.vec.ll")
 [ -n "$pli_fn" ] || fail "no PL/I procedure in the optimized IR"
 [ -n "$c_fn" ] || fail "no C main in the optimized IR"

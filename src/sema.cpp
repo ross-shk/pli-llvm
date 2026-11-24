@@ -582,8 +582,8 @@ bool Sema::run(Program& prog, bool compileOnly) {
       // A default-named external proc spelled into the runtime namespace
       // collides at link time (ADR-393); EXTERNAL('...') avoids the fold.
       if (pli::reservedPrefix(pli::extSymbol(p->name)))
-        d_.warn(p->loc, "'" + p->name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
-                            p->irName + "); rename it or use EXTERNAL('...')");
+        d_.error(p->loc, "'" + p->name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
+                            p->irName + "); rename it or use EXTERNAL('...')", "");
     } else {
       p->irName = "@PLI_" + (p->parent ? pli::extSymbol(p->parent->name) + "$" : std::string()) + pli::extSymbol(p->name);
     }
@@ -1786,8 +1786,8 @@ void Sema::collectDecls(std::vector<StmtP>& body, Scope* sc, Proc* p, bool isSta
           // EXTERNAL('exact') keeps the exact C symbol.
           sym->irName = "@" + (item.extName.empty() ? pli::extSymbol(item.name) : item.extName);
           if (item.extName.empty() && pli::reservedPrefix(pli::extSymbol(item.name)))
-            d_.warn(item.loc, "'" + item.name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
-                                  sym->irName + "); rename it or use EXTERNAL('...')");
+            d_.error(item.loc, "'" + item.name + "' is a default-named external entry spelling a runtime-reserved symbol (" +
+                                    sym->irName + "); rename it or use EXTERNAL('...')", "");
           item.sym = sym;
           entries_.push_back(sym);
           if (!item.abnormalLabel.empty())

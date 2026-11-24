@@ -7,7 +7,7 @@
     - structure-valued functions via hidden result buffer pointer (sret)
     - structure parameters passed by reference, callee writes visible. */
 
- pliabi: package exports(pli_add_one, pli_inc_int, pli_make_rec, pli_mutate_rec);
+ pliabi: package exports(add_one, inc_int, make_rec, mutate_rec);
 
    dcl 1 rec_t,
      2 tag  fixed bin(31),
@@ -15,44 +15,44 @@
      2 code fixed bin(31);
 
    /* Scalar function result: returned by value to C. */
-   pli_add_one: procedure(x) returns(fixed bin(31));
-     declare x fixed bin(31);
-     return(x + 1);
-   end pli_add_one;
+   add_one: procedure(x) returns(fixed bin(31));
+      declare x fixed bin(31);
+      return(x + 1);
+    end add_one;
 
-   /* Scalar procedure: sees C-written changes (BYADDR). */
-   pli_inc_int: procedure(x);
-     declare x fixed bin(31);
-     x = x + 100;
-   end pli_inc_int;
+    /* Scalar procedure: sees C-written changes (BYADDR). */
+    inc_int: procedure(x);
+      declare x fixed bin(31);
+      x = x + 100;
+    end inc_int;
 
-   /* Structure-valued function: returns via hidden result buffer pointer. */
-   pli_make_rec: procedure(x) returns(rec_t);
-     declare x fixed bin(31);
-     declare 1 r,
-       2 tag  fixed bin(31),
-       2 flag bit(1),
-       2 code fixed bin(31);
+    /* Structure-valued function: returns via hidden result buffer pointer. */
+    make_rec: procedure(x) returns(rec_t);
+      declare x fixed bin(31);
+      declare 1 r,
+        2 tag  fixed bin(31),
+        2 flag bit(1),
+        2 code fixed bin(31);
 
-     r.tag  = x;
-     r.flag = '1'b;
-     r.code = x * 2;
+      r.tag  = x;
+      r.flag = '1'b;
+      r.code = x * 2;
 
-     return(r);
-   end pli_make_rec;
+      return(r);
+    end make_rec;
 
-   /* Structure parameter: C passes &struct; PL/I mutates visible fields. */
-   pli_mutate_rec: procedure(r, x);
-     declare 1 r,
-       2 tag  fixed bin(31),
-       2 flag bit(1),
-       2 code fixed bin(31);
-     declare x fixed bin(31);
+    /* Structure parameter: C passes &struct; PL/I mutates visible fields. */
+    mutate_rec: procedure(r, x);
+      declare 1 r,
+        2 tag  fixed bin(31),
+        2 flag bit(1),
+        2 code fixed bin(31);
+      declare x fixed bin(31);
 
-     r.tag  = x + 10;
-     r.flag = '0'b;
-     r.code = x + 20;
-   end pli_mutate_rec;
+      r.tag  = x + 10;
+      r.flag = '0'b;
+      r.code = x + 20;
+    end mutate_rec;
 
  end pliabi;
 

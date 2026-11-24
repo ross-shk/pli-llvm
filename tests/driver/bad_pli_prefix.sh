@@ -21,9 +21,9 @@ cat > "$OUT.pli" <<'EOF'
  end pli_fixed_overflow;
 EOF
 
-# Compile and capture stderr; the warning must appear.
-$PLI -fsyntax-only "$OUT.pli" 2>"$OUT.err" || fail "compilation failed"
-grep -q "runtime-reserved symbol" "$OUT.err" || fail "expected reserved-prefix warning not found: $(cat $OUT.err)"
+# Compile and capture stderr; the error must appear and compilation must fail.
+$PLI -fsyntax-only "$OUT.pli" 2>"$OUT.err" && fail "expected compilation to fail"
+grep -q "runtime-reserved symbol" "$OUT.err" || fail "expected reserved-prefix error not found: $(cat $OUT.err)"
 
 echo "PASS bad_pli_prefix"
 exit 0
