@@ -1136,8 +1136,9 @@ int main(int argc, char** argv) {
           else
             argStore.push_back(s);
         }
+        // ld64.lld spells the flag -dylib (clang translates -dynamiclib).
         if (buildSharedLib)
-          argStore.push_back("-dynamiclib");
+          argStore.push_back("-dylib");
       } else if (objFmt == llvm::Triple::ELF) {
         // Linux/musl: every sysroot artifact an explicit path arg; no -L<sysroot>,
         // no -lc (libc.a already explicit). Shared libs drop CRT objects and

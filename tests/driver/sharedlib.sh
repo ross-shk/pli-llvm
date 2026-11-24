@@ -3,7 +3,7 @@
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
 # tests/driver/sharedlib.sh — -shared emits a shared library (.so/.dylib/.dll)
 # through the in-process lld link step, with no CRT/entry/subsystem and the
-# format-appropriate shared flag (-shared / -dynamiclib / /DLL).
+# format-appropriate shared flag (-shared / -dylib / /DLL).
 set -u
 case "$(uname -s)" in
   Darwin*) SHLIB=.dylib ;;
@@ -47,7 +47,7 @@ $PLI "$FIX" -shared -o "$OUT/libtest$SHLIB" >/dev/null 2>&1 \
 # --- -v shows the format shared flag ---------------------------------------
 cmd=$($PLI "$FIX" -shared -o "$OUT/libv$SHLIB" -v 2>&1)
 case "$SHLIB" in
-  .dylib) want=-dynamiclib ;;
+  .dylib) want=-dylib ;;
   .dll)   want=/DLL ;;
   .so)    want=-shared ;;
 esac
