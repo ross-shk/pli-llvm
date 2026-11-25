@@ -12,10 +12,10 @@
    dcl 1 other based(pb),
          2 v fixed bin(31);
 
-   alloc slot in(region) set(pa);
+   allocate slot in(region) set(pa);
    slot.v = 11;
 
-   alloc other in(region) set(pb);
+   allocate other in(region) set(pb);
    other.v = 22;
 
    put skip list('a =', slot.v);

@@ -1,5 +1,0 @@
- /* test */
- t: proc options(main);
-    dcl x fixed bin(31) conv; /* no */
-    dcl c conv; 
- end t;

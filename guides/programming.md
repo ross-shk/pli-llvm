@@ -371,8 +371,6 @@ You can also share dynamic bounds:
 
 Each name evaluates its bounds at block entry and owns its own element buffer. `lbound(a)`, `hbound(b)`, `dim(x)` all work per-name.
 
-> **Run the full example:** [`examples/factored_declarations.pli`](../examples/factored_declarations.pli) — `pli factored_declarations.pli -o factored && ./factored`.
-
 ---
 
 ## Operators & expressions

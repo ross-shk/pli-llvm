@@ -83,7 +83,7 @@ Break these and the design breaks:
 
 ## Worked example — a real fix
 
-`examples/if_else.pli` compiled cleanly and printed *nothing*:
+A small `if`/`else` program compiled cleanly and printed *nothing*:
 
 ```pli
  dcl x fixed bin(31) init(1);
@@ -95,7 +95,7 @@ Diagnosis, in workflow order:
 1. `-emit-llvm` showed `@pli_g_X = internal global i32 0` — the `INITIAL` value never reached the IR. Root cause: variables of the external procedure get static storage (ADR-010), and `irgen.cpp:emitGlobals` always emitted a zero initializer while the prologue-store path was reserved for automatic variables. The value was dropped between two correct-looking branches.
 2. Test first: `tests/core/init.pli`, covering `INITIAL` for `FIXED`, `FLOAT`, `CHAR`, `CHAR VARYING`, `BIT`, a negative constant, and both storage classes.
 3. Fix across layers: sema attaches the folded constant to the symbol (`sema.h:Symbol::initExpr`) and checks it is assignable to the declared type; `emitGlobals` renders it per type.
-4. `ctest --test-dir build/cmake` (9/9) and `examples/if_else.pli` now prints `ok`.
+4. `ctest --test-dir build/cmake` (9/9) and the same program now prints `ok`.
 
 The lesson worth generalising: **a feature that is "accepted" by the parser and sema but ignored by codegen is worse than one that is rejected.** Invariant 2  exists because of this class of bug.
 

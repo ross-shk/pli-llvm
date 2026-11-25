@@ -1,4 +1,0 @@
- abtest2: proc options(main);
-    dcl x fixed bin(31) env; /* ENVIRONMENT abbrev? ENV not env? uppercase */
-    put skip list('PASS abtest2');
- end abtest2;

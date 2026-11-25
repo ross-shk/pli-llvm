@@ -1,7 +1,0 @@
- abtest3: proc options(main);
-    dcl x fixed bin(31);
-    on conv begin; put skip list('conv caught'); end;
-    x = fixed('abc');
-    put skip list('x=', x);
-    put skip list('PASS abtest3');
- end abtest3;

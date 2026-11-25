@@ -1,5 +1,7 @@
  /* SPDX-License-Identifier: Apache-2.0 */
  /* Copyright 2026 Ross S. - pli-llvm */
+ /* Rule (39): a FILE variable has no value. This single, unfactored
+    name is diagnosed too, not only a name in a factored declaration. */
  bad_file_use: procedure options(main);
     declare f file;
     f = 1;

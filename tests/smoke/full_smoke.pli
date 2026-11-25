@@ -1,27 +1,33 @@
- /*      PL/I compiler manual smoke test.
+ /* SPDX-License-Identifier: Apache-2.0 */
+ /* Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM */
+ /*      PL/I compiler full smoke test.
     One self-contained file: no %INCLUDE, no C helper, no companion
     files. It exercises many language, runtime and platform features
-    so you can smoke-test a freshly built compiler by hand.
+    so you can smoke-test a freshly built compiler.
 
-    Build (full checking of SIZE/SUBSCRIPTRANGE traps):
-       pli --debug    examples/smoke_test.pli -o smoke_test
+    Build (from the repository root; full SIZE/SUBSCRIPTRANGE checks):
+       pli --debug tests/smoke/full_smoke.pli
+           -o tests/smoke/out/full_smoke
     or the default optimized build (all checks ok, same output):
-       pli            examples/smoke_test.pli -o smoke_test
-    or default -O2 with the safety traps forced back on:
-       pli --size-checks examples/smoke_test.pli -o smoke_test
+       pli tests/smoke/full_smoke.pli -o tests/smoke/out/full_smoke
+    or default -O2 with the safety traps forced back on (the runner):
+       pli --size-checks tests/smoke/full_smoke.pli
+           -o tests/smoke/out/full_smoke
 
     Optional compile-time value (SKIP in section 09 without it):
-       pli --sysparm SMOKE-OK examples/smoke_test.pli -o smoke_test
+       pli --sysparm SMOKE-OK tests/smoke/full_smoke.pli
+           -o tests/smoke/out/full_smoke
 
-    Run (the output binary is left where you build it):
-       ./smoke_test        (POSIX)
-       .\smoke_test.exe    (Windows)
+    Run (the test runner creates tests/smoke/out; by hand, create it
+    first with `mkdir -p tests/smoke/out`):
+       tests/smoke/out/full_smoke        (POSIX)
+       tests\smoke\out\full_smoke.exe    (Windows)
     The tasking section is worthwhile under both tasking backends:
-       PLI_TASK_MODEL=fiber .\smoke_test.exe     (default)
-       PLI_TASK_MODEL=os    .\smoke_test.exe
+       PLI_TASK_MODEL=fiber tests/smoke/out/full_smoke.exe
+       PLI_TASK_MODEL=os    tests/smoke/out/full_smoke.exe
 
     Expected: every check prints 'ok' and the final line is:
-       PASS smoke test
+       PASS full_smoke
     (There is no longer an ON SIZE skip: that check was removed because
      exercising ON SIZE in a large single-file program currently crashes
      the compiler's codegen - a real compiler bug (see KNOWN BUG below).
@@ -97,9 +103,12 @@
 
    /* artifacts this run creates (cleaned before and after) */
    dcl art(6) char(40) varying init(
-       'pli_smoke_stream.txt', 'pli_smoke_wrap.txt',
-       'pli_smoke_page.txt', 'pli_smoke_record.dat',
-       'pli_smoke_keyed.dat', 'pli_smoke_keyed.dat.kix');
+       'tests/smoke/out/pli_smoke_stream.txt',
+       'tests/smoke/out/pli_smoke_wrap.txt',
+       'tests/smoke/out/pli_smoke_page.txt',
+       'tests/smoke/out/pli_smoke_record.dat',
+       'tests/smoke/out/pli_smoke_keyed.dat',
+       'tests/smoke/out/pli_smoke_keyed.dat.kix');
 
    /* PUT/GET STRING DATA round trip uses these top-level variables so
       the statements can stay at the top level of the main procedure.
@@ -473,23 +482,27 @@
      pageno(slot) = 5;
      call check('PAGENO assignment', pageno(slot) = 5);
 
-     open file(f) title('pli_smoke_stream.txt') output;
+     open file(f) title('tests/smoke/out/pli_smoke_stream.txt')
+       output;
      put file(f) list('alpha') skip;
      put file(f) list('beta42') skip;
      close file(f);
-     open file(f) title('pli_smoke_stream.txt') input;
+     open file(f) title('tests/smoke/out/pli_smoke_stream.txt')
+       input;
      get file(f) list(line1);
      get file(f) list(line2);
      close file(f);
      call check('stream file round-trip',
        line1 = 'alpha' & line2 = 'beta42');
 
-     open file(wf) title('pli_smoke_wrap.txt') output linesize(20);
+     open file(wf) title('tests/smoke/out/pli_smoke_wrap.txt')
+       output linesize(20);
      put file(wf) list('123456789012345678901234567890') skip;
      close file(wf);
 
      on endpage(pf) pages = pages + 1;
-     open file(pf) title('pli_smoke_page.txt') output stream print
+     open file(pf) title('tests/smoke/out/pli_smoke_page.txt')
+       output stream print
        pagesize(3);
      put file(pf) list('line1') skip;
      put file(pf) list('line2') skip;
@@ -520,7 +533,7 @@
      dcl slot2 fixed bin(31) init(9);
 
      open file(rf) record sequential output
-       title('pli_smoke_record.dat');
+       title('tests/smoke/out/pli_smoke_record.dat');
      do i = 1 to 5;
        write file(rf) from(i);
      end;
@@ -528,7 +541,7 @@
 
      eof = '0'b;
      open file(rf) record sequential update
-       title('pli_smoke_record.dat');
+       title('tests/smoke/out/pli_smoke_record.dat');
      on endfile(rf) eof = '1'b;
      do while (^eof);
        read file(rf) into(rec);
@@ -540,7 +553,7 @@
      close file(rf);
 
      open file(rf) record sequential input
-       title('pli_smoke_record.dat');
+       title('tests/smoke/out/pli_smoke_record.dat');
      eof = '0'b;
      do i = 1 to 4;
        read file(rf) into(rec);
@@ -555,7 +568,8 @@
      close file(rf);
 
      on undefinedfile(missing) udf = '1'b;
-     open file(missing) input title('pli_smoke_absent.dat');
+     open file(missing) input
+       title('tests/smoke/out/pli_smoke_absent.dat');
      call check('ON UNDEFINEDFILE', udf & ^fileopen(slot2));
      revert undefinedfile(missing);
    end;
@@ -565,7 +579,8 @@
      dcl key char(8);
      dcl krec char(16);
 
-     open file(kf) record keyed output title('pli_smoke_keyed.dat');
+     open file(kf) record keyed output
+       title('tests/smoke/out/pli_smoke_keyed.dat');
      key = 'K001   '; krec = 'record one   ';
      write file(kf) from(krec) key(key);
      key = 'K002   '; krec = 'record two   ';
@@ -574,18 +589,21 @@
      write file(kf) from(krec) key(key);
      close file(kf);
 
-     open file(kf) record keyed input title('pli_smoke_keyed.dat');
+     open file(kf) record keyed input
+       title('tests/smoke/out/pli_smoke_keyed.dat');
      key = 'K002   '; read file(kf) into(krec) key(key) keyto(key);
      call check('keyed record read', krec = 'record two   ');
      close file(kf);
 
-     open file(kf) record keyed update title('pli_smoke_keyed.dat');
+     open file(kf) record keyed update
+       title('tests/smoke/out/pli_smoke_keyed.dat');
      key = 'K002   '; krec = 'record two-x ';
      rewrite file(kf) from(krec) keyfrom(key);
      key = 'K003   '; delete file(kf) keyfrom(key);
      close file(kf);
 
-     open file(kf) record keyed input title('pli_smoke_keyed.dat');
+     open file(kf) record keyed input
+       title('tests/smoke/out/pli_smoke_keyed.dat');
      key = 'K002   '; read file(kf) into(krec) key(key);
      call check('keyed record rewrite', krec = 'record two-x ');
      close file(kf);
@@ -690,13 +708,13 @@
    /* ------------------------------------------------------------ */
    put skip list('--------------------------------------------------');
    put skip list(' checks = ', checks, '  skipped = ', skips,
-     '  failures = ', failures);
+     '  errors = ', failures);
    if failures = 0 then do;
-     put skip list(' PASS smoke test');
+     put skip list(' PASS full_smoke');
      put skip list('================================================');
    end;
    else do;
-     put skip list(' FAIL smoke test');
+     put skip list(' FAIL full_smoke');
      put skip list('================================================');
    end;
 
@@ -736,9 +754,17 @@
      dcl action char(*) varying;
      dcl fname char(*) varying;
      dcl out char(200) varying;
+     dcl winname char(200) varying;
+     dcl n fixed bin(31);
      if action = 'remove' then do;
-       if on_windows then out = 'del /q ' || fname || ' 2>nul';
-       else out = 'rm -f ' || fname || ' 2>/dev/null';
+       winname = fname;
+       n = length(fname);
+       if on_windows then
+         out = 'del /q '
+           || substr(translate(winname, '\', '/'), 1, n)
+           || ' 2>nul';
+       else
+         out = 'rm -f ' || fname || ' 2>/dev/null';
      end;
      else out = '';
      return(out);
