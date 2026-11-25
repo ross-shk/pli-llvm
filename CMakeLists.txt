@@ -376,11 +376,21 @@ endif()
 # since GCC doesn't support -print-effective-triple or -emit-llvm -target.
 set(PLI_TARGET_TRIPLE "" CACHE STRING "Target triple for runtime bitcode generation")
 if(NOT PLI_TARGET_TRIPLE)
-  execute_process(
-    COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -print-effective-triple
-    OUTPUT_VARIABLE PLI_HOST_TRIPLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-  set(PLI_TARGET_TRIPLE ${PLI_HOST_TRIPLE})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Static-musl default: target musl so runtime bitcode and user programs
+    # link against the embedded musl sysroot (no glibc dependency).
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+      set(PLI_TARGET_TRIPLE "aarch64-unknown-linux-musl")
+    else()
+      set(PLI_TARGET_TRIPLE "x86_64-unknown-linux-musl")
+    endif()
+  else()
+    execute_process(
+      COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -print-effective-triple
+      OUTPUT_VARIABLE PLI_HOST_TRIPLE
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(PLI_TARGET_TRIPLE ${PLI_HOST_TRIPLE})
+  endif()
 endif()
 message(STATUS "Target triple for bitcode: ${PLI_TARGET_TRIPLE}")
 
@@ -483,6 +493,54 @@ if(PLI_LLVM_STATIC_PREFIX)
   # Pure-static by construction: no libLLVM.so exists there, and mixing the
   # shared lib with static component archives is the crash this guards.
   set(PLI_SHARED_LLVM_LINK OFF)
+endif()
+
+# Linux default: fully static musl — pli needs only the kernel at runtime.
+# Requires PLI_LLVM_STATIC_PREFIX (static LLVM archives) and a musl sysroot.
+# Windows (/MT static CRT) and macOS are untouched by this block.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(PLI_SHARED_LLVM_LINK)
+    message(FATAL_ERROR "pli on Linux links fully static against musl; static LLVM archives are required (set PLI_LLVM_STATIC_PREFIX). Distro shared libLLVM cannot be part of a -static final link.")
+  endif()
+  if(NOT PLI_LLVM_STATIC_PREFIX)
+    message(FATAL_ERROR "PLI_LLVM_STATIC_PREFIX is required for static-musl Linux builds (source-built LLVM 23, X86+AArch64 archives)")
+  endif()
+  # PLI_MUSL_ROOT: optional override for a non-standard musl sysroot prefix
+  # (must contain lib/libc.a and include/). Auto-detect Debian/Ubuntu layout.
+  set(PLI_MUSL_ROOT "" CACHE PATH "musl sysroot prefix for static-musl Linux builds")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_musl_arch "aarch64")
+  else()
+    set(_musl_arch "x86_64")
+  endif()
+  set(_musl_libc "")
+  if(PLI_MUSL_ROOT)
+    if(EXISTS "${PLI_MUSL_ROOT}/lib/libc.a")
+      set(_musl_libc "${PLI_MUSL_ROOT}/lib/libc.a")
+    endif()
+  else()
+    # Debian/Ubuntu musl-dev: /usr/lib/x86_64-linux-musl/libc.a
+    foreach(_arch x86_64 aarch64)
+      if(EXISTS "/usr/lib/${_arch}-linux-musl/libc.a")
+        set(_musl_libc "/usr/lib/${_arch}-linux-musl/libc.a")
+        set(_musl_arch "${_arch}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  if(NOT _musl_libc)
+    message(FATAL_ERROR "No musl libc.a found. Install musl-dev (provides /usr/lib/x86_64-linux-musl/libc.a) or set PLI_MUSL_ROOT.")
+  endif()
+  if(PLI_MUSL_ROOT)
+    target_compile_options(pli PRIVATE --target=${_musl_arch}-linux-musl --sysroot=${PLI_MUSL_ROOT})
+    target_link_options(pli PRIVATE --target=${_musl_arch}-linux-musl --sysroot=${PLI_MUSL_ROOT} -static)
+    # Propagate sysroot to runtime bitcode compilation so musl headers are found.
+    set(PLI_HOST_SYSROOT_FLAG "--sysroot=${PLI_MUSL_ROOT}")
+  else()
+    target_compile_options(pli PRIVATE --target=${_musl_arch}-linux-musl)
+    target_link_options(pli PRIVATE --target=${_musl_arch}-linux-musl -static)
+  endif()
+  message(STATUS "pli: static-musl Linux build (musl libc: ${_musl_libc})")
 endif()
 
 if(PLI_SHARED_LLVM_LINK AND TARGET LLVM)
