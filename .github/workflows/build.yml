@@ -118,6 +118,18 @@ jobs:
             libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a \
             libws2_32.a
 
+      - name: Upload pli binary (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pli-${{ matrix.os }}
+          path: build/cmake/pli
+      - name: Upload pli binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pli-${{ matrix.os }}
+          path: build/cmake/pli.exe
       - name: Test
         run: |
           # --output-on-failure: ctest captures the runner's stdout, so without
@@ -154,15 +166,3 @@ jobs:
             ./build/cmake/pli /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
             ./build/cmake/pli version
           fi
-      - name: Upload pli binary (Unix)
-        if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pli-${{ matrix.os }}
-          path: build/cmake/pli
-      - name: Upload pli binary (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pli-${{ matrix.os }}
-          path: build/cmake/pli.exe
