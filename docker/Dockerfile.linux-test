@@ -1,9 +1,9 @@
-# Bare-minimum test-runner image for pli on TinyCore Linux.
-# NOTE: TinyCore's tcz repo ships no LLVM >= 23, so pli cannot be built here
-# without compiling LLVM from source. This image only runs tests against a
-# prebuilt pli binary (or a host-mounted build dir with its own toolchain).
+# TinyCore Linux test-runner for pli (static musl binary runs here).
+# pli itself cannot be built here (no LLVM >= 23 tcz); build it elsewhere
+# (Debian host with PLI_LLVM_STATIC_PREFIX) and mount the static binary at
+# /work or /usr/local/bin/pli.
 FROM tatsushid/tinycore:11.0-x86_64
-# bash only — entrypoint.sh is #!/bin/bash.
+# bash is required by entrypoint.sh (#!/bin/bash); curl for fetching pli.
 RUN tce-load -c -wi bash.tcz curl.tcz
 WORKDIR /work
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
