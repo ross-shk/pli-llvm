@@ -1283,9 +1283,14 @@ int main(int argc, char** argv) {
           }
           argStore.push_back(p);
         }
-        if (!buildSharedLib)
+        if (!buildSharedLib) {
           argStore.push_back("--subsystem=" + subsystem);
-        else {
+          // COFF dead-stripping: drop unreferenced sections. Mirrors ELF
+          // --gc-sections and MachO -dead_strip; requires FunctionSections
+          // (set in createTargetMachine) so each function lives in its own
+          // section and the linker can discard the unused ones.
+          argStore.push_back("--gc-sections");
+        } else {
           argStore.push_back("/DLL");
           argStore.push_back("--export-all-symbols");
           argStore.push_back("/NOENTRY");
@@ -1299,7 +1304,8 @@ int main(int argc, char** argv) {
       }
 
       // Target link recipe: function-level dead-stripping (MachO
-      // -dead_strip, ELF --gc-sections) and the MachO -platform_version.
+      // -dead_strip, ELF --gc-sections, COFF --gc-sections) and the MachO
+      // -platform_version.
       // The MinGW driver takes crt2.o's entry/subsystem instead.
       if (!isCOFF)
         for (const std::string& f : desc.linkerFlags)
@@ -1325,15 +1331,8 @@ int main(int argc, char** argv) {
       std::string linkErr;
       if (verbose) {
         std::cerr << "+";
-        for (const std::string& a : argStore) {
+        for (const std::string& a : argStore)
           std::cerr << " " << a;
-          if (a.rfind("/proc/self/fd/", 0) == 0) {
-            std::error_code ec;
-            auto resolved = fs::read_symlink(a, ec);
-            if (!ec)
-              std::cerr << "(" << resolved.string() << ")";
-          }
-        }
         std::cerr << "\n";
       }
       bool linkOk = false;

@@ -43,7 +43,7 @@ const TargetDesc& getTargetDesc(const llvm::Triple& t) {
   case llvm::Triple::ELF:
     d.lldDriver = "elf";
     d.systemLibs = {"-lm", "-lc"};
-    d.linkerFlags = {"--gc-sections"};
+    d.linkerFlags = {};
     break;
   case llvm::Triple::COFF:
     d.lldDriver = "coff";
