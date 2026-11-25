@@ -151,7 +151,7 @@ jobs:
             ./build/cmake/pli.exe version
           else
             printf ' smoke: proc options(main);\n   put list('"'"'ok'"'"');\n end smoke;\n' > /tmp/smoke.pli
-            ./build/cmake/pli /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
+            ./build/cmake/pli -v /tmp/smoke.pli -o /tmp/smoke && /tmp/smoke
             ./build/cmake/pli version
           fi
       - name: Upload pli binary (Unix)
