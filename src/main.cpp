@@ -53,7 +53,7 @@
 // blob. IRGen merges the pli_* definitions from it into the MAIN unit.
 
 // Version and LLVM identity baked in at build time (self-contained milestone:
-// `pli version` reports the toolchain without invoking sub-tools).
+// `pli --version` / `pli -V` reports the toolchain without invoking sub-tools).
 #ifndef PLI_VERSION
 #define PLI_VERSION "unknown"
 #endif
@@ -204,13 +204,12 @@ static void usage() {
          "  include/ and inc/ to %INCLUDE search paths at each ancestor. On\n"
          "  Linux/macOS, /usr/include, /usr/local/include and the matching lib\n"
          "  dirs are added as static search fallbacks (linking never needs them:\n"
-         "  the link sysroot is embedded).\n"
-         "  pli version     same as --version (Go/Zig style)\n";
+          "  the link sysroot is embedded).\n";
 }
 
-// Go/Zig-style toolchain report: no subprocess, all baked in or in-process.
+// Toolchain report: no subprocess, all baked in or in-process.
 static void printVersion() {
-  // Version/build info embedded at build time (Go/Zig style).
+  // Version/build info embedded at build time.
   std::cout << "pli " << PLI_VERSION << " (LLVM " << PLI_LLVM_VERSION << ", "
             << llvm::sys::getDefaultTargetTriple() << ", runtime " << pli::embeddedLibPLISize()
             << " bytes, sysroot " << pli::embeddedSysrootSize() << " bytes)\n";
@@ -808,8 +807,8 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // `pli version` / `pli --version`: no input file needed.
-  if (wantVersion || (inputs.size() == 1 && inputs[0] == "version")) {
+  // `--version`: no input file needed.
+  if (wantVersion) {
     printVersion();
     return 0;
   }
