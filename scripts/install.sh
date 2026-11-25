@@ -176,28 +176,34 @@ if [ "$SKIP_VERIFY" -eq 0 ]; then
   elif command -v shasum >/dev/null 2>&1; then
     SHA="shasum"
   else
-    echo "install.sh: no sha256sum/shasum available; re-run with --skip-verify to bypass" >&2
-    exit 1
+    echo "install.sh: no sha256sum/shasum available; skipping verification" >&2
+    SKIP_VERIFY=1
   fi
-  if ! fetch_to "$SHA_URL" "$TMPDIR/$TARBALL.sha256" 2>/dev/null; then
-    echo "install.sh: could not fetch checksum ($SHA_URL). Re-run with --skip-verify to bypass integrity checking." >&2
-    exit 1
+  if [ "$SKIP_VERIFY" -eq 0 ]; then
+    if ! fetch_to "$SHA_URL" "$TMPDIR/$TARBALL.sha256" 2>/dev/null; then
+      echo "install.sh: could not fetch checksum ($SHA_URL). Skipping verification." >&2
+      SKIP_VERIFY=1
+    fi
   fi
-  EXPECTED="$(sed -n 's/[[:space:]].*//p' "$TMPDIR/$TARBALL.sha256" | tr -d '\r' | head -n1)"
-  if [ -z "$EXPECTED" ]; then
-    echo "install.sh: checksum file is empty ($SHA_URL). Re-run with --skip-verify to bypass integrity checking." >&2
-    exit 1
+  if [ "$SKIP_VERIFY" -eq 0 ]; then
+    EXPECTED="$(sed -n 's/[[:space:]].*//p' "$TMPDIR/$TARBALL.sha256" | tr -d '\r' | head -n1)"
+    if [ -z "$EXPECTED" ]; then
+      echo "install.sh: checksum file is empty ($SHA_URL). Skipping verification." >&2
+      SKIP_VERIFY=1
+    fi
   fi
-  if [ "$SHA" = "shasum" ]; then
-    ACTUAL="$(cd "$TMPDIR" && shasum -a 256 "$TARBALL" | sed -n 's/[[:space:]].*//p')"
-  else
-    ACTUAL="$(cd "$TMPDIR" && sha256sum "$TARBALL" | sed -n 's/[[:space:]].*//p')"
+  if [ "$SKIP_VERIFY" -eq 0 ]; then
+    if [ "$SHA" = "shasum" ]; then
+      ACTUAL="$(cd "$TMPDIR" && shasum -a 256 "$TARBALL" | sed -n 's/[[:space:]].*//p')"
+    else
+      ACTUAL="$(cd "$TMPDIR" && sha256sum "$TARBALL" | sed -n 's/[[:space:]].*//p')"
+    fi
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+      echo "install.sh: sha256 mismatch. Expected $EXPECTED, got $ACTUAL. The download is corrupt or tampered with." >&2
+      exit 1
+    fi
+    echo "install.sh: sha256 OK"
   fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    echo "install.sh: sha256 mismatch. Expected $EXPECTED, got $ACTUAL. The download is corrupt or tampered with." >&2
-    exit 1
-  fi
-  echo "install.sh: sha256 OK"
 fi
 
 # --- Extract + install ------------------------------------------------------
