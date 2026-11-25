@@ -1325,8 +1325,15 @@ int main(int argc, char** argv) {
       std::string linkErr;
       if (verbose) {
         std::cerr << "+";
-        for (const std::string& a : argStore)
+        for (const std::string& a : argStore) {
           std::cerr << " " << a;
+          if (a.rfind("/proc/self/fd/", 0) == 0) {
+            std::error_code ec;
+            auto resolved = fs::read_symlink(a, ec);
+            if (!ec)
+              std::cerr << "(" << resolved.string() << ")";
+          }
+        }
         std::cerr << "\n";
       }
       bool linkOk = false;
