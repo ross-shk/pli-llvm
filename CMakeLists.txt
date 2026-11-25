@@ -971,132 +971,102 @@ add_custom_command(
 add_custom_target(embedded_runtime_inc_default DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime.inc ${CMAKE_BINARY_DIR}/embedded_rtplat.inc)
 add_dependencies(pli embedded_runtime_inc_default)
 
-# Embedded link sysroot (ADR-227: single-binary distribution). Release
-# archives contain only pli(.exe): the link inputs under platform/ are
-# compiled in as byte arrays (scripts/gen_sysroot_embed.py, one TU per file
-# so large archives stay parallel) and materialized to a temp dir at link
-# time (src/hostcrt.cpp). Only the build host's OS set is embedded; the
-# per-arch dirs under platform/linux-musl/<arch>/ hold the matching files.
-# An unsupported arch (or missing sources) embeds an empty table with a
-# warning, and every user link then fails with a clear diagnostic.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-  set(PLI_BUILD_ARCH x86_64)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|ARM64|arm64)$")
-  set(PLI_BUILD_ARCH aarch64)
-else()
-  set(PLI_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
-endif()
-set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}")
-set(PLI_SYSROOT_SET_NAME "")
-set(PLI_SYSROOT_FILES "")
-# Build-generated sysroot entries, as parallel name/path lists. Their names
-# take part in PLI_SYSROOT_FILES (so the embed manifest key matches the
-# driver's sysrootPath lookup), but they do not exist at configure time, so
-# the source-tree EXISTS probe below must skip them and use the build path.
-set(PLI_SYSROOT_GEN_NAMES "")
-set(PLI_SYSROOT_GEN_PATHS "")
-set(PLI_SYSROOT_KNOWN_OS FALSE)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(PLI_SYSROOT_KNOWN_OS TRUE)
-  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/linux-musl/${PLI_BUILD_ARCH}")
-  set(PLI_SYSROOT_SET_NAME "musl")
-  if(EXISTS "${PLI_SYSROOT_SRC_DIR}")
-    set(PLI_SYSROOT_FILES crt1.o crti.o crtn.o libc.a libdl.a libm.a
-        libpthread.a librt.a "libpli_builtins-${PLI_BUILD_ARCH}.a")
-  endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  set(PLI_SYSROOT_KNOWN_OS TRUE)
-  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/windows-mingw")
-  set(PLI_SYSROOT_SET_NAME "mingw")
-  if(PLI_BUILD_ARCH STREQUAL "x86_64")
-    set(PLI_SYSROOT_FILES crt2.o crtbegin.o crtend.o fltused.o chkstk.o
-        libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a
-        libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a
-        libws2_32.a)
-    # GS cookie stubs: compiler-rt builtins (/GS-compiled) reference
-    # __security_cookie / __security_check_cookie from MSVC's CRT.
-    # Pulling libcmt.lib duplicates __guard_dispatch_icall_fptr with
-    # libmingwex.a, so provide minimal stubs instead. Compiled during the
-    # build (CI has a working Windows toolchain) and embedded into the
-    # sysroot so every user program linked by pli.exe gets them.
-    list(APPEND PLI_SYSROOT_FILES gs_stubs.o)
-    list(APPEND PLI_SYSROOT_GEN_NAMES gs_stubs.o)
-    list(APPEND PLI_SYSROOT_GEN_PATHS "${CMAKE_BINARY_DIR}/gs_stubs.o")
-    add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/gs_stubs.o
-      # /Zl omits the /DEFAULTLIB:libcmt / /DEFAULTLIB:oldnames directives
-      # clang-cl would otherwise inject into the object. The stubs satisfy
-      # __security_cookie / __security_check_cookie without pulling MSVC's
-      # CRT, so the object must carry no defaultlib directives (embedding a
-      # /DEFAULTLIB into the mingw user link would make ld.lld hunt for
-      # liblibcmt.a / liboldnames.a and break every link).
-      COMMAND ${CMAKE_C_COMPILER} -c ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
-              -o ${CMAKE_BINARY_DIR}/gs_stubs.o /Zl
-      DEPENDS ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
-      COMMENT "Compiling GS cookie stubs")
-    add_custom_target(gs_stubs_target DEPENDS ${CMAKE_BINARY_DIR}/gs_stubs.o)
-    add_dependencies(pli gs_stubs_target)
-  endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  # .tbd stubs are text symbol lists (arch-independent), so no arch gate.
-  set(PLI_SYSROOT_KNOWN_OS TRUE)
-  set(PLI_SYSROOT_SRC_DIR "${CMAKE_SOURCE_DIR}/platform/darwin-sdk")
-  set(PLI_SYSROOT_SET_NAME "sdk")
-  set(PLI_SYSROOT_FILES usr/lib/libm.tbd usr/lib/libSystem.tbd)
-endif()
-# Always generated (empty table on unknown OSes / arch gaps) so
-# src/embedded_sysroot.cpp compiles everywhere.
+# Embedded link sysroots (ADR-227/ADR-395: single-binary cross compiler).
+# All three OS families' link sysroots are embedded in every build:
+#   musl (ELF, multi-arch: x86_64 + aarch64) under platform/linux-musl/<arch>/
+#   mingw (COFF) under platform/windows-mingw/
+#   .tbd stubs (MachO) under platform/darwin-sdk/
+# Musl logical paths are arch-prefixed (x86_64/crt1.o, aarch64/crt1.o, ...);
+# mingw and sdk use bare logical paths. Missing files are skipped with a
+# warning; user links then fail with a clear diagnostic.
+set(PLI_SYSROOT_EMBED_ARGS "")
+set(PLI_SYSROOT_GEN_CPPS "")
 set(PLI_SYSROOT_ABS "")
 set(PLI_SYSROOT_MISSING "")
-foreach(f ${PLI_SYSROOT_FILES})
-  list(FIND PLI_SYSROOT_GEN_NAMES "${f}" _gen_idx)
-  if(_gen_idx GREATER -1)
-    list(GET PLI_SYSROOT_GEN_PATHS ${_gen_idx} _gen_path)
-    list(APPEND PLI_SYSROOT_ABS "${_gen_path}")
-  elseif(EXISTS "${PLI_SYSROOT_SRC_DIR}/${f}")
-    list(APPEND PLI_SYSROOT_ABS "${PLI_SYSROOT_SRC_DIR}/${f}")
+
+# Musl: both arches.
+foreach(_arch IN ITEMS x86_64 aarch64)
+  set(_musl_dir "${CMAKE_SOURCE_DIR}/platform/linux-musl/${_arch}")
+  set(_musl_files crt1.o crti.o crtn.o libc.a libdl.a libm.a libpthread.a librt.a "libpli_builtins-${_arch}.a")
+  foreach(f ${_musl_files})
+    set(_src "${_musl_dir}/${f}")
+    set(_logical "${_arch}/${f}")
+    if(EXISTS "${_src}")
+      list(APPEND PLI_SYSROOT_EMBED_ARGS "${_logical}=${_src}")
+      list(APPEND PLI_SYSROOT_ABS "${_src}")
+      string(REGEX REPLACE "[^0-9A-Za-z]+" "_" _stem "${_logical}")
+      string(REGEX REPLACE "^_+|_+$" "" _stem "${_stem}")
+      list(APPEND PLI_SYSROOT_GEN_CPPS "${CMAKE_BINARY_DIR}/sysroot_embed/${_stem}.cpp")
+    else()
+      list(APPEND PLI_SYSROOT_MISSING "musl/${_arch}/${f}")
+    endif()
+  endforeach()
+endforeach()
+
+# Mingw.
+set(_mingw_dir "${CMAKE_SOURCE_DIR}/platform/windows-mingw")
+set(_mingw_files crt2.o crtbegin.o crtend.o fltused.o chkstk.o
+    libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a
+    libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a
+    libws2_32.a)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  list(APPEND _mingw_files gs_stubs.o)
+endif()
+foreach(f ${_mingw_files})
+  if(f STREQUAL "gs_stubs.o")
+    set(_src "${CMAKE_BINARY_DIR}/gs_stubs.o")
   else()
-    list(APPEND PLI_SYSROOT_MISSING "${f}")
+    set(_src "${_mingw_dir}/${f}")
+  endif()
+  if(EXISTS "${_src}")
+    list(APPEND PLI_SYSROOT_EMBED_ARGS "${f}=${_src}")
+    list(APPEND PLI_SYSROOT_ABS "${_src}")
+    string(REGEX REPLACE "[^0-9A-Za-z]+" "_" _stem "${f}")
+    string(REGEX REPLACE "^_+|_+$" "" _stem "${_stem}")
+    list(APPEND PLI_SYSROOT_GEN_CPPS "${CMAKE_BINARY_DIR}/sysroot_embed/${_stem}.cpp")
+  else()
+    list(APPEND PLI_SYSROOT_MISSING "mingw/${f}")
   endif()
 endforeach()
-if(PLI_SYSROOT_KNOWN_OS AND NOT "${PLI_SYSROOT_MISSING}" STREQUAL "")
-  list(REMOVE_ITEM PLI_SYSROOT_FILES ${PLI_SYSROOT_MISSING})
-  message(WARNING "link sysroot incomplete under ${PLI_SYSROOT_SRC_DIR} (missing: ${PLI_SYSROOT_MISSING}) — embedding ${PLI_SYSROOT_FILES}; user links will fail for the missing files")
-elseif(PLI_SYSROOT_KNOWN_OS AND PLI_SYSROOT_FILES STREQUAL "")
-  message(WARNING "no embeddable link sysroot for ${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH} — user links will fail (populate the arch-native sysroot dir)")
-endif()
-# argv for gen_sysroot_embed.py: source-tree entries are plain names (the
-# script prepends PLI_SYSROOT_SRC_DIR); build-generated entries carry an
-# explicit "name=path" mapping.
-set(PLI_SYSROOT_EMBED_ARGS "")
-foreach(f ${PLI_SYSROOT_FILES})
-  list(FIND PLI_SYSROOT_GEN_NAMES "${f}" _gen_idx)
-  if(_gen_idx GREATER -1)
-    list(GET PLI_SYSROOT_GEN_PATHS ${_gen_idx} _gen_path)
-    list(APPEND PLI_SYSROOT_EMBED_ARGS "${f}=${_gen_path}")
+
+# MachO .tbd stubs.
+set(_sdk_dir "${CMAKE_SOURCE_DIR}/platform/darwin-sdk")
+foreach(f usr/lib/libm.tbd usr/lib/libSystem.tbd)
+  set(_src "${_sdk_dir}/${f}")
+  if(EXISTS "${_src}")
+    list(APPEND PLI_SYSROOT_EMBED_ARGS "${f}=${_src}")
+    list(APPEND PLI_SYSROOT_ABS "${_src}")
+    string(REGEX REPLACE "[^0-9A-Za-z]+" "_" _stem "${f}")
+    string(REGEX REPLACE "^_+|_+$" "" _stem "${_stem}")
+    list(APPEND PLI_SYSROOT_GEN_CPPS "${CMAKE_BINARY_DIR}/sysroot_embed/${_stem}.cpp")
   else()
-    list(APPEND PLI_SYSROOT_EMBED_ARGS "${f}")
+    list(APPEND PLI_SYSROOT_MISSING "sdk/${f}")
   endif()
 endforeach()
-# Generated TU per file (sanitize mirrors gen_sysroot_embed.py: every
-# non-alphanumeric run becomes '_'). "none" sentinel: an empty set name
-# would risk CMake empty-arg dropping shifting the script's argv.
-if(PLI_SYSROOT_SET_NAME STREQUAL "")
-  set(PLI_SYSROOT_SET_NAME "none")
+
+if(NOT "${PLI_SYSROOT_MISSING}" STREQUAL "")
+  message(WARNING "link sysroot incomplete (missing: ${PLI_SYSROOT_MISSING})")
 endif()
-set(PLI_SYSROOT_GEN_CPPS "")
-foreach(f ${PLI_SYSROOT_FILES})
-  string(REGEX REPLACE "[^0-9A-Za-z]+" "_" _stem "${f}")
-  string(REGEX REPLACE "^_+|_+$" "" _stem "${_stem}")
-  list(APPEND PLI_SYSROOT_GEN_CPPS "${CMAKE_BINARY_DIR}/sysroot_embed/${_stem}.cpp")
-endforeach()
+
+# gs_stubs.o is build-generated on Windows hosts (clang-cl /Zl).
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/gs_stubs.o
+    COMMAND ${CMAKE_C_COMPILER} -c ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
+            -o ${CMAKE_BINARY_DIR}/gs_stubs.o /Zl
+    DEPENDS ${CMAKE_SOURCE_DIR}/platform/windows-mingw/gs_stubs.c
+    COMMENT "Compiling GS cookie stubs")
+  add_custom_target(gs_stubs_target DEPENDS ${CMAKE_BINARY_DIR}/gs_stubs.o)
+  add_dependencies(pli gs_stubs_target)
+endif()
+
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_GEN_CPPS}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_sysroot_embed.py
-          "${PLI_SYSROOT_SRC_DIR}" "${CMAKE_BINARY_DIR}/sysroot_embed" pli_sysroot_
-          ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_SET_NAME} ${PLI_SYSROOT_EMBED_ARGS}
+          "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/sysroot_embed" pli_sysroot_
+          ${CMAKE_BINARY_DIR}/embedded_sysroot.inc multi ${PLI_SYSROOT_EMBED_ARGS}
   DEPENDS ${PLI_SYSROOT_ABS} ${CMAKE_SOURCE_DIR}/scripts/gen_sysroot_embed.py
-  COMMENT "embedding link sysroot (${CMAKE_SYSTEM_NAME}/${PLI_BUILD_ARCH})"
+  COMMENT "embedding link sysroots (multi)"
   VERBATIM)
 add_custom_target(embedded_sysroot_inc
   DEPENDS ${CMAKE_BINARY_DIR}/embedded_sysroot.inc ${PLI_SYSROOT_GEN_CPPS})

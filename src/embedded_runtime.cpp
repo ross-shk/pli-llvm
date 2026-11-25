@@ -79,8 +79,23 @@ std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs() {
 const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t) {
   static const std::vector<RuntimeBlob> blobs = getEmbeddedRuntimeBlobs();
   const std::string tripleStr = t.getTriple();
+  // Prefer an exact target match first.
   for (const auto& blob : blobs) {
     if (blob.target == tripleStr) {
+      return &blob;
+    }
+  }
+  // Fall back to the first blob with the same arch + OS family (e.g. a musl
+  // target reusing a gnu linux runtime blob).
+  llvm::Triple tgtTriple(tripleStr);
+  auto osKey = [](llvm::Triple::OSType os) -> int {
+    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
+                                                                      : (int)os;
+  };
+  for (const auto& blob : blobs) {
+    llvm::Triple rtTriple(blob.target);
+    if (rtTriple.getArch() == tgtTriple.getArch() &&
+        osKey(rtTriple.getOS()) == osKey(tgtTriple.getOS())) {
       return &blob;
     }
   }
@@ -123,6 +138,18 @@ const RuntimeBlob* selectPlatformForTarget(const llvm::Triple& t) {
   const std::string tripleStr = t.getTriple();
   for (const auto& blob : blobs) {
     if (blob.target == tripleStr) {
+      return &blob;
+    }
+  }
+  llvm::Triple tgtTriple(tripleStr);
+  auto osKey = [](llvm::Triple::OSType os) -> int {
+    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
+                                                                      : (int)os;
+  };
+  for (const auto& blob : blobs) {
+    llvm::Triple rtTriple(blob.target);
+    if (rtTriple.getArch() == tgtTriple.getArch() &&
+        osKey(rtTriple.getOS()) == osKey(tgtTriple.getOS())) {
       return &blob;
     }
   }

@@ -92,7 +92,7 @@ case "$(uname -s)" in
     for f in crt2.o crtbegin.o crtend.o fltused.o chkstk.o libgcc.a libkernel32.a libmsvcrt.a libmingw32.a libmingwex.a libmoldname.a libucrt.a libadvapi32.a libshell32.a libuser32.a libws2_32.a; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
     done
-    if stage; then link_and_run "" 'embedded link sysroot.*mingw'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*multi'; fi
     ;;
   Darwin*)
     # --- macOS: SDK stubs, no Xcode CLT in the picture ---
@@ -103,7 +103,7 @@ case "$(uname -s)" in
     for f in usr/lib/libm.tbd usr/lib/libSystem.tbd; do
       [ -f "$SYSROOT/$f" ] || { echo "FAIL: sysroot source missing ($SYSROOT/$f)"; exit 1; }
     done
-    if stage; then link_and_run "" 'embedded link sysroot.*sdk'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*multi'; fi
     ;;
   *)
     # --- Linux: musl static, no host CRT ---
@@ -118,7 +118,7 @@ case "$(uname -s)" in
       echo "FAIL: sysroot source missing (libpli_builtins-<arch>.a)"
       exit 1
     fi
-    if stage; then link_and_run "" 'embedded link sysroot.*musl'; fi
+    if stage; then link_and_run "" 'embedded link sysroot.*multi'; fi
     ;;
 esac
 

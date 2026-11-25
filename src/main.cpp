@@ -168,6 +168,9 @@ static void usage() {
          "                   pli_rtplat.bc is merged instead)\n"
          "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
          "  --triple <t>     target triple (default: host triple, in-process)\n"
+         "  --target <t>     alias for --triple\n"
+         "  -target <t>      alias for --triple\n"
+         "  --sysroot <dir>  use a user-provided link sysroot (arch-prefixed layout)\n"
          "  --march=native   opt-in: use host CPU features (default: generic;\n"
          "                   CI/baselines always use generic; local hot runs only)\n"
          "  --sysparm <s>    value returned by the SYSPARM builtin (rule (123))\n"
@@ -592,6 +595,7 @@ static bool compileOne(Preprocessor& preprocessor, const std::string& input, std
 int main(int argc, char** argv) {
   std::vector<std::string> inputs;
   std::string output, triple;
+  std::string sysrootDir;
   // Split runtime: custom platform TU (--rt-platform); empty selects the
   // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
   std::string platformBc;
@@ -663,6 +667,12 @@ int main(int argc, char** argv) {
       ltoKind = a.substr(7);
     else if (a == "--triple")
       triple = next("--triple");
+    else if (a == "--target")
+      triple = next("--target");
+    else if (a == "-target")
+      triple = next("-target");
+    else if (a == "--sysroot")
+      sysrootDir = next("--sysroot");
     else if (a == "--march=native")
       marchNative = true;
     else if (a == "--sysparm") {
@@ -793,6 +803,13 @@ int main(int argc, char** argv) {
   }
 
   // --subsystem names a PE subsystem; anything else is a typo, not a fallback.
+
+  if (!sysrootDir.empty()) {
+    if (!fs::exists(sysrootDir) || !fs::is_directory(sysrootDir)) {
+      std::cerr << "pli: --sysroot directory does not exist: " << sysrootDir << "\n";
+      return 2;
+    }
+  }
   if (subsystem != "console" && subsystem != "windows") {
     std::cerr << "pli: --subsystem expects console or windows\n";
     return 2;
@@ -1061,31 +1078,47 @@ int main(int argc, char** argv) {
       // file) on all platforms; disk materialization as fallback if mem fails.
       // The recipe below passes every vendored sysroot artifact as an explicit
       // path argument and drops the vendored -L/-syslibroot directory flags.
-      pli::EmbeddedSysrootMem embMem = pli::materializeEmbeddedSysrootMem();
-      const bool useMemSysroot = !embMem.name.empty() && !embMem.files.empty();
+      const bool useUserSysroot = !sysrootDir.empty();
+      bool ownsSysrootDir = false;
+      pli::EmbeddedSysrootMem embMem;
+      bool useMemSysroot = false;
       pli::EmbeddedSysroot emb;
-      if (!useMemSysroot) {
-        emb = pli::materializeEmbeddedSysroot();
-        if (emb.dir.empty()) {
-          std::cerr << "pli: no embedded link sysroot for this platform "
-                       "("
-                    << emb.name << ") — cannot link without a sysroot\n";
-          removeTempObjects();
-          return 1;
+      if (useUserSysroot) {
+        if (verbose)
+          std::cerr << "pli: using user link sysroot (" << sysrootDir << ")\n";
+      } else {
+        embMem = pli::materializeEmbeddedSysrootMem();
+        useMemSysroot = !embMem.name.empty() && !embMem.files.empty();
+        ownsSysrootDir = !useMemSysroot;
+        if (!useMemSysroot) {
+          emb = pli::materializeEmbeddedSysroot();
+          if (emb.dir.empty()) {
+            std::cerr << "pli: no embedded link sysroot for this platform "
+                         "("
+                      << emb.name << ") — cannot link without a sysroot\n";
+            removeTempObjects();
+            return 1;
+          }
+        }
+        if (verbose) {
+          if (useMemSysroot)
+            std::cerr << "pli: using embedded link sysroot (" << embMem.name << ", in-memory)\n";
+          else
+            std::cerr << "pli: using embedded link sysroot (" << emb.name << ": " << emb.dir << ")\n";
         }
       }
-      if (verbose) {
-        if (useMemSysroot)
-          std::cerr << "pli: using embedded link sysroot (" << embMem.name << ", in-memory)\n";
-        else
-          std::cerr << "pli: using embedded link sysroot (" << emb.name << ": " << emb.dir << ")\n";
-      }
 
-      // Resolve a sysroot logical path to its link argument: the anonymous-fd
-      // mem path in-memory mode, the materialized dir path on disk. Every
-      // embedded file is present in the map; an empty result means the set is
-      // incomplete and the link is fatal.
+      // Resolve a sysroot logical path to its link argument: user-provided
+      // path, anonymous-fd mem path in-memory mode, or materialized dir path
+      // on disk. An empty result means the file is missing and the link is
+      // fatal.
       auto sysrootPath = [&](const std::string& logical) -> std::string {
+        if (useUserSysroot) {
+          std::string p = sysrootDir + "/" + logical;
+          if (!fs::exists(p))
+            return std::string();
+          return p;
+        }
         if (useMemSysroot) {
           auto it = embMem.files.find(logical);
           return it == embMem.files.end() ? std::string() : it->second;
@@ -1115,9 +1148,9 @@ int main(int argc, char** argv) {
         std::string libSystem = sysrootPath("usr/lib/libSystem.tbd");
         std::string libm = sysrootPath("usr/lib/libm.tbd");
         if (libSystem.empty() || libm.empty()) {
-          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+          std::cerr << "pli: incomplete sysroot — cannot link\n";
           removeTempObjects();
-          if (!useMemSysroot)
+          if (ownsSysrootDir)
             pli::cleanupMaterializedSysroot(emb.dir);
           return 1;
         }
@@ -1137,24 +1170,24 @@ int main(int argc, char** argv) {
         // no -lc (libc.a already explicit). Shared libs drop CRT objects and
         // -static/-pie, and add -shared instead of -pie.
         const std::string arch = llt.getArchName().str();
-        std::string libc = sysrootPath("libc.a");
-        std::string builtins = sysrootPath("libpli_builtins-" + arch + ".a");
-        std::string libm = sysrootPath("libm.a");
+        std::string libc = sysrootPath(arch + "/libc.a");
+        std::string builtins = sysrootPath(arch + "/libpli_builtins-" + arch + ".a");
+        std::string libm = sysrootPath(arch + "/libm.a");
         if (libc.empty() || builtins.empty() || libm.empty()) {
-          std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+          std::cerr << "pli: incomplete sysroot — cannot link\n";
           removeTempObjects();
-          if (!useMemSysroot)
+          if (ownsSysrootDir)
             pli::cleanupMaterializedSysroot(emb.dir);
           return 1;
         }
         if (!buildSharedLib) {
-          std::string crt1 = sysrootPath("crt1.o");
-          std::string crti = sysrootPath("crti.o");
-          std::string crtn = sysrootPath("crtn.o");
+          std::string crt1 = sysrootPath(arch + "/crt1.o");
+          std::string crti = sysrootPath(arch + "/crti.o");
+          std::string crtn = sysrootPath(arch + "/crtn.o");
           if (crt1.empty() || crti.empty() || crtn.empty()) {
-            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            std::cerr << "pli: incomplete sysroot — cannot link\n";
             removeTempObjects();
-            if (!useMemSysroot)
+            if (ownsSysrootDir)
               pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
@@ -1203,9 +1236,9 @@ int main(int argc, char** argv) {
           std::string crtend = sysrootPath("crtend.o");
           if (crt2.empty() || crtbegin.empty() || fltused.empty() || chkstk.empty() ||
               gsStubs.empty() || crtend.empty()) {
-            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            std::cerr << "pli: incomplete sysroot — cannot link\n";
             removeTempObjects();
-            if (!useMemSysroot)
+            if (ownsSysrootDir)
               pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
@@ -1227,9 +1260,9 @@ int main(int argc, char** argv) {
           std::string fltused = sysrootPath("fltused.o");
           std::string chkstk = sysrootPath("chkstk.o");
           if (fltused.empty() || chkstk.empty()) {
-            std::cerr << "pli: embedded sysroot incomplete — cannot link\n";
+            std::cerr << "pli: incomplete sysroot — cannot link\n";
             removeTempObjects();
-            if (!useMemSysroot)
+            if (ownsSysrootDir)
               pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
@@ -1242,9 +1275,9 @@ int main(int argc, char** argv) {
                                 "libshell32.a", "libuser32.a", "libws2_32.a"}) {
           std::string p = sysrootPath(lib);
           if (p.empty()) {
-            std::cerr << "pli: embedded sysroot incomplete (missing " << lib << ") — cannot link\n";
+            std::cerr << "pli: incomplete sysroot (missing " << lib << ") — cannot link\n";
             removeTempObjects();
-            if (!useMemSysroot)
+            if (ownsSysrootDir)
               pli::cleanupMaterializedSysroot(emb.dir);
             return 1;
           }
@@ -1260,7 +1293,7 @@ int main(int argc, char** argv) {
       } else {
         std::cerr << "pli: unsupported object format for link\n";
         removeTempObjects();
-        if (!useMemSysroot)
+        if (ownsSysrootDir)
           pli::cleanupMaterializedSysroot(emb.dir);
         return 1;
       }

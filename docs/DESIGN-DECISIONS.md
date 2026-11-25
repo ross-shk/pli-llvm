@@ -14791,3 +14791,23 @@ edited (immutable ADRs); this ADR supersedes ADR-225's `--clang` statement
 ADR-backed debug options (`-v`, `--keep-ll`, `--print-hir`, `--print-facts`,
 `--no-range-facts`, `--warn-unset`, `--remark-library-calls`,
 `--no-memory-effects`) are untouched.
+## ADR-395 — True cross compiler: embed all three OS sysroots, --sysroot, -target
+
+**Context.** pli previously embedded only the host OS's link sysroot, so a
+single binary could not target other OS families. Cross-compilation needed
+host toolchains and sidecar sysroots.
+
+**Decision.** Embed musl (multi-arch: x86_64 + aarch64), mingw, and macOS
+.tbd stubs in every build under arch-prefixed logical paths
+(`x86_64/libc.a`, `aarch64/libc.a`, bare paths for mingw/sdk). Add
+`-target`/`--target` as aliases for `--triple`, and `--sysroot <dir>` to
+override the embedded set with a user-provided directory using the same
+logical layout. User sysroots are never deleted; embedded temp dirs only
+when owned. Missing files under a sysroot fail the link with "incomplete
+sysroot". `embeddedSysrootName()` reports the combined set as "multi".
+Runtime blob selection matches by arch + OS family so musl targets reuse
+the linux runtime blob.
+
+**Consequences.** ELF link recipe uses `arch + "/..."` logical paths. All
+three sysroot sets travel inside pli(.exe). `--sysroot` replaces the
+embedded set entirely and validates directory existence and required files.

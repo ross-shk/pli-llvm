@@ -22,7 +22,7 @@ struct SysrootFile {
 // embedded none — arch mismatch or missing sources — in which case user links
 // fail with a clear error (no host-toolchain fallback).
 const SysrootFile* embeddedSysrootFiles(size_t* n);
-// Which link path the set feeds: "musl", "mingw", or "sdk" ("" when none).
+// Which link path the set feeds: combined "multi" set ("" when none).
 const char* embeddedSysrootName();
 // Total embedded bytes (reported by `pli version`).
 size_t embeddedSysrootSize();
