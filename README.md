@@ -1,80 +1,30 @@
 # pli-llvm — a PL/I compiler targeting LLVM
 
-`pli` is a modern PL/I compiler built to **TR 25.084** (Concrete Syntax) and **Y33-6003** (Semantics). It implements roughly 80% of TR 25.084, plus selected IBM Enterprise PL/I extensions. It ships as a single self-contained binary, so compiling and linking user programs need no LLVM install, Xcode, build-essential, or MSVC.
+`pli-llvm` is a modern PL/I compiler implementing the TR25 PL/I Language Specification with some IBM Enterprise PL/I extensions. It ships as a single self-contained binary with no external dependencies.
 
 ## Install
 
-Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/latest) and put `pli` on your `PATH`.
+Download the [latest release](https://github.com/ross-shk/pli-llvm/releases/latest) for your system manually and put the `pli`executable on your `PATH`, or use the recommended one-liners.
 
-Linux (x86_64 or aarch64) and macOS (Apple Silicon):
-
-Recommended (one-liner, downloads the release `install.sh` and runs it):
+### Linux (x86/ARM) and macOS (Apple Silicon)
 
 ```sh
 curl -fsSL https://github.com/ross-shk/pli-llvm/releases/latest/download/install.sh | sh
 ```
 
-This detects your OS and architecture, downloads the matching tarball, verifies it against the published sha256, installs `pli` to `~/.pli/bin`, and adds that dir to your `PATH` in `~/.profile` (and `~/.bashrc` / `~/.zshrc` where applicable), skipping it if already present. Open a new shell afterwards. Options:
+The install script detects your platform, downloads and verifies the matching tarball, copies the `pli` executable to `~/.pli/bin`, and adds it to your `PATH`.
 
-- `--version <tag>`: install a specific release (e.g. `v0.7.0`) instead of latest
-- `--dir <path>`: install elsewhere
-- `--skip-verify`: skip the sha256 integrity check
-- `--no-path`: do not touch your shell rc files / PATH
-
-Manual install (system-wide):
-
-```sh
-os=$(uname -s | tr '[:upper:]' '[:lower:]')
-arch=$(uname -m)
-curl -L "https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-$os-$arch.tar.gz" \
-  | tar xzf - && sudo install -m 755 "$os-$arch/pli" /usr/local/bin/pli
-```
-
-Windows (x86_64):
-
-The release publishes both `pli-windows-x86_64.zip` and `pli-windows-x86_64.tar.gz`. The archive contains `pli.exe` inside a `windows-x86_64/` folder; extract it to any dir on `PATH`.
-
-Recommended (PowerShell one-liner, downloads the release `install.ps1` and runs it):
+### Windows (x86):
 
 ```pwsh
 irm https://github.com/ross-shk/pli-llvm/releases/latest/download/install.ps1 | iex
 ```
 
-This installs `pli.exe` to `%USERPROFILE%\pli`, verifies the download against the published sha256, and adds `%USERPROFILE%\pli` to your **user** PATH (skipping it if already present). Open a new shell afterwards. Options:
+The install script downloads, verifies and copies `pli.exe` to `%USERPROFILE%\pli`, and adds `%USERPROFILE%\pli` to your **user** PATH.
 
-- `-Version <tag>`: install a specific release (e.g. `v0.7.0`) instead of latest
-- `-DestDir <path>`: install elsewhere
-- `-SkipVerify`: skip the sha256 integrity check
-- `-Clean`: remove an existing `pli.exe` before installing
-- `-NoPath`: do not touch your PATH
+## Run
 
-Manual install:
-
-cmd.exe:
-
-```bat
-curl -L https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -o pli.zip
-if not exist "%USERPROFILE%\pli" mkdir "%USERPROFILE%\pli"
-tar -xf pli.zip -C "%USERPROFILE%\pli"
-setx PATH "%PATH%;%USERPROFILE%\pli"
-```
-
-Note: `tar` extracts `windows-x86_64\pli.exe` into a subfolder; when installing manually, copy `pli.exe` from there to a dir on `PATH`.
-
-PowerShell:
-
-```pwsh
-Invoke-WebRequest -Uri https://github.com/ross-shk/pli-llvm/releases/latest/download/pli-windows-x86_64.zip -OutFile pli.zip
-Expand-Archive -Force pli.zip -DestinationPath $env:USERPROFILE\pli
-Get-ChildItem -Path $env:USERPROFILE\pli -Recurse -Filter pli.exe | Move-Item -Destination $env:USERPROFILE\pli\pli.exe -Force
-[Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$env:USERPROFILE\pli", [EnvironmentVariableTarget]::User)
-```
-
-Then open a new shell so `%USERPROFILE%\pli` is on `PATH` and `pli.exe` resolves.
-
-Each archive contains just the compiler binary (`pli` or `pli.exe`); the runtime and platform link sysroot are embedded.
-
-## Hello, world
+A basic hello program:
 
 ```pli
 hello: procedure options(main);
@@ -86,14 +36,17 @@ hello: procedure options(main);
 end;
 ```
 
+Compile and run with:
+
 ```sh
 pli hello.pli -o hello
 ./hello
+
 # When running, enter your name at the prompt, e.g. "Alice"
 # Output: Hello, Alice!
 ```
 
-For a fuller tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are in the [Built-ins reference](guides/builtins.md).
+For a complete tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are described in the [Built-ins reference](guides/builtins.md). Also see the examples.
 
 ## Benchmarks
 
@@ -237,36 +190,6 @@ cmake --build build/cmake -j
 ```
 
 Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. Without `PLI_CROSS_BITCODE=ON`, `--triple` uses the host runtime and only works when the target ABI matches the host.
-
-## What works today
-
-- **Procedures & functions** — `OPTIONS(MAIN)`, internal/external procedures, `RETURNS`, `RECURSIVE`, `ENTRY`, `PACKAGE`/`EXPORTS`.
-- **Data types** — `FIXED BIN/DEC`, `FLOAT`, `COMPLEX`, `BIT`, `CHAR`/`VARYING`, `POINTER`, `AREA`/`OFFSET`, `VALUE`, `DEFINE ALIAS/TYPE`.
-- **Arrays & structures** — dynamic/adjustable bounds, negative bounds, cross-sections, whole-array expressions, reductions, arrays of structures, `LIKE`, `BY NAME`.
-- **Storage** — `BASED`/`ALLOCATE`/`FREE`, `CONTROLLED`, `DEFINED`/`iSUB`, `ADDR`/`NULL`.
-- **Conditions** — `ON`/`SIGNAL`/`REVERT`, standard and named conditions, `(NO...)`, `ONCODE()`, nested `ON`.
-- **Concurrency** — `TASK`/`EVENT`/`PRIORITY` async `CALL`, `WAIT`/`DELAY`, `EVENT()` polling.
-- **I/O** — `PUT`/`GET LIST`/`EDIT`/`DATA`, `FILE`/`STRING`, `OPEN`/`CLOSE`, `FORMAT`, sequential record I/O.
-- **Preprocessor** — `%INCLUDE`/`%XINCLUDE`, `%DECLARE`, `%IF`/`%THEN`/`%ELSE`, `%ACTIVATE`, `%REPLACE`.
-- **C interop** — `ENTRY ... EXTERNAL`, `BYVALUE`/`BYADDR`, `LINKAGE(SYSTEM)`, `OPTIONAL`/`OMITTED`, `ENTRY VARIABLE`, `UNALIGNED`, `SYSTEM()`.
-- **Toolchain** — separate compilation, multi-unit `pli` invocation, `-c`/`-emit-llvm`, `-I`/`-L`, `--sysparm`, `--triple`.
-- **Built-ins** — string, conversion, math, complex, and array-bound built-ins; full list in the [Built-ins reference](guides/builtins.md).
-- **Extensions** — `SELECT`/`WHEN`/`OTHERWISE`, `LEAVE`/`ITERATE`, `DO UNTIL`, `//` comments.
-- **No reserved words** — `IF`, `THEN`, `ELSE`, `DO`, `END`, `PUT` can be ordinary variables.
-
-Everything else is diagnosed with its TR 25.084 rule number — the diagnostic is the to-do list. Larger examples live in `tests/usecases/` and `benchmarks/`.
-
-## Documentation
-
-| Doc | Purpose |
-| --- | --- |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add features: layer map, workflow, invariants |
-| [guides/programming.md](guides/programming.md) | Feature guide: data types, arrays, storage, I/O, conditions, concurrency |
-| [guides/builtins.md](guides/builtins.md) | Built-in functions reference |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Pipeline, IR levels, data representation, ABI, runtime |
-| [docs/GRAMMAR-COVERAGE.md](docs/GRAMMAR-COVERAGE.md) | Rule-by-rule implementation status |
-| [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) | Historical design decisions (ADRs) |
-| [TR25.084-concrete-syntax.md](TR25.084-concrete-syntax.md) | TR 25.084 concrete syntax, rules (1)–(151) |
 
 ## Layout
 
