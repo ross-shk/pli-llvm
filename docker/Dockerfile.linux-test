@@ -6,5 +6,10 @@ FROM tatsushid/tinycore:11.0-x86_64
 # bash is required by entrypoint.sh (#!/bin/bash); curl for fetching pli.
 RUN tce-load -c -wi bash.tcz curl.tcz
 WORKDIR /work
+# CI default when no command is given: compile + run hello.pli on TinyCore.
+# Requires a prebuilt static-musl pli binary mounted at /work/build/cmake/pli
+# (built on a Debian host with PLI_LLVM_STATIC_PREFIX). TinyCore has no CMake
+# — the full suite runs on the host: ctest --test-dir build/cmake -j
+ENV PLI_DEFAULT_CMD='/work/build/cmake/pli tests/core/hello.pli -o /tmp/hello && /tmp/hello'
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
