@@ -1,35 +1,10 @@
-# Native Linux build+test env for pli (glibc, matches --triple *-unknown-linux-gnu).
-FROM debian:trixie-slim
-# Build deps per README (C++20, LLVM >= 23, lld, CMake, Python).
-# Debian trixie ships LLVM 19/22; we need >=23 so use the LLVM apt repo.
-# apt reads the ASCII-armored key directly, so no gnupg/wget is needed.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ca-certificates curl \
-    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /usr/share/keyrings/llvm.asc \
-    && echo "deb [signed-by=/usr/share/keyrings/llvm.asc] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-23 main" > /etc/apt/sources.list.d/llvm.list \
-    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    build-essential clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev \
-    libclang-rt-23-dev cmake ninja-build python3 git \
-    && rm -rf /var/lib/apt/lists/*
-# Point find_package(LLVM/Clang) at the versioned install.
-ENV CMAKE_PREFIX_PATH=/usr/lib/llvm-23
-# CMAKE_C_COMPILER defaults to cc (gcc), which rejects clang's -target flag
-# used for runtime bitcode; pin the whole image to clang.
-ENV CC=clang-23 CXX=clang++-23
-# Provide unversioned clang on PATH so test scripts using `clang` work.
-RUN ln -sf /usr/bin/clang-23 /usr/bin/clang && ln -sf /usr/bin/clang++-23 /usr/bin/clang++
-# Interactive comfort: less for git paging, bash tab-completion. Own layer so
-# changing it never re-downloads the ~300 MB LLVM install above.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    less bash-completion \
-    && rm -rf /var/lib/apt/lists/* \
-    && echo '. /usr/share/bash-completion/bash_completion' >> /root/.bashrc
+# Bare-minimum test-runner image for pli on TinyCore Linux.
+# NOTE: TinyCore's tcz repo ships no LLVM >= 23, so pli cannot be built here
+# without compiling LLVM from source. This image only runs tests against a
+# prebuilt pli binary (or a host-mounted build dir with its own toolchain).
+FROM tatsushid/tinycore:11.0-x86_64
+# bash only — entrypoint.sh is #!/bin/bash.
+RUN tce-load -c -wi bash.tcz curl.tcz
 WORKDIR /work
-# CI default when no command is given: parallel build then full suite.
-ENV PLI_DEFAULT_CMD='cmake -G Ninja -S . -B build/cmake && cmake --build build/cmake -j$(nproc) && ctest --test-dir build/cmake -j$(nproc)'
-# Interactive use (`docker run --rm -it pli-linux-test`) lands in bash with
-# arrow-key history and `source`; non-interactive runs build + test as before.
-# Build context is docker/ (docker build -f docker/Dockerfile.linux-test docker).
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
