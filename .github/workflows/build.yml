@@ -91,7 +91,7 @@ jobs:
           elif [ "${{ runner.os }}" = "Windows" ]; then
             cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DPLI_ZSTD_ROOT="$HOME/pli-deps" -DPLI_ZLIB_ROOT="$ZLIB_ROOT_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
-            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23 -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps"
+            cmake -G Ninja -S . -B build/cmake -DCMAKE_PREFIX_PATH=/usr/lib/llvm-23 -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           fi
       - name: Build
         run: |
