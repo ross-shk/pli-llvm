@@ -45,11 +45,17 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref_name }}
 
-      - name: Fetch static LLVM stash (Ubuntu)
+      - name: Install LLVM + lld (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y zstd curl
+          sudo apt-get update && sudo apt-get install -y wget gnupg lsb-release musl-dev musl-tools zstd
+          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/$(. /etc/os-release && echo $VERSION_CODENAME)/ llvm-toolchain-$(. /etc/os-release && echo $VERSION_CODENAME)-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-23 lld-23 llvm-23 llvm-23-dev libclang-23-dev liblld-23-dev libpolly-23-dev libclang-rt-23-dev ninja-build cmake python3 git
+          sudo ln -sf /usr/bin/clang-23 /usr/bin/clang && sudo ln -sf /usr/bin/clang++-23 /usr/bin/clang++
           sh scripts/fetch_llvm_static.sh --prefix "$HOME/pli-deps"
+          echo "$HOME/pli-deps/bin" >> "$GITHUB_PATH"
 
       - name: Fetch static LLVM stash (macOS)
         if: runner.os == 'macOS'
@@ -118,7 +124,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DPLI_ZSTD_ROOT="$HOME/pli-deps" -DPLI_ZLIB_ROOT="$ZLIB_ROOT_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           else
-            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release
+            cmake -G Ninja -S . -B build/cmake -DPLI_LLVM_STATIC_PREFIX="$HOME/pli-deps" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           fi
 
       - name: Build
