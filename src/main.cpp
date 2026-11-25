@@ -62,9 +62,6 @@
 #define PLI_LLVM_VERSION LLVM_VERSION_STRING
 #endif
 
-// Hidden escape hatch (undocumented, ADR-225): --clang is still parsed into
-// `clangPath` but nothing invokes it — compile and link are fully in-process.
-// Reserved for debugging only.
 
 #ifndef PLI_VERSION
 #define PLI_VERSION "unknown"
@@ -599,7 +596,6 @@ int main(int argc, char** argv) {
   // Split runtime: custom platform TU (--rt-platform); empty selects the
   // embedded pli_rtplat.bc. Always explicit (no baked-in default path).
   std::string platformBc;
-  std::string clangPath; // hidden --clang override (parsed, never invoked)
   std::string sysparm;
   bool sysparmExplicit = false;
   std::string optLevel = "-O2";
@@ -666,8 +662,6 @@ int main(int argc, char** argv) {
       platformBc = a.substr(14);
     } else if (a == "--flto=thin" || a == "--flto=full")
       ltoKind = a.substr(7);
-    else if (a == "--clang")
-      clangPath = next("--clang");
     else if (a == "--triple")
       triple = next("--triple");
     else if (a == "--march=native")

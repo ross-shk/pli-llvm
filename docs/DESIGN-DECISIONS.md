@@ -14767,3 +14767,27 @@ Reserved-prefix warning test added (`tests/driver/bad_pli_prefix.sh`).
 **Rejected.** Flipping the lexer to `tolower` (would break ~620 keyword
 and builtin comparison sites, change PUT DATA output, regenerate all
 goldens); removing the fold entirely (breaks case-insensitive matching).
+
+---
+## ADR-394 — Remove the unused `--clang` driver escape hatch
+
+**Context.** ADR-225's decision kept `--clang` parsed into `clangPath` but
+undocumented and uninvoked — a hidden escape hatch reserved for debugging,
+while compile and link run fully in-process (`src/main.cpp:602`, parse arm
+`src/main.cpp:669-670`). The variable was set in the parse branch and never
+read anywhere; no test, usage text, or code path referenced it. It survived
+only as dead, debug-only state.
+
+**Decision.** Remove `--clang` and its backing `clangPath` variable from the
+driver CLI. `--clang` now falls into the unknown-option error path
+(`src/main.cpp:795-798`), so `pli --clang` exits nonzero with
+"unknown option --clang". `--clang` was never part of `usage()` help text,
+so help output is unchanged.
+
+**Consequences.** `clangPath` declaration, parse arm, and the escape-hatch
+comment block are deleted from `src/main.cpp`. ADR-224 and ADR-225 are not
+edited (immutable ADRs); this ADR supersedes ADR-225's `--clang` statement
+(lines 6874-6875). All other CLI variables remain read; the tested,
+ADR-backed debug options (`-v`, `--keep-ll`, `--print-hir`, `--print-facts`,
+`--no-range-facts`, `--warn-unset`, `--remark-library-calls`,
+`--no-memory-effects`) are untouched.
