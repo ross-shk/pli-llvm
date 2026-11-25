@@ -28,6 +28,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 # `pwsh` runs the Windows build through Wine; see pwsh.sh for the pty detail.
 COPY pwsh.sh /usr/local/bin/pwsh
 RUN chmod +x /usr/local/bin/pwsh
+# Transparent wrapper: copies a PE off a host bind mount before wine64, so
+# `wine64 prog.exe` (and direct invocation) work without a helper command.
+COPY wine64.sh /usr/local/bin/wine64
+RUN chmod +x /usr/local/bin/wine64
 WORKDIR /work
 # Default when no command is given: report the Wine version.
 ENV PLI_DEFAULT_CMD='wine64 --version'
