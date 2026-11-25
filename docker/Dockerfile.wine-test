@@ -10,5 +10,20 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 # arm64 Wine runs ARM64 Windows binaries; x86_64 .exe files need this image
 # rebuilt with --platform linux/amd64 (see run-cross-test.sh).
 ENV WINEDEBUG=-all
+# Interactive comfort: curl, less for git paging, bash tab-completion. Own layer
+# so changing it never re-downloads Wine. Debian leaves completion opt-in in
+# /etc/bash.bashrc, so enable it for root's interactive shells. ca-certificates
+# is required for curl HTTPS (wine64 does not pull it in).
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl less bash-completion \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo '. /usr/share/bash-completion/bash_completion' >> /root/.bashrc
 WORKDIR /work
-CMD ["wine64", "--version"]
+# Default when no command is given: report the Wine version.
+ENV PLI_DEFAULT_CMD='wine64 --version'
+# Interactive use (`docker run --rm -it pli-wine-test`) lands in bash; commands
+# still pass straight through (e.g. `docker run ... wine64 prog.exe`).
+# Build context is docker/ (docker build -f docker/Dockerfile.wine-test docker).
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
