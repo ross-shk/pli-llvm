@@ -193,15 +193,49 @@ Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86
 
 ## Layout
 
-| Path | Contents |
-| --- | --- |
-| `src/` | Compiler pipeline: lexer, parser, sema, HIR, IRGen, preprocessor, diagnostics, target |
-| `runtime/` | PL/I runtime and platform seam |
-| `tests/` | Golden, self-checking, and driver tests |
-| `benchmarks/` | Benchmark programs, runner, and results |
-| `scripts/` | Build and code-generation helpers |
-| `docs/`, `guides/` | Architecture, ADRs, grammar coverage, user guides |
-| `CMakeLists.txt` | Canonical build: LLVM C++ API + lld, embedded runtime bitcode |
+```text
+.
+├── .github/workflows/           # CI: build/test, release, LLVM deps, AI review
+├── benchmarks/                  # PL/I, C, and Go benchmark corpora and runners
+├── docker/                      # Linux and Wine cross-test images
+├── docs/                        # architecture, ADRs, coverage, optimization baseline
+├── examples/                    # curated PL/I example programs
+├── guides/                      # programming guide and built-ins reference
+├── platform/                    # vendored link sysroots (musl, mingw-w64, macOS stubs)
+├── runtime/                     # PL/I runtime cross-platform code
+├── scripts/                     # build, LLVM fetch, embed, and install helpers
+├── src/                         # compiler sources
+│   ├── lexer.cpp/.h             # tokenization
+│   ├── parser.cpp/.h            # TR 25.084 concrete syntax → AST
+│   ├── sema.cpp/.h              # semantic analysis and type checking
+│   ├── hir.cpp/.h               # high-level IR
+│   ├── irgen.cpp/.h             # HIR → LLVM IR (language lowering)
+│   ├── preprocessor.cpp/.h      # %INCLUDE, %REPLACE, and preprocessor statements
+│   ├── codegen.cpp/.h           # object emission and linking
+│   ├── target.cpp/.h            # target triples, libc/startup, and link policy
+│   ├── ...                      # AST, CLI, diagnostics, constant folding, embedding, host CRT
+│   ├── mlir/                    # experimental MLIR dialect (PLI_ENABLE_MLIR)
+│   └── win/                     # Windows shims for the build
+├── tests/                       # golden, self-checking, negative, IR, and driver tests
+│   ├── run_tests.py             # test runner
+│   ├── bad/                     # programs that must fail to compile
+│   ├── builtins/                # built-in functions
+│   ├── core/                    # language conformance
+│   ├── corner_cases/            # edge-case regressions
+│   ├── driver/                  # CLI, linking, and toolchain
+│   ├── hardening/               # stress and condition combinations
+│   ├── ir/                      # LLVM IR checks
+│   ├── multimodule/             # separate compilation and linking
+│   ├── preprocessor/            # %INCLUDE and preprocessor statements
+│   ├── smoke/                   # quick end-to-end checks
+│   └── usecases/                # end-to-end programs
+├── tools/                       # coverage audit, corpus ranking, and reconciliation scripts
+├── CMakeLists.txt               # canonical build: LLVM C++ API + lld, embedded RT bitcode
+├── CONTRIBUTING.md              # contributor workflow and invariants
+├── LICENSE                      # Apache 2.0
+├── README.md                    # this file
+└── TR25.084-concrete-syntax.md  # concrete syntax specification (rules 1–151)
+```
 
 ## License
 
