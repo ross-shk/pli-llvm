@@ -6592,7 +6592,8 @@ void Sema::typeExpr(Expr* e, Scope* sc, Proc* p) {
         e->kind = Expr::Subscript;
         e->sym = bs;
         checkSubscriptTypes(e);
-        const Type* leaf = resolveMemberPath(e, bs->ty.elementType());
+        Type elem = bs->ty.elementType();
+        const Type* leaf = resolveMemberPath(e, elem);
         if (!leaf) {
           e->ty = Type::voidTy();
           break;

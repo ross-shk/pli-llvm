@@ -12,16 +12,16 @@
 // Default platform blob (build/embedded_rtplat.inc).
 #include "embedded_rtplat.inc"
 // Per-target generated platform arrays (included by CMake at build time).
-#ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
+#if PLI_HAVE_LINUX_X86_64_RUNTIME
 #include "embedded_rtplat_x86_64_unknown_linux_gnu.inc"
 #endif
-#ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
+#if PLI_HAVE_LINUX_AARCH64_RUNTIME
 #include "embedded_rtplat_aarch64_unknown_linux_gnu.inc"
 #endif
-#ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
+#if PLI_HAVE_WINDOWS_X86_64_RUNTIME
 #include "embedded_rtplat_x86_64_pc_windows_gnu.inc"
 #endif
-#ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
+#if PLI_HAVE_WINDOWS_AARCH64_RUNTIME
 #include "embedded_rtplat_aarch64_pc_windows_gnu.inc"
 #endif
 #if PLI_HAVE_MACOS_ARM64_RUNTIME
@@ -64,20 +64,20 @@ std::vector<RuntimeBlob> getEmbeddedPlatformBlobs() {
   // Default (host) platform blob - always present
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc, pli_embedded_rtplat_bc_len, PLI_TARGET_TRIPLE);
   // Per-target platform blobs (conditionally compiled like the runtime ones)
-#ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
+#if PLI_HAVE_LINUX_X86_64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_x86_64_unknown_linux_gnu,
                    pli_embedded_rtplat_bc_x86_64_unknown_linux_gnu_len, "x86_64-unknown-linux-gnu");
 #endif
-#ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
+#if PLI_HAVE_LINUX_AARCH64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_aarch64_unknown_linux_gnu,
                    pli_embedded_rtplat_bc_aarch64_unknown_linux_gnu_len,
                    "aarch64-unknown-linux-gnu");
 #endif
-#ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
+#if PLI_HAVE_WINDOWS_X86_64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_x86_64_pc_windows_gnu,
                    pli_embedded_rtplat_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
 #endif
-#ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
+#if PLI_HAVE_WINDOWS_AARCH64_RUNTIME
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_aarch64_pc_windows_gnu,
                    pli_embedded_rtplat_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
 #endif

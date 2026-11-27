@@ -473,16 +473,38 @@ else()
   set(PLI_HOST_SYSROOT_FLAG "")
 endif()
 
+# Cross-target runtime blobs are optional: they only get embedded into `pli`
+# when their generated .inc file is available. Cross-target bitcode requires
+# target system headers (musl/ucrt) that may not be present in a given build
+# environment, so default to not embedding them and only enable when a .inc
+# file already exists (e.g. from a prior successful cross build).
+set(PLI_HAVE_LINUX_X86_64_RUNTIME 0)
+set(PLI_HAVE_LINUX_AARCH64_RUNTIME 0)
+set(PLI_HAVE_WINDOWS_X86_64_RUNTIME 0)
+set(PLI_HAVE_WINDOWS_AARCH64_RUNTIME 0)
+if(EXISTS "${CMAKE_BINARY_DIR}/embedded_rtplat_x86_64_unknown_linux_gnu.inc")
+  set(PLI_HAVE_LINUX_X86_64_RUNTIME 1)
+endif()
+if(EXISTS "${CMAKE_BINARY_DIR}/embedded_rtplat_aarch64_unknown_linux_gnu.inc")
+  set(PLI_HAVE_LINUX_AARCH64_RUNTIME 1)
+endif()
+if(EXISTS "${CMAKE_BINARY_DIR}/embedded_rtplat_x86_64_pc_windows_gnu.inc")
+  set(PLI_HAVE_WINDOWS_X86_64_RUNTIME 1)
+endif()
+if(EXISTS "${CMAKE_BINARY_DIR}/embedded_rtplat_aarch64_pc_windows_gnu.inc")
+  set(PLI_HAVE_WINDOWS_AARCH64_RUNTIME 1)
+endif()
+
 target_compile_definitions(pli PRIVATE
   PLI_VERSION="${PLI_VERSION}"
   PLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   PLI_HAVE_LLD=${PLI_HAVE_LLD}
   PLI_TARGETS_TO_BUILD="host"
   PLI_TARGET_TRIPLE="${PLI_TARGET_TRIPLE}"
-  PLI_HAVE_LINUX_X86_64_RUNTIME=1
-  PLI_HAVE_LINUX_AARCH64_RUNTIME=1
-  PLI_HAVE_WINDOWS_X86_64_RUNTIME=1
-  PLI_HAVE_WINDOWS_AARCH64_RUNTIME=1
+  PLI_HAVE_LINUX_X86_64_RUNTIME=${PLI_HAVE_LINUX_X86_64_RUNTIME}
+  PLI_HAVE_LINUX_AARCH64_RUNTIME=${PLI_HAVE_LINUX_AARCH64_RUNTIME}
+  PLI_HAVE_WINDOWS_X86_64_RUNTIME=${PLI_HAVE_WINDOWS_X86_64_RUNTIME}
+  PLI_HAVE_WINDOWS_AARCH64_RUNTIME=${PLI_HAVE_WINDOWS_AARCH64_RUNTIME}
   PLI_HAVE_LLD_MACHO=${PLI_HAVE_LLD_MACHO})
 
 # P2: wire MLIR canary library into pli when MLIR is enabled.
@@ -948,7 +970,6 @@ foreach(target ${PLI_TARGETS})
     COMMENT "embedding pli_rtplat.bc for ${target}")
   add_custom_target(embedded_rtplat_inc${target_suffix}
     DEPENDS ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
-  add_dependencies(pli embedded_rtplat_inc${target_suffix})
 endforeach()
 
 # Default target (host) bitcode for backward compatibility: portable sources
