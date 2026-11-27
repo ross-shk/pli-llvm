@@ -86,7 +86,7 @@ EOF
 
 # Detect MLIR support: a non-MLIR build diagnoses --experimental-lowering=mlir.
 mlir_modes=""
-if $PLI --experimental-lowering=mlir -fsyntax-only "$OUT.witness.pli" 2>/dev/null; then
+if $PLI --experimental-lowering=mlir --fsyntax-only "$OUT.witness.pli" 2>/dev/null; then
   mlir_modes="mlir"
 fi
 

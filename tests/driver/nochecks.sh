@@ -20,7 +20,7 @@ subdemo: procedure options(main);
    put skip list(v);
 end subdemo;
 EOF
-$PLI "$OUT.sub.pli" -emit-llvm -o "$OUT.sub.ll" || { echo "FAIL nochecks: sub emit"; exit 1; }
+$PLI "$OUT.sub.pli" --emit-llvm -o "$OUT.sub.ll" || { echo "FAIL nochecks: sub emit"; exit 1; }
 if grep -qE "sub\.fail|pli_subscript_oob" "$OUT.sub.ll"; then echo "FAIL nochecks: subscript checks remain"; exit 1; fi
 $PLI "$OUT.sub.pli" -o "$OUT.sub" || { echo "FAIL nochecks: sub compile"; exit 1; }
 echo 9 | "$OUT.sub" >/dev/null 2>&1; rc=$?
@@ -38,7 +38,7 @@ zddemo: procedure options(main);
    put skip list('done');
 end zddemo;
 EOF
-$PLI "$OUT.zd.pli" -emit-llvm -o "$OUT.zd.ll" || { echo "FAIL nochecks: zd emit"; exit 1; }
+$PLI "$OUT.zd.pli" --emit-llvm -o "$OUT.zd.ll" || { echo "FAIL nochecks: zd emit"; exit 1; }
 if grep -qE "zd\.trap|pli_zerodivide" "$OUT.zd.ll"; then echo "FAIL nochecks: zerodivide checks remain"; exit 1; fi
 $PLI "$OUT.zd.pli" -o "$OUT.zd" || { echo "FAIL nochecks: zd compile"; exit 1; }
 echo 0 | "$OUT.zd" >/dev/null 2>&1; rc=$?

@@ -421,7 +421,7 @@ class Runner:
 
     def diag(self):
         compilefile = self.out / f"{self.name}.compile"
-        rc = subprocess.run([PLI, str(self.dir / f"{self.name}.pli"), "-fsyntax-only"],
+        rc = subprocess.run([PLI, str(self.dir / f"{self.name}.pli"), "--fsyntax-only"],
                             stdout=open(compilefile, "w"),
                             stderr=subprocess.STDOUT).returncode
         text = compilefile.read_text(errors="replace") if compilefile.exists() else ""
@@ -451,8 +451,8 @@ class Runner:
             flags = flagsfile.read_text(errors="replace").strip().split()
         with open(compilefile, "w") as cfh:
             rc = subprocess.run(
-                [PLI, "--size-checks", *flags, str(self.dir / f"{self.name}.pli"),
-                 "-emit-llvm", "-o", str(llfile)],
+                 [PLI, "--size-checks", *flags, str(self.dir / f"{self.name}.pli"),
+                  "--emit-llvm", "-o", str(llfile)],
                 stdout=cfh, stderr=subprocess.STDOUT).returncode
         if rc != 0:
             return self.fail("compilation failed",

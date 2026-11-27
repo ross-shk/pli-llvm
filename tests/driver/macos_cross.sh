@@ -25,7 +25,7 @@ EOF
 
 # --- blob-independent: -emit-llvm must preserve the user's Apple triple ------
 # (regression for the old forced arm64-apple-macosx15.0 in irgen.cpp)
-$PLI --triple arm64-apple-macosx15.0 "$OUT.pli" -emit-llvm -o "$OUT.llarm" \
+$PLI --triple arm64-apple-macosx15.0 "$OUT.pli" --emit-llvm -o "$OUT.llarm" \
   || { echo "FAIL: arm64 -emit-llvm"; ok=0; }
 grep -q 'target triple = "arm64-apple-macosx15.0"' "$OUT.llarm" \
   || { echo "FAIL: arm64 triple wrong"; ok=0; }
@@ -63,7 +63,7 @@ $PLI --triple arm64-apple-macosx15.0 "$OUT.pli" -c -o "$OUT.arm64.o" \
 
 # 4. -shared: dylib (MachO -dylib); FileType: Dylib is the gate. Symbol
 #    export/reexport correctness is out of scope for this check.
-$PLI --triple arm64-apple-macosx15.0 "$OUT.pli" -shared -o "$OUT.dylib" \
+$PLI --triple arm64-apple-macosx15.0 "$OUT.pli" --shared -o "$OUT.dylib" \
   || { echo "FAIL: arm64 -shared"; ok=0; }
 "$READOBJ" --file-headers "$OUT.dylib" | grep -q "FileType: Dylib" \
   || { echo "FAIL: -shared not Dylib"; ok=0; }

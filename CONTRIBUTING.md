@@ -43,7 +43,7 @@ cmake -G Ninja -S . -B build/mlir -DPLI_ENABLE_MLIR=ON -DMLIR_DIR=<llvm-install>
 cmake --build build/mlir -j
 ```
 
-`MLIR_DIR` must come from the same install as the LLVM CMake packages (matching version and prefix), otherwise configure warns. Without it, `-emit-mlir` and `--experimental-lowering=mlir` diagnose cleanly and the build has no MLIR dependency.
+`MLIR_DIR` must come from the same install as the LLVM CMake packages (matching version and prefix), otherwise configure warns. Without it, `--emit-mlir` and `--experimental-lowering=mlir` diagnose cleanly and the build has no MLIR dependency.
 
 ## Layer map — where a feature lands
 
@@ -55,7 +55,7 @@ cmake --build build/mlir -j
 | New attribute                 | `parser.cpp:parseDeclItem`, `types.h`, `sema.cpp`                                                          | `VARYING`      |
 | New data type                 | `types.h` (+ `llvmTy`, `desc`), `irgen.cpp:convert/loadSym/storeTo`                                        | `BIT(1)`       |
 | Runtime behaviour             | `runtime/pli_rt.{h,c}` + `declare` in `irgen.cpp:run`                                                      | `pli_cmp_char` |
-| Driver flag                   | `src/main.cpp` + README usage block                                                                        | `-emit-llvm`   |
+| Driver flag                   | `src/main.cpp` + README usage block                                                                        | `--emit-llvm`   |
 
 One statement usually means five edits: AST kind → parse → check → emit → test. Keep them in one change.
 
@@ -65,7 +65,7 @@ One statement usually means five edits: AST kind → parse → check → emit �
 2. **Write the test first.** `tests/core/<feature>.pli`, lowercase PL/I, with a header comment naming the rules exercised. Add `tests/core/bad_<feature>.pli` if the feature has error cases. For IR-level checks, add a `tests/ir/<feature>.pli` with a `<feature>.check` FileCheck patterns file; supply per-test compiler flags via an optional `<feature>.flags` sidecar.
 3. **Implement across the layers** in the table above, smallest change that works (KISS). Diagnose what you do not implement — never accept silently.
 4. **Verify**: `ctest --test-dir build/cmake` (or `./tests/run_tests.py`). For a golden test, record the baseline: `./build/cmake/pli tests/core/x.pli -o /tmp/x && /tmp/x > tests/core/expected/x.out` and read it before committing — it becomes the specification of behaviour, so a wrong line is a permanent wrong answer. A self-contained test needs no baseline: its `PASS` is the verdict. For a major edit run `cmake --build build/cmake --target check` — the analysis gate (`-Werror` build + clang-format drift + clang-tidy + scan-build) must stay green; `cmake --build build/cmake --target fmt` normalizes formatting first.
-5. **Check the IR** for anything non-trivial: `-emit-llvm` and read it. Cheap, and catches silently-dropped work (see the worked example below).
+5. **Check the IR** for anything non-trivial: `--emit-llvm` and read it. Cheap, and catches silently-dropped work (see the worked example below).
 6. **Update docs**: flip the row in `docs/GRAMMAR-COVERAGE.md`; adjust `docs/ARCHITECTURE.md` §8 status and the README feature list if user-visible; add an ADR to `docs/DESIGN-DECISIONS.md` if you made a real decision (new number, never edit an existing ADR); note deviations from the spec.
 7. **Stage, do not commit.** `git add -A` and report what changed. Committing needs the maintainer's approval.
 

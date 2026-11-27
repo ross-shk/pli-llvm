@@ -39,19 +39,19 @@ grep -q '^EFFLIB [0-9a-f]\{16\} argmem-read nounwind willreturn$' "$OUT.eff" ||
   fail "the published file does not carry the promise"
 
 # --- the caller attaches the promise to its declaration --------------------
-$PLI "$OUT.main.pli" --effects="$OUT.eff" -emit-llvm -o "$OUT.prom.ll" ||
+$PLI "$OUT.main.pli" --effects="$OUT.eff" --emit-llvm -o "$OUT.prom.ll" ||
   fail "the consuming compile failed"
 grep -q 'nounwind willreturn memory(argmem: read)' "$OUT.prom.ll" ||
   fail "the promise did not reach the declaration"
 
 # --- without the file the declaration promises nothing ---------------------
-$PLI "$OUT.main.pli" -emit-llvm -o "$OUT.plain.ll" || fail "the plain compile failed"
+$PLI "$OUT.main.pli" --emit-llvm -o "$OUT.plain.ll" || fail "the plain compile failed"
 grep -q 'memory(argmem: read)' "$OUT.plain.ll" &&
   fail "the promise appeared without the published file"
 
 # --- a promise published for another signature is not a promise here -------
 sed 's/^EFFLIB [0-9a-f]\{16\}/EFFLIB 0000000000000000/' "$OUT.eff" > "$OUT.othersig.eff"
-$PLI "$OUT.main.pli" --effects="$OUT.othersig.eff" -emit-llvm -o "$OUT.othersig.ll" ||
+$PLI "$OUT.main.pli" --effects="$OUT.othersig.eff" --emit-llvm -o "$OUT.othersig.ll" ||
   fail "the mismatched-signature compile failed"
 grep -q 'memory(argmem: read)' "$OUT.othersig.ll" &&
   fail "a promise published for another signature was used"

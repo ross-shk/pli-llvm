@@ -69,7 +69,7 @@ fi
 echo "PASS include-missing";
 
 # -v lists the executable-relative default dir.
-if $PLI -v -fsyntax-only "$OUT.pli" 2>&1 | grep -q "share/pli/include"; then
+if $PLI -v --fsyntax-only "$OUT.pli" 2>&1 | grep -q "share/pli/include"; then
   echo "PASS include-default";
 else
   echo "FAIL include-dirs: default dir not listed";

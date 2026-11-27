@@ -130,15 +130,15 @@ static void usage() {
           "  -o <file>        output file (default: a.out on Unix, a.exe on Windows/COFF;\n"
           "                   or <base>.ll with -emit-llvm). On COFF targets an\n"
           "                   extensionless -o name gets .exe appended.\n"
-         "                   (single input only with -emit-llvm/--print-hir/-fsyntax-only,\n"
+          "                   (single input only with --emit-llvm/--print-hir/--fsyntax-only,\n"
          "                   and with -c when more than one input is given)\n"
          "  -c               compile each input to a relocatable object (no linking)\n"
-         "  -emit-llvm       write LLVM IR per input and stop\n"
+          "  --emit-llvm (-emit-llvm)   write LLVM IR per input and stop\n"
          "  --print-hir      lower to HIR and print it per input, then stop\n"
          "  --print-facts    print the compiler's PL/I-specific decisions\n"
          "                   (lowering policy, check state, built-in paths)\n"
          "                   and stop (ADR-260)\n"
-         "  -fsyntax-only    parse and analyse each input only\n"
+          "  --fsyntax-only (-fsyntax-only)  parse and analyse each input only\n"
          "  -O0 -O1 -O2 -O3  optimization level passed to the LLVM pipeline (default -O2)\n"
          "  --no-memory-effects  do not infer procedure memory effects (ADR-264);\n"
          "                   every call keeps LLVM's default effects\n"
@@ -181,7 +181,7 @@ static void usage() {
          "  -l<lib>          link a library (e.g. -lm) on the link step\n"
          "  -Wl,<flag>       pass a raw flag to the linker (repeatable)\n"
          "  -static          produce a statically linked binary\n"
-         "  -shared          produce a shared library (.so/.dylib/.dll) instead of an\n"
+          "  --shared (-shared)    produce a shared library (.so/.dylib/.dll) instead of an\n"
          "                   executable; exports all defined external symbols\n"
          "  --subsystem <s>  Windows PE subsystem: console (default) or windows\n"
          "  --extra <a,b,c>  comma-separated extra backend args appended to the link\n"
@@ -196,7 +196,7 @@ static void usage() {
          "                   auto (default), runtime, llvm, or mlir\n"
          "  --experimental-lowering=<op>:<mode>\n"
          "                   override one operation, leave others on auto\n"
-         "  -emit-mlir       emit the pli MLIR helper module (MLIR-enabled builds only)\n"
+          "  --emit-mlir (-emit-mlir) emit the pli MLIR helper module (MLIR-enabled builds only)\n"
          "\n"
          "  environment:\n"
          "  $PLI_INCLUDE_PATH  colon-separated %INCLUDE search dirs (after -I)\n"
@@ -657,7 +657,7 @@ int main(int argc, char** argv) {
       remarkLibraryCalls = true;
     else if (a == "--no-range-facts")
       noRangeFacts = true;
-    else if (a == "-fsyntax-only")
+    else if (a == "-fsyntax-only" || a == "--fsyntax-only")
       syntaxOnly = true;
     else if (a == "--keep-ll")
       keepLL = true;
@@ -695,7 +695,7 @@ int main(int argc, char** argv) {
       linkArgs.push_back(a);
     else if (a == "-static")
       linkArgs.push_back(a);
-    else if (a == "-shared")
+    else if (a == "-shared" || a == "--shared")
       buildSharedLib = true;
     else if (a == "--subsystem") {
       subsystem = next("--subsystem");
@@ -754,7 +754,7 @@ int main(int argc, char** argv) {
         perOpOverrides[opName] = parsed;
       else
         lowerMode = parsed;
-    } else if (a == "-emit-mlir") {
+    } else if (a == "-emit-mlir" || a == "--emit-mlir") {
       emitMlir = true;
     } else if (a == "-v")
       verbose = true;
@@ -859,7 +859,7 @@ int main(int argc, char** argv) {
   if (!foreignObjs.empty() &&
       (compileOnly || emitLLVM || emitMlir || syntaxOnly || print_hir || print_facts)) {
     std::cerr << "pli: object inputs cannot be used with "
-                 "-c/-emit-llvm/-emit-mlir/-fsyntax-only/--print-hir/--print-facts\n";
+                 "-c/--emit-llvm/--emit-mlir/--fsyntax-only/--print-hir/--print-facts\n";
     return 2;
   }
   const bool linkOnly = pliInputs.empty();
@@ -1005,15 +1005,15 @@ int main(int argc, char** argv) {
   // -shared produces a linked shared library, so it conflicts with terminal
   // output modes that stop before linking.
   if (buildSharedLib && terminalMode) {
-    std::cerr << "pli: -shared is incompatible with -c, -emit-llvm, --emit-mlir,\n"
-                 "                   -fsyntax-only, --print-hir, or --print-facts\n";
+    std::cerr << "pli: --shared is incompatible with -c, --emit-llvm, --emit-mlir,\n"
+                 "                   --fsyntax-only, --print-hir, or --print-facts\n";
     return 2;
   }
   // -emit-mlir conflicts with explicit runtime/llvm modes and is a terminal
   // output mode (design-docs/mlir-runtime-migration-plan.md §5.2). It requires
   // an MLIR-enabled build (P2); in a normal build it is a driver-level error.
   if (emitMlir && (lowerMode == LowerMode::Runtime || lowerMode == LowerMode::LLVM)) {
-    std::cerr << "pli: -emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
+    std::cerr << "pli: --emit-mlir conflicts with --experimental-lowering=runtime/llvm\n";
     return 2;
   }
   if (emitMlir)

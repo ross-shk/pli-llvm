@@ -22,7 +22,7 @@ cat > "$OUT.pli" <<'EOF'
 EOF
 
 # Compile and capture stderr; the error must appear and compilation must fail.
-$PLI -fsyntax-only "$OUT.pli" 2>"$OUT.err" && fail "expected compilation to fail"
+$PLI --fsyntax-only "$OUT.pli" 2>"$OUT.err" && fail "expected compilation to fail"
 grep -q "runtime-reserved symbol" "$OUT.err" || fail "expected reserved-prefix error not found: $(cat $OUT.err)"
 
 echo "PASS bad_pli_prefix"

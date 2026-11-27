@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Ross S. - pli-llvm: a PL/I compiler targeting LLVM
-# tests/driver/multiemit.sh — `pli -emit-llvm a.pli b.pli` writes a .ll per
+# tests/driver/multiemit.sh — `pli --emit-llvm a.pli b.pli` writes a .ll per
 # input (cc-like per-file mode), and rejects -o with multiple inputs. Runs from
 # the gitignored out/ dir so the .ll artifacts stay out of the repo.
 set -u
@@ -23,14 +23,14 @@ cat > multiemit_b.pli <<'EOF'
  end bmain;
 EOF
 
-$PLI -emit-llvm multiemit_a.pli multiemit_b.pli || { echo "FAIL multiemit: -emit-llvm multi failed"; exit 1; }
+$PLI --emit-llvm multiemit_a.pli multiemit_b.pli || { echo "FAIL multiemit: --emit-llvm multi failed"; exit 1; }
 [ -f multiemit_a.ll ] && [ -f multiemit_b.ll ] || { echo "FAIL multiemit: missing .ll outputs"; exit 1; }
 # Each unit's external symbols must be present in its own .ll.
 grep -q "@aproc" multiemit_a.ll || { echo "FAIL multiemit: APROC not in a.ll"; exit 1; }
 grep -q "declare.*@aproc" multiemit_b.ll || { echo "FAIL multiemit: APROC not declared in b.ll"; exit 1; }
 # -o with multiple inputs must be rejected in a per-file mode.
-if $PLI -emit-llvm multiemit_a.pli multiemit_b.pli -o x.ll 2>/dev/null; then
-  echo "FAIL multiemit: accepted -o with multiple -emit-llvm inputs"
+if $PLI --emit-llvm multiemit_a.pli multiemit_b.pli -o x.ll 2>/dev/null; then
+  echo "FAIL multiemit: accepted -o with multiple --emit-llvm inputs"
   exit 1
 fi
 echo PASS
