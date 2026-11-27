@@ -4653,48 +4653,9 @@ bool IRGen::linkRuntimeBitcode() {
              "");
     return false;
   }
-  // A runtime built for another target must not be merged into this module.
-  // Compare arch + OS family, not the version-qualified triple string: Apple's
-  // darwin/macosx naming and the OS version differ between LLVM builds (e.g.
-  // arm64-apple-darwin25.6.0 vs arm64-apple-macosx26.0.0) yet are the same ABI.
-  llvm::Triple rtTriple(rt->getTargetTriple());
-  llvm::Triple tgtTriple(triple_);
-  // LLVM 23 splits the Darwin family into Darwin and MacOSX OSType values;
-  // both are the same ABI family, so fold them onto one key.
-  auto osKey = [](llvm::Triple::OSType os) -> int {
-    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
-                                                                      : (int)os;
-  };
-  if (rtTriple.getArch() != tgtTriple.getArch() ||
-      osKey(rtTriple.getOS()) != osKey(tgtTriple.getOS())) {
-    d_.error({},
-             "runtime bitcode target '" + rtTriple.str() + "' does not match '" + triple_ +
-                 " — rebuild pli (the runtime is embedded)",
-             "");
-    return false;
-  }
-  // The whole runtime is merged (no LinkOnlyNeeded) because library units
-  // reference pli_* symbols this module does not call itself: only a full
-  // merge guarantees every unit's reference resolves to this one embedded
-  // copy. Dead-stripping at the final link removes whatever the
-  // program does not use. The definitions keep their external linkage so the
-  // runtime's global state (CONTROLLED/ON stacks, I/O) stays shared across
-  // units; the P0 side-table facts are re-applied so the optimizer keeps the
-  // audited memory/alloc effects on the real bodies.
-  // Strip the build host's target-cpu / target-features / probe-stack /
-  // tune-cpu from the pre-compiled runtime (IRGen P0, P5.1): if they survive
-  // into the merged module, LLVM's inliner refuses to honour the AlwaysInline
-  // that applyRuntimeAttrs stamps on the math wrappers (pli_sin, pli_mod_ll, ...)
-  // and the pair functions (pli_on_top_pair, pli_on_top_fn_pair) — tune-cpu
-  // differs between the build host and the link-time target and blocks inlining.
-  // A probe-stack / target-cpu mismatch also breaks the backend on some targets.
-  // The TargetMachine re-applies its own defaults at codegen, so stripping
-  // is sound on every target.
-  // Stamp NoInline on every runtime body so the non-always-inline wrappers
-  // (e.g. pli_put_list_char) are not generically inlined at -O2 and survive
-  // -dead_strip at link (tests/driver/link.sh dead-strip sub-check). The math
-  // wrappers are re-attributed by applyRuntimeAttrs below, which clears NoInline
-  // and sets AlwaysInline for them.
+  // The portable blob is now universal: override both data layout and target
+  // triple so it lowers for the link-time target. The stamp check above is
+  // the only compatibility gate.
   for (auto& F : *rt) {
     if (F.hasFnAttribute("target-cpu"))
       F.removeFnAttr("target-cpu");
@@ -4706,11 +4667,9 @@ bool IRGen::linkRuntimeBitcode() {
       F.removeFnAttr("tune-cpu");
     F.addFnAttr(llvm::Attribute::NoInline);
   }
-  // Align the data layout with ours first: both describe the same ABI, but
-  // clang's darwin layout carries extra address-space pointee specs that the
-  // runtime C never uses, and the linker warns on any textual difference.
   if (!mod_.getDataLayoutStr().empty())
     rt->setDataLayout(mod_.getDataLayoutStr());
+  rt->setTargetTriple(llvm::Triple(triple_));
   if (llvm::Linker::linkModules(mod_, std::move(rt), llvm::Linker::None)) {
     d_.error({}, "internal error: linking the runtime bitcode into the module failed", "");
     return false;

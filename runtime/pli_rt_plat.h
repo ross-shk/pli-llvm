@@ -38,6 +38,9 @@ void pli_plat_free(void *p);
 void pli_plat_exit(int code);
 void pli_plat_abort(void);
 
+/* Spin-loop pause hint (moved out of the portable TUs). */
+void pli_plat_pause(void);
+
 /* --- process spawn (custom platforms without a shell: return NULL / -1) */
 FILE *pli_plat_popen(const char *cmd, const char *mode);
 int pli_plat_pclose(FILE *fp);

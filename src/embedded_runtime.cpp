@@ -11,34 +11,21 @@
 #include "embedded_runtime.inc"
 // Default platform blob (build/embedded_rtplat.inc).
 #include "embedded_rtplat.inc"
-// Per-target generated arrays (included by CMake at build time).
-// These are generated for: _x86_64_unknown_linux_gnu, _aarch64_unknown_linux_gnu,
-// _x86_64_pc_windows_gnu, _aarch64_pc_windows_gnu (full triple names with - replaced by _)
-// The actual includes are added by CMake based on PLI_TARGETS.
+// Per-target generated platform arrays (included by CMake at build time).
 #ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
 #include "embedded_rtplat_x86_64_unknown_linux_gnu.inc"
-#include "embedded_runtime_x86_64_unknown_linux_gnu.inc"
 #endif
 #ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
 #include "embedded_rtplat_aarch64_unknown_linux_gnu.inc"
-#include "embedded_runtime_aarch64_unknown_linux_gnu.inc"
 #endif
 #ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
 #include "embedded_rtplat_x86_64_pc_windows_gnu.inc"
-#include "embedded_runtime_x86_64_pc_windows_gnu.inc"
 #endif
 #ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
 #include "embedded_rtplat_aarch64_pc_windows_gnu.inc"
-#include "embedded_runtime_aarch64_pc_windows_gnu.inc"
 #endif
-// Vendored Darwin runtime (ADR-396): prebuilt on macOS with the pinned LLVM 23
-// and the Apple SDK, embedded in every build so macOS cross-linking works with
-// no Apple SDK on the host. Guarded with #if (not #ifdef): the macro is always
-// defined to 0 or 1 by CMake, so #ifdef would wrongly include the missing
-// .inc files before the blobs are bootstrapped.
 #if PLI_HAVE_MACOS_ARM64_RUNTIME
 #include "embedded_rtplat_arm64_apple_macosx15_0.inc"
-#include "embedded_runtime_arm64_apple_macosx15_0.inc"
 #endif
 
 namespace pli {
@@ -61,69 +48,15 @@ static void addBlobIfDefined(std::vector<RuntimeBlob>& blobs, const unsigned cha
 
 std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs() {
   std::vector<RuntimeBlob> blobs;
-  // Default (host) blob - always present
+  // Single universal portable blob (default host build).
   addBlobIfDefined(blobs, pli_embedded_runtime_bc, pli_embedded_runtime_bc_len, PLI_TARGET_TRIPLE);
-  // Per-target blobs (conditionally compiled based on CMake config)
-#ifdef PLI_HAVE_LINUX_X86_64_RUNTIME
-  addBlobIfDefined(blobs, pli_embedded_runtime_bc_x86_64_unknown_linux_gnu,
-                   pli_embedded_runtime_bc_x86_64_unknown_linux_gnu_len,
-                   "x86_64-unknown-linux-gnu");
-#endif
-#ifdef PLI_HAVE_LINUX_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, pli_embedded_runtime_bc_aarch64_unknown_linux_gnu,
-                   pli_embedded_runtime_bc_aarch64_unknown_linux_gnu_len,
-                   "aarch64-unknown-linux-gnu");
-#endif
-#ifdef PLI_HAVE_WINDOWS_X86_64_RUNTIME
-  addBlobIfDefined(blobs, pli_embedded_runtime_bc_x86_64_pc_windows_gnu,
-                   pli_embedded_runtime_bc_x86_64_pc_windows_gnu_len, "x86_64-pc-windows-gnu");
-#endif
-#ifdef PLI_HAVE_WINDOWS_AARCH64_RUNTIME
-  addBlobIfDefined(blobs, pli_embedded_runtime_bc_aarch64_pc_windows_gnu,
-                   pli_embedded_runtime_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
-#endif
-#if PLI_HAVE_MACOS_ARM64_RUNTIME
-  addBlobIfDefined(blobs, pli_embedded_runtime_bc_arm64_apple_macosx15_0,
-                   pli_embedded_runtime_bc_arm64_apple_macosx15_0_len,
-                   "arm64-apple-macosx15.0");
-#endif
   return blobs;
 }
 
 const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t) {
   static const std::vector<RuntimeBlob> blobs = getEmbeddedRuntimeBlobs();
-  const std::string tripleStr = t.getTriple();
-  // Prefer an exact target match first.
-  for (const auto& blob : blobs) {
-    if (blob.target == tripleStr) {
-      return &blob;
-    }
-  }
-  // Fall back to the first blob with the same arch + OS family (e.g. a musl
-  // target reusing a gnu linux runtime blob).
-  llvm::Triple tgtTriple(tripleStr);
-  auto osKey = [](llvm::Triple::OSType os) -> int {
-    return (os == llvm::Triple::Darwin || os == llvm::Triple::MacOSX) ? (int)llvm::Triple::Darwin
-                                                                      : (int)os;
-  };
-  for (const auto& blob : blobs) {
-    llvm::Triple rtTriple(blob.target);
-    if (rtTriple.getArch() == tgtTriple.getArch() &&
-        osKey(rtTriple.getOS()) == osKey(tgtTriple.getOS())) {
-      return &blob;
-    }
-  }
-  // A Darwin target must resolve to a Darwin blob (ADR-396): the host fallback
-  // below would silently merge a Linux/Windows runtime into an Apple binary.
-  if (tgtTriple.isOSDarwin())
-    return nullptr;
-  // Fallback to default blob
-  for (const auto& blob : blobs) {
-    if (blob.target == PLI_TARGET_TRIPLE) {
-      return &blob;
-    }
-  }
-  return nullptr;
+  if (blobs.empty()) return nullptr;
+  return &blobs.front();
 }
 
 std::vector<RuntimeBlob> getEmbeddedPlatformBlobs() {

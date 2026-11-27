@@ -180,10 +180,10 @@ Add `--prefix /opt/pli` to install elsewhere. The default prefix may need `sudo`
 
 ## Cross-compilation
 
-Configure with `PLI_CROSS_BITCODE=ON` to embed all four runtime bitcodes:
+Every `pli` binary embeds all four platform bitcodes by default:
 
 ```sh
-cmake -G Ninja -S . -B build/cmake -DPLI_CROSS_BITCODE=ON   
+cmake -G Ninja -S . -B build/cmake
 cmake --build build/cmake -j
 
 ./build/cmake/pli --triple x86_64-unknown-linux-gnu program.pli -o program
@@ -191,7 +191,7 @@ cmake --build build/cmake -j
 ./build/cmake/pli --triple arm64-apple-macosx15.0 program.pli -o program     # Apple Silicon
 ```
 
-Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. rm64-apple-macosx15.0, x86_64-apple-macosx13.0. The Darwin runtime is embedded in every build (ADR-396), so macOS cross-linking needs no Xcode/SDK on the host. Without `PLI_CROSS_BITCODE=ON`, `--triple` uses the host runtime and only works when the target ABI matches the host.
+Supported triples: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `aarch64-pc-windows-gnu`. `arm64-apple-macosx15.0`, `x86_64-apple-macosx13.0`. The Darwin platform blob (`pli_rtplat.bc`) is vendored under `platform/darwin-runtime/arm64/` (ADR-396); the portable blob is universal and embedded once.
 
 ## Layout
 

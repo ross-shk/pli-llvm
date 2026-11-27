@@ -176,13 +176,25 @@ bool isPlatformSeamSymbol(const std::string& name) {
   for (const char* t : kThreadSeam)
     if (name == t)
       return true;
+  if (name == "pli_fiber_switch" || name == "pli_fiber_start" ||
+      name == "rt_fiber_unsupported" || name == "pli_plat_pause")
+    return true;
   return false;
 }
 
 std::string checkPlatformSeamComplete(const llvm::Module& M) {
+  const auto modAsmFrags = M.getModuleInlineAsm();
+  std::string modAsm;
+  for (const auto& frag : modAsmFrags)
+    modAsm += frag.Asm;
   std::string missing;
   for (const auto& F : M)
     if (F.isDeclaration() && isPlatformSeamSymbol(F.getName().str())) {
+      // Symbols defined via module-level inline asm (the fiber switch) stay
+      // as declarations in the IR; treat them as present when the module
+      // asm carries their definition.
+      if (modAsm.find(F.getName().str()) != std::string::npos)
+        continue;
       if (!missing.empty())
         missing += ", ";
       missing += F.getName().str();

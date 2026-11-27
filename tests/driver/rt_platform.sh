@@ -56,6 +56,7 @@ check "default run" "$($OUT$EXE)" "PASS rt_platform"
 # --- custom platform: the default TU plus a marker proving this file linked -
 cat > "$OUT.plat.c" <<'EOF'
 #include "rt_plat_default.c"
+#include "rt_fiber_asm.c"
 /* Marker: absent from the default blob, so its presence in the linked
  * binary proves the --rt-platform file is what got linked. */
 int pli_plat_test_marker(void) { return 42; }

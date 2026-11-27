@@ -224,7 +224,7 @@ Supported cross triples (embedded sysroot + runtime support; musl reuses the Lin
 
 Linking happens in-process via lld  — no external `ld` or `clang` required.
 
-The embedded sysroot set covers the common targets above (musl targets reuse the Linux runtime blob, per arch + OS family matching). `PLI_CROSS_BITCODE` is the bitcode-generation list and defaults to `OFF`; its targets are:
+The embedded sysroot set covers the common targets above (musl targets reuse the Linux runtime blob, per arch + OS family matching).
 
 ```
 x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;
@@ -293,16 +293,18 @@ pli hello.pli --target x86_64-unknown-linux-gnu \
 
 Darwin: runtime bitcode is vendored under `platform/darwin-runtime/{arm64,x86_64}/`, and blob selectors refuse the host-blob fallback for Darwin — a Darwin target always uses its own vendored blob.
 
-### Build note: `PLI_CROSS_BITCODE`
+### Cross bitcode is always embedded
 
-The embedded per-target bitcode is generated only when `PLI_CROSS_BITCODE=ON` at CMake configure time; it defaults to `OFF`. Targets in `PLI_TARGETS`:
+The four platform bitcodes (fiber asm + seam + MinGW overrides) are always generated; the `PLI_CROSS_BITCODE` option was removed. Targets in `PLI_TARGETS`:
 
 ```
 x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;
 x86_64-pc-windows-gnu;aarch64-pc-windows-gnu
 ```
 
-If you build `pli` yourself and need cross targets, configure with `-DPLI_CROSS_BITCODE=ON`. If you download a release binary, cross bitcode comes with it.
+These four platform blobs (fiber asm + seam + MinGW overrides) are always embedded. The portable runtime blob is compiled once (host target) and reused universally — its triple and data layout are overridden at link time so it lowers for any supported target.
+
+Darwin: only the platform blob (`pli_rtplat.bc`) is vendored under `platform/darwin-runtime/arm64/`; the portable blob is universal and embedded once.
 
 ### "incomplete sysroot"
 
@@ -406,7 +408,7 @@ pli --version
 
 - No separate clang download: target selection is in-process LLVM; cross link needs a sysroot with libc for that target unless the embedded set covers it.
 - The embedded set covers common targets (Linux glibc/musl, MinGW Windows, macOS) but not arbitrary target libraries.
-- `PLI_CROSS_BITCODE` defaults OFF — rebuild with it ON if you compile `pli` from source and need cross bitcode.
+- Cross bitcode is always embedded; every `pli` binary can emit for any supported target from any supported host.
 - `--subsystem console|windows` is only valid for COFF (Windows) targets.
 - Object inputs are incompatible with `-c` / `--emit-llvm` / `--fsyntax-only` / `--print-hir` / `--print-facts`.
 

@@ -67,13 +67,7 @@ static _Thread_local pli_task_local rt_tls_local;
  * keeps a task that arrives right after the worker ran out of work from
  * costing an OS thread wake-up. */
 #define RT_PARK_SPIN 2000
-#if defined(__i386__) || defined(__x86_64__)
-/* The pause hint: it tells the CPU the spin loop is hot, so it yields the
- * pipeline instead of burning it. */
-#define RT_SPIN_PAUSE() __builtin_ia32_pause()
-#else
-#define RT_SPIN_PAUSE() ((void)0)
-#endif
+#define RT_SPIN_PAUSE() pli_plat_pause()
 
 typedef struct rt_worker {
   _Atomic(pli_fiber *) local; /* the worker's LIFO run queue */
@@ -998,4 +992,4 @@ void pli_sched_main(char *fn) { rt_sched_main((void (*)(void))fn); }
 
 /* The fallback for a platform without a fiber backend: the assembly jumps
  * here instead of defining the switch. */
-void rt_fiber_unsupported(void) { pli_abort("TASK: this platform has no fiber backend"); }
+

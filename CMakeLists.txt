@@ -189,9 +189,10 @@ set(RT_PORTABLE_SRCS
   runtime/rt_storage.c runtime/rt_get.c runtime/rt_file.c
   runtime/rt_edit.c runtime/rt_task.c runtime/rt_sync.c
   runtime/rt_input.c runtime/rt_fbroker.c
-  runtime/rt_sched.c runtime/rt_fiber_asm.c)
+  runtime/rt_sched.c)
 set(RT_PLATFORM_SRCS
-  runtime/rt_plat_default.c)
+  runtime/rt_plat_default.c
+  runtime/rt_fiber_asm.c)
 set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
 # Bitcode embeds must rebuild when any runtime header changes (the .c TUs
 # all include pli_rt.h -> pli_rt_state.h -> pli_rt_plat.h; without this a
@@ -829,9 +830,6 @@ else()
   target_link_options(pli PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
-# Cross-compilation bitcode generation (Phase 2+): requires sysroots.
-option(PLI_CROSS_BITCODE "Generate bitcode for cross-targets (needs sysroots)" OFF)
-
 # P2: optional MLIR support for the canary dialect spike. Off by default;
 # an MLIR-enabled build must link against the matching LLVM/MLIR package.
 option(PLI_ENABLE_MLIR "Build the experimental MLIR canary dialect (P2)" OFF)
@@ -867,101 +865,48 @@ if(DEFINED LLVM_ENABLE_RTTI AND NOT LLVM_ENABLE_RTTI)
   endif()
 endif()
 
-# Multi-target embedded runtime: generate bitcode for all supported targets.
-if(PLI_CROSS_BITCODE)
-  set(PLI_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
+# Cross-target platform blobs: the portable blob is now universal (single host
+# build), so only the per-target platform TUs (fiber asm + seam + MinGW
+# overrides) are built per target. Always generated (PLI_CROSS_BITCODE removed).
+set(PLI_TARGETS "x86_64-unknown-linux-gnu;aarch64-unknown-linux-gnu;x86_64-pc-windows-gnu;aarch64-pc-windows-gnu")
 
-  # Per-target bitcode generation and embedding: portable sources link into
-  # pli_runtime.bc, the platform TU into pli_rtplat.bc (swappable at link).
-  foreach(target ${PLI_TARGETS})
-    string(REPLACE "-" "_" target_suffix "_${target}")
-    set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
-    set(TARGET_RT_BCS "")
-    foreach(src ${RT_PORTABLE_SRCS})
-      get_filename_component(base ${src} NAME_WE)
-      add_custom_command(
-        OUTPUT ${TARGET_BC_DIR}/${base}.bc
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
-        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
-                -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-                -I${CMAKE_SOURCE_DIR}/runtime
-                -O2
-                -ffunction-sections -fdata-sections
-                $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
-                -target ${target}
-                -o ${TARGET_BC_DIR}/${base}.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS} ${RT_HEADERS}
-        COMMENT "bitcode: ${base} for ${target}"
-        VERBATIM)
-      list(APPEND TARGET_RT_BCS ${TARGET_BC_DIR}/${base}.bc)
-    endforeach()
-    set(TARGET_PLAT_BCS "")
-    foreach(src ${RT_PLATFORM_SRCS})
-      get_filename_component(base ${src} NAME_WE)
-      add_custom_command(
-        OUTPUT ${TARGET_BC_DIR}/${base}.bc
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
-        COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
-                -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
-                -I${CMAKE_SOURCE_DIR}/runtime
-                -O2
-                -ffunction-sections -fdata-sections
-                $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
-                -target ${target}
-                -o ${TARGET_BC_DIR}/${base}.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS} ${RT_HEADERS}
-        COMMENT "bitcode: ${base} for ${target}"
-        VERBATIM)
-      list(APPEND TARGET_PLAT_BCS ${TARGET_BC_DIR}/${base}.bc)
-    endforeach()
+foreach(target ${PLI_TARGETS})
+  string(REPLACE "-" "_" target_suffix "_${target}")
+  set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
+  set(TARGET_PLAT_BCS "")
+  foreach(src ${RT_PLATFORM_SRCS})
+    get_filename_component(base ${src} NAME_WE)
     add_custom_command(
-      OUTPUT ${TARGET_BC_DIR}/pli_runtime.bc
-      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_RT_BCS} -o ${TARGET_BC_DIR}/pli_runtime.bc
-      DEPENDS ${TARGET_RT_BCS})
-    add_custom_command(
-      OUTPUT ${TARGET_BC_DIR}/pli_rtplat.bc
-      COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_PLAT_BCS} -o ${TARGET_BC_DIR}/pli_rtplat.bc
-      DEPENDS ${TARGET_PLAT_BCS})
-    add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-              ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-              pli_embedded_runtime_bc ${target_suffix}
-      DEPENDS ${TARGET_BC_DIR}/pli_runtime.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-      COMMENT "embedding pli_runtime.bc for ${target}")
-    add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-              ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
-              pli_embedded_rtplat_bc ${target_suffix}
-      DEPENDS ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-      COMMENT "embedding pli_rtplat.bc for ${target}")
-    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
-    add_dependencies(pli embedded_runtime_inc${target_suffix})
+      OUTPUT ${TARGET_BC_DIR}/${base}.bc
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${TARGET_BC_DIR}
+      COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -emit-llvm -c ${CMAKE_SOURCE_DIR}/${src}
+              -DPLI_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
+              -I${CMAKE_SOURCE_DIR}/runtime
+              -O2
+              -ffunction-sections -fdata-sections
+              $<$<OR:$<STREQUAL:${target},x86_64-unknown-linux-gnu>,$<STREQUAL:${target},aarch64-unknown-linux-gnu>>:-fPIC>
+              -target ${target}
+              -o ${TARGET_BC_DIR}/${base}.bc
+      DEPENDS ${CMAKE_SOURCE_DIR}/${src} ${RT_HEADERS}
+      COMMENT "bitcode: ${base} for ${target}"
+      VERBATIM)
+    list(APPEND TARGET_PLAT_BCS ${TARGET_BC_DIR}/${base}.bc)
   endforeach()
-else()
-  # Define empty per-target blobs for non-cross builds (compiler still works)
-  # Target suffixes must match PLI_TARGETS naming convention (full triple)
-  foreach(target IN ITEMS x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu aarch64-pc-windows-gnu)
-    string(REPLACE "-" "_" target_suffix "_${target}")
-    add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-              /dev/null ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc
-              pli_embedded_runtime_bc ${target_suffix}
-      DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-      COMMENT "stub embedding for ${target}")
-    add_custom_command(
-      OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-              /dev/null ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
-              pli_embedded_rtplat_bc ${target_suffix}
-      DEPENDS ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-      COMMENT "stub platform embedding for ${target}")
-    add_custom_target(embedded_runtime_inc${target_suffix} DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${target_suffix}.inc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
-    add_dependencies(pli embedded_runtime_inc${target_suffix})
-  endforeach()
-endif()
+  add_custom_command(
+    OUTPUT ${TARGET_BC_DIR}/pli_rtplat.bc
+    COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link ${TARGET_PLAT_BCS} -o ${TARGET_BC_DIR}/pli_rtplat.bc
+    DEPENDS ${TARGET_PLAT_BCS})
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+            ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc
+            pli_embedded_rtplat_bc ${target_suffix}
+    DEPENDS ${TARGET_BC_DIR}/pli_rtplat.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+    COMMENT "embedding pli_rtplat.bc for ${target}")
+  add_custom_target(embedded_rtplat_inc${target_suffix}
+    DEPENDS ${CMAKE_BINARY_DIR}/embedded_rtplat${target_suffix}.inc)
+  add_dependencies(pli embedded_rtplat_inc${target_suffix})
+endforeach()
 
 # Default target (host) bitcode for backward compatibility: portable sources
 # link into pli_runtime.bc, the platform TU into pli_rtplat.bc.
@@ -1146,20 +1091,17 @@ foreach(_arch_triple IN ITEMS "arm64;arm64-apple-macosx15.0")
   list(GET _arch_triple 0 _arch)
   list(GET _arch_triple 1 _triple)
   set(_rdir "${PLI_DARWIN_RUNTIME_DIR}/${_arch}")
-  if(EXISTS "${_rdir}/pli_runtime.bc" AND EXISTS "${_rdir}/pli_rtplat.bc")
+  if(EXISTS "${_rdir}/pli_rtplat.bc")
     string(REPLACE "-" "_" _suf "_${_triple}")
-    foreach(_kind runtime rtplat)
-      add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/embedded_${_kind}${_suf}.inc
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-                ${_rdir}/pli_${_kind}.bc ${CMAKE_BINARY_DIR}/embedded_${_kind}${_suf}.inc
-                pli_embedded_${_kind}_bc ${_suf}
-        DEPENDS ${_rdir}/pli_${_kind}.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
-        COMMENT "embedding Darwin ${_kind} for ${_triple}")
-    endforeach()
+    add_custom_command(
+      OUTPUT ${CMAKE_BINARY_DIR}/embedded_rtplat${_suf}.inc
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+              ${_rdir}/pli_rtplat.bc ${CMAKE_BINARY_DIR}/embedded_rtplat${_suf}.inc
+              pli_embedded_rtplat_bc ${_suf}
+      DEPENDS ${_rdir}/pli_rtplat.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+      COMMENT "embedding Darwin rtplat for ${_triple}")
     add_custom_target(embedded_darwin_${_arch}
-      DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${_suf}.inc
-              ${CMAKE_BINARY_DIR}/embedded_rtplat${_suf}.inc)
+      DEPENDS ${CMAKE_BINARY_DIR}/embedded_rtplat${_suf}.inc)
     add_dependencies(pli embedded_darwin_${_arch})
     set(PLI_HAVE_MACOS_ARM64_RUNTIME 1)
   endif()

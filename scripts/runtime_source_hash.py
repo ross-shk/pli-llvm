@@ -36,7 +36,7 @@ def main(runtime_dir: str) -> None:
     # and bytes. Ignore nothing — every source/header under runtime/ affects
     # the built blobs.
     h = hashlib.sha256()
-    h.update(b"pli-runtime-source-tree-v1\n")
+    h.update(b"pli-runtime-source-tree-v2\n")
     for root, _dirs, files in sorted(os.walk(runtime_dir)):
         for name in sorted(files):
             if not name.endswith(_SRC_EXTS):

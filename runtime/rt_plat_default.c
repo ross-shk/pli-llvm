@@ -28,6 +28,19 @@ void pli_plat_free(void *p) { free(p); }
 void pli_plat_exit(int code) { exit(code); }
 void pli_plat_abort(void) { abort(); }
 
+void pli_plat_pause(void) {
+#if defined(__i386__) || defined(__x86_64__)
+  __builtin_ia32_pause();
+#else
+  /* noop on non-x86 targets */
+#endif
+}
+
+void rt_fiber_unsupported(void) {
+  pli_plat_fprintf(stderr, "TASK: this platform has no fiber backend\n");
+  pli_plat_abort();
+}
+
 /* --- process spawn: one branch per platform, wait-status dance included */
 FILE *pli_plat_popen(const char *cmd, const char *mode) {
 #if defined(_WIN32)
@@ -968,6 +981,36 @@ void pli_sleep_ms(long long ms) {
   while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
     ;
 }
+#endif
+
+#if defined(_WIN32)
+/* MinGW supplies sin/cos/exp/log/sqrt/pow/floor/ceil/fmod/fabs/atan2 as
+ * long-double wrappers, while the UCRT import library has only the __imp_
+ * slot. These definitions win over libmingwex.a, so an intrinsic-lowered
+ * math call stays on UCRT's double routine. */
+extern double (*__imp_sin)(double);
+extern double (*__imp_cos)(double);
+extern double (*__imp_exp)(double);
+extern double (*__imp_log)(double);
+extern double (*__imp_sqrt)(double);
+extern double (*__imp_pow)(double, double);
+extern double (*__imp_floor)(double);
+extern double (*__imp_ceil)(double);
+extern double (*__imp_fmod)(double, double);
+extern double (*__imp_fabs)(double);
+extern double (*__imp_atan2)(double, double);
+
+double sin(double x) { return __imp_sin(x); }
+double cos(double x) { return __imp_cos(x); }
+double exp(double x) { return __imp_exp(x); }
+double log(double x) { return __imp_log(x); }
+double sqrt(double x) { return __imp_sqrt(x); }
+double pow(double x, double y) { return __imp_pow(x, y); }
+double floor(double x) { return __imp_floor(x); }
+double ceil(double x) { return __imp_ceil(x); }
+double fmod(double x, double y) { return __imp_fmod(x, y); }
+double fabs(double x) { return __imp_fabs(x); }
+double atan2(double y, double x) { return __imp_atan2(y, x); }
 #endif
 
 /* --- shared wrapper (platform-independent; was the header's tail) */

@@ -14838,4 +14838,33 @@ selectors refuse to fall back to a host blob for Darwin.
 untime/ changes require regenerating the Darwin blobs on macOS (gate enforces);
 builds whose LLVM ships the Mach-O driver link lldMachO (Windows included),
 builds that lack it keep today's state with a clearer diagnostic; binary size grows
-by the two Darwin blob pairs.
+## ADR-397 — Platform-independent portable runtime blob
+
+**Context.** RT_PORTABLE_SRCS contained rt_fiber_asm.c (per-arch inline
+module assembly), so the "portable" blob was compiled once per target triple
+and embedded N times, and IRGen triple-checked it against the target, blocking
+reuse of a host-compiled blob for cross targets. RT_SPIN_PAUSE used
+__builtin_ia32_pause() directly in rt_sched.c/rt_sync.c, and rt_math.c carried
+a _WIN32 __imp_* override block, so the portable TUs were not actually
+target-independent.
+
+**Decision.** Move rt_fiber_asm.c, the spin-pause hint (as pli_plat_pause())
+and the MinGW __imp_* overrides into the platform TU set (RT_PLATFORM_SRCS).
+Compile and embed the portable blob exactly once (default host target). Override
+both data layout and target triple on the parsed portable module in
+IRGen::linkRuntimeBitcode and drop the arch/OS mismatch check. Make cross
+bitcode generation unconditional (remove PLI_CROSS_BITCODE), embedding all four
+platform blobs by default. Vendor only pli_rtplat.bc for Darwin (drop
+pli_runtime.bc, since the portable blob is now universal).
+
+**Consequences.** One universal portable blob; pli stays hermetic (no external
+runtime files, OS libs only); pli emits for any supported target from any
+supported host. Custom platforms gain four seam symbols (pli_fiber_switch,
+pli_fiber_start, rt_fiber_unsupported, pli_plat_pause). Binary size grows by
+always embedding all four platform blobs, offset by embedding the portable blob
+once instead of N times. rt_fiber_unsupported moves to the platform TU.
+
+**Rejected.** SPIR-V/universal IR: cannot represent pli_plat_* seam calls or
+fiber context-switch assembly; deferred to a future ADR-gated extension. Keeping
+per-target portable blobs: defeats the goal. Keeping PLI_CROSS_BITCODE opt-in:
+would leave some hosts unable to emit for all targets.

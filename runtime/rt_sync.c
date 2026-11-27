@@ -34,13 +34,7 @@
  * The lock is *not* held while a task waits for the lock itself: a task
  * that finds the lock taken joins the wait queue and parks, and the
  * unlocker hands the lock over to it directly. */
-#if defined(__i386__) || defined(__x86_64__)
-/* The pause hint: it tells the CPU the spin loop is hot, so it yields the
- * pipeline instead of burning it. */
-#define RT_SPIN_PAUSE() __builtin_ia32_pause()
-#else
-#define RT_SPIN_PAUSE() ((void)0)
-#endif
+#define RT_SPIN_PAUSE() pli_plat_pause()
 
 static void rt_meta_lock(rt_lock *l) {
   while (atomic_exchange_explicit(&l->meta, 1, memory_order_acquire))

@@ -24,7 +24,7 @@ struct RuntimeBlob {
   size_t len;
   std::string target;
 };
-// Returns all embedded runtime blobs (one per supported target).
+// Returns the single universal portable blob.
 std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs();
 // Selects the appropriate runtime blob for the given target triple.
 // Falls back to the default (host) blob if no exact match.

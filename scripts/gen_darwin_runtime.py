@@ -32,13 +32,8 @@ import sys
 
 # The split-runtime split (must match CMakeLists.txt RT_PORTABLE_SRCS /
 # RT_PLATFORM_SRCS exactly; the portable set links into pli_runtime.bc).
-PORTABLE = [
-    "rt_core.c", "rt_stream.c", "rt_string.c", "rt_math.c", "rt_mathport.c",
-    "rt_cond.c", "rt_storage.c", "rt_get.c", "rt_file.c", "rt_edit.c",
-    "rt_task.c", "rt_sync.c", "rt_input.c", "rt_fbroker.c", "rt_sched.c",
-    "rt_fiber_asm.c",
-]
-PLATFORM = ["rt_plat_default.c"]
+PORTABLE = []
+PLATFORM = ["rt_plat_default.c", "rt_fiber_asm.c"]
 
 # arch -> deployment target (the same targets tested in tests/driver).
 TARGETS = {
@@ -100,24 +95,16 @@ def main():
         archdir = os.path.join(args.out, arch)
         stagedir = os.path.join(archdir, "bc")
         os.makedirs(stagedir, exist_ok=True)
-        # Portable TUs -> staged bc, then link to pli_runtime.bc. The staging
-        # subdir keeps the llvm-link glob from self-matching the output file.
-        for src in PORTABLE:
+        # Platform TUs -> pli_rtplat.bc (portable blob is now universal).
+        for src in PLATFORM:
             run([clang, "-emit-llvm", "-c", os.path.join(runtime, src),
                  f'-DPLI_LLVM_VERSION="{args.version}"',
                  "-I", runtime, "-O2",
                  "-ffunction-sections", "-fdata-sections", "-fPIC",
                  "-target", target, "-isysroot", sdk,
                  "-o", os.path.join(stagedir, os.path.splitext(src)[0] + ".bc")])
-        objs = [os.path.join(stagedir, os.path.splitext(s)[0] + ".bc") for s in PORTABLE]
-        run([llvm_link] + objs + ["-o", os.path.join(archdir, "pli_runtime.bc")])
-        # Platform TU -> pli_rtplat.bc.
-        run([clang, "-emit-llvm", "-c", os.path.join(runtime, PLATFORM[0]),
-             f'-DPLI_LLVM_VERSION="{args.version}"',
-             "-I", runtime, "-O2",
-             "-ffunction-sections", "-fdata-sections", "-fPIC",
-             "-target", target, "-isysroot", sdk,
-             "-o", os.path.join(archdir, "pli_rtplat.bc")])
+        objs = [os.path.join(stagedir, os.path.splitext(s)[0] + ".bc") for s in PLATFORM]
+        run([llvm_link] + objs + ["-o", os.path.join(archdir, "pli_rtplat.bc")])
         shutil.rmtree(stagedir, ignore_errors=True)
 
     # Record the source-tree hash for the freshness gate.
