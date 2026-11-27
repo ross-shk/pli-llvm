@@ -33,7 +33,7 @@ import sys
 # The split-runtime split (must match CMakeLists.txt RT_PORTABLE_SRCS /
 # RT_PLATFORM_SRCS exactly; the portable set links into pli_runtime.bc).
 PORTABLE = []
-PLATFORM = ["rt_plat_default.c", "rt_fiber_asm.c"]
+PLATFORM = ["platform/posix/rt_plat.c", "platform/posix/aarch64/rt_fiber_asm.c"]
 
 # arch -> deployment target (the same targets tested in tests/driver).
 TARGETS = {
@@ -96,13 +96,15 @@ def main():
         stagedir = os.path.join(archdir, "bc")
         os.makedirs(stagedir, exist_ok=True)
         # Platform TUs -> pli_rtplat.bc (portable blob is now universal).
-        for src in PLATFORM:
-            run([clang, "-emit-llvm", "-c", os.path.join(runtime, src),
+    for src in PLATFORM:
+        out_bc = os.path.join(stagedir, os.path.splitext(src)[0] + ".bc")
+        os.makedirs(os.path.dirname(out_bc), exist_ok=True)
+        run([clang, "-emit-llvm", "-c", os.path.join(runtime, src),
                  f'-DPLI_LLVM_VERSION="{args.version}"',
                  "-I", runtime, "-O2",
                  "-ffunction-sections", "-fdata-sections", "-fPIC",
                  "-target", target, "-isysroot", sdk,
-                 "-o", os.path.join(stagedir, os.path.splitext(src)[0] + ".bc")])
+                  "-o", out_bc])
         objs = [os.path.join(stagedir, os.path.splitext(s)[0] + ".bc") for s in PLATFORM]
         run([llvm_link] + objs + ["-o", os.path.join(archdir, "pli_rtplat.bc")])
         shutil.rmtree(stagedir, ignore_errors=True)

@@ -19,9 +19,34 @@
 # would stay uninstrumented and silently unmeasured.
 SAN_RT_SRCS="rt_core rt_stream rt_string rt_math rt_mathport rt_cond
   rt_storage rt_get rt_file rt_edit rt_task rt_sync rt_input rt_fbroker
-  rt_sched rt_fiber_asm rt_plat_default"
+  rt_sched"
 
-# Resolve the clang of the compiler's own LLVM (LLVM_BINDIR, then CLANG as
+# Platform-specific runtime TUs (must mirror CMake's per-host selection).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    SAN_RT_SRCS="$SAN_RT_SRCS platform/windows/rt_plat"
+    case "$(uname -m)" in
+      x86_64|amd64|AMD64) SAN_RT_SRCS="$SAN_RT_SRCS platform/windows/x86_64/rt_fiber_asm" ;;
+      *) SAN_RT_SRCS="$SAN_RT_SRCS platform/unsupported/rt_fiber_asm" ;;
+    esac
+    ;;
+  Darwin)
+    SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/rt_plat"
+    case "$(uname -m)" in
+      arm64|aarch64) SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/aarch64/rt_fiber_asm" ;;
+      x86_64|amd64) SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/x86_64/rt_fiber_asm" ;;
+      *) SAN_RT_SRCS="$SAN_RT_SRCS platform/unsupported/rt_fiber_asm" ;;
+    esac
+    ;;
+  *)
+    SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/rt_plat"
+    case "$(uname -m)" in
+      aarch64|arm64) SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/aarch64/rt_fiber_asm" ;;
+      x86_64|amd64) SAN_RT_SRCS="$SAN_RT_SRCS platform/posix/x86_64/rt_fiber_asm" ;;
+      *) SAN_RT_SRCS="$SAN_RT_SRCS platform/unsupported/rt_fiber_asm" ;;
+    esac
+    ;;
+esac
 # ctest passes it, then the build tree's CMake cache). Prints the path or
 # nothing when no such clang exists.
 san_cc() {
@@ -63,6 +88,7 @@ fi
 san_build_runtime() {
   mkdir -p "$3" || return 1
   for s in $SAN_RT_SRCS; do
+    mkdir -p "$3/$(dirname "$s")" || return 1
     "$1" $2 $SAN_SDK -O1 -g -fno-omit-frame-pointer -Iruntime \
       -DPLI_LLVM_VERSION='"unknown"' -c "runtime/$s.c" \
       -o "$3/$s.o" >"$3/$s.log" 2>&1 || return 1
@@ -90,7 +116,8 @@ san_link() {
     Linux) libs="-lpthread -lm -ldl" ;;
     *) libs="-lpthread -lm" ;;
   esac
-  "$1" $2 $SAN_SDK "$3" "$4"/*.o $libs -o "$5"
+  rts=$(find "$4" -name '*.o' | tr '\n' ' ')
+  "$1" $2 $SAN_SDK "$3" $rts $libs -o "$5"
 }
 
 # san_missing_runtime <link log> — non-zero when the link failed because this

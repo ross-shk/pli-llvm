@@ -16,7 +16,7 @@
 #include "pli_wide128.h"
 
 /* Shared TU state + platform seam. Included BEFORE the .def type macros
- * below: pli_rt_state.h -> pli_rt_plat.h pulls in system headers
+ * below: pli_rt_state.h -> platform/pli_rt_plat.h pulls in system headers
  * (<windows.h> on Win, <pthread.h> elsewhere), which must never be
  * preprocessed while VOID/I64/I32/I8/DOUBLE/PTR/CPTR/IPTR are macros
  * (windows.h breaks: winnt.h cascade 'unknown type name CHAR/LONG/...'). */

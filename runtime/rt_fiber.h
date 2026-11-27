@@ -4,7 +4,7 @@
  *
  * A fiber is a stack plus the saved registers that switch it. The
  * scheduler (runtime/rt_sched.c) runs fibers; this header is the shape
- * the assembly in runtime/rt_fiber_asm.c depends on.
+ * the assembly in runtime/platform/*/rt_fiber_asm.c depends on.
  *
  * The first two members are the assembly's contract: offset 0 is the
  * saved stack pointer and offset 8 the resume address. Nothing may be

@@ -113,62 +113,12 @@ void pli_plat_thread_init(void);
 /* --- threading backend (one backend per platform TU; single-threaded custom
  * platforms: mutex/cond as no-ops over a non-shared state, spawn as
  * synchronous call or an error return — see the contract on each function) */
+/* Platform-specific backend types: pulled in from the per-OS header so the
+ * portable seam stays branch-free at the top level. */
 #if defined(_WIN32)
-/* Windows backend types (single selection block, first half).
- * Keep the system header out of macro pollution: pli_rt.h defines
- * VOID/I64/... while expanding pli_rt_abi.def, and windows.h (winnt.h)
- * collapses with 'unknown type name CHAR/LONG/...' when VOID is a macro.
- * pli_rt.h now includes this header outside that macro region, but guard
- * here too so direct/odd-order inclusion stays safe. */
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-/* push_macro works even when the name is currently undefined (pop restores
- * that state) on MSVC/clang, so push/undef/pop unconditionally. */
-#pragma push_macro("VOID")
-#pragma push_macro("I64")
-#pragma push_macro("I32")
-#pragma push_macro("I8")
-#pragma push_macro("DOUBLE")
-#pragma push_macro("PTR")
-#pragma push_macro("CPTR")
-#pragma push_macro("IPTR")
-#pragma push_macro("PLI_FN")
-#undef VOID
-#undef I64
-#undef I32
-#undef I8
-#undef DOUBLE
-#undef PTR
-#undef CPTR
-#undef IPTR
-#undef PLI_FN
-#include <windows.h>
-#pragma pop_macro("PLI_FN")
-#pragma pop_macro("IPTR")
-#pragma pop_macro("CPTR")
-#pragma pop_macro("PTR")
-#pragma pop_macro("DOUBLE")
-#pragma pop_macro("I8")
-#pragma pop_macro("I32")
-#pragma pop_macro("I64")
-#pragma pop_macro("VOID")
-typedef CRITICAL_SECTION pli_mutex;
-typedef CONDITION_VARIABLE pli_cond;
-typedef INIT_ONCE pli_once;
-typedef uintptr_t pli_thread;
-#define PLI_ONCE_INIT INIT_ONCE_STATIC_INIT
+#include "windows/pli_rt_plat.h"
 #else
-/* POSIX backend types (single selection block, second half). */
-#include <pthread.h>
-typedef pthread_mutex_t pli_mutex;
-typedef pthread_cond_t pli_cond;
-typedef pthread_once_t pli_once;
-typedef pthread_t pli_thread;
-#define PLI_ONCE_INIT PTHREAD_ONCE_INIT
+#include "posix/pli_rt_plat.h"
 #endif
 
 /* Mutual exclusion around the shared EVENT/task table. */

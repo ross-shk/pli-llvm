@@ -55,8 +55,23 @@ check "default run" "$($OUT$EXE)" "PASS rt_platform"
 
 # --- custom platform: the default TU plus a marker proving this file linked -
 cat > "$OUT.plat.c" <<'EOF'
-#include "rt_plat_default.c"
-#include "rt_fiber_asm.c"
+#if defined(_WIN32)
+#include "platform/windows/rt_plat.c"
+#if defined(_M_X64) || defined(__x86_64__)
+#include "platform/windows/x86_64/rt_fiber_asm.c"
+#else
+#include "platform/unsupported/rt_fiber_asm.c"
+#endif
+#else
+#include "platform/posix/rt_plat.c"
+#if defined(__aarch64__) || defined(__arm64__)
+#include "platform/posix/aarch64/rt_fiber_asm.c"
+#elif defined(__x86_64__)
+#include "platform/posix/x86_64/rt_fiber_asm.c"
+#else
+#include "platform/unsupported/rt_fiber_asm.c"
+#endif
+#endif
 /* Marker: absent from the default blob, so its presence in the linked
  * binary proves the --rt-platform file is what got linked. */
 int pli_plat_test_marker(void) { return 42; }

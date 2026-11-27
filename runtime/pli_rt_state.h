@@ -15,7 +15,7 @@
 #include <stdio.h>
 
 #include "pli_wide128.h" /* PliI128 for the wide DECIMAL helpers below */
-#include "pli_rt_plat.h" /* platform seam: every TU gets the pli_plat_* and
+#include "platform/pli_rt_plat.h" /* platform seam: every TU gets the pli_plat_* and
                            * threading declarations, so rt_*.c files include
                            * no system headers of their own. */
 #include "rt_sync.h"     /* the runtime's lock layer (ADR-234): the tasking

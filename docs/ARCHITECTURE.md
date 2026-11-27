@@ -254,15 +254,15 @@ remains available and tested in all modes.
 
 A PL/I task is a *fiber*: a stack plus the registers that switch it. The
 runtime multiplexes the fibers of a program on a small pool of OS worker
-threads (`runtime/rt_sched.c`, `runtime/rt_fiber_asm.c`). This is the model
+threads (`runtime/rt_sched.c`, `runtime/platform/*/rt_fiber_asm.c`). This is the model
 ADR-234 introduced and ADR-235 and ADR-236 refined.
 
 | Piece | Where | What it does |
 |---|---|---|
-| The context switch | `runtime/rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 (SysV and Win64) and AArch64 (AAPCS64). |
+| The context switch | `runtime/platform/{posix,windows}/.../rt_fiber_asm.c` | Saves the callee-saved registers, the stack pointer and the resume address of the suspended fiber, restores the target's, and jumps. Hand-written assembly, because the compiler cannot express it. x86-64 (SysV and Win64) and AArch64 (AAPCS64). |
 | The scheduler | `runtime/rt_sched.c` | The worker pool, the run queues, the work stealing, the DELAY timer heap, the park and unpark, and the fiber pool (one private spare per worker plus a tagged stack, ADR-331). |
 | The lock layer | `runtime/rt_sync.c` | Locks and conditions that work on tasks rather than on OS threads. The fiber mode parks a task that cannot proceed; the legacy mode blocks the thread. |
-| The stack arena | `runtime/rt_plat_default.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. The stack grows in chunks, each with a guard page at its bottom. |
+| The stack arena | `runtime/platform/{posix,windows}/rt_plat.c` | The fiber stacks come from one reservation carved into slots, so a program with many tasks does not make many system calls. The stack grows in chunks, each with a guard page at its bottom. |
 | The input broker | `runtime/rt_input.c` | A reader thread that does the blocking read on standard input, so a task that waits for input parks instead of holding its worker. |
 
 The rules that make it work, each of them learned the hard way:

@@ -164,7 +164,7 @@ static void usage() {
          "  --keep-ll        keep the intermediate .ll next to the output\n"
          "  --rt-platform <f>\n"
          "                   path to a custom platform bitcode file implementing\n"
-         "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
+         "                   runtime/platform/pli_rt_plat.h (default: none; the embedded\n"
          "                   pli_rtplat.bc is merged instead)\n"
          "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
          "  --triple <t>     target triple (default: host triple, in-process;\n"

@@ -202,7 +202,7 @@ std::string checkPlatformSeamComplete(const llvm::Module& M) {
   if (missing.empty())
     return "";
   return "incomplete platform runtime, still undefined: " + missing +
-         " — implement all of runtime/pli_rt_plat.h (or drop --rt-platform)";
+         " — implement all of runtime/platform/pli_rt_plat.h (or drop --rt-platform)";
 }
 
 bool emitLTOObject(llvm::Module& M, llvm::TargetMachine& TM, llvm::raw_pwrite_stream& out,

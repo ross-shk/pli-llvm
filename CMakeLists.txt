@@ -190,9 +190,29 @@ set(RT_PORTABLE_SRCS
   runtime/rt_edit.c runtime/rt_task.c runtime/rt_sync.c
   runtime/rt_input.c runtime/rt_fbroker.c
   runtime/rt_sched.c)
+# Platform selection by host (CMAKE_SYSTEM_NAME / CMAKE_SYSTEM_PROCESSOR).
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  set(RT_PLAT_C "runtime/platform/windows/rt_plat.c")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+    set(RT_FIBER_ASM_C "runtime/platform/windows/x86_64/rt_fiber_asm.c")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
+    set(RT_FIBER_ASM_C "runtime/platform/posix/aarch64/rt_fiber_asm.c")
+  else()
+    set(RT_FIBER_ASM_C "runtime/platform/unsupported/rt_fiber_asm.c")
+  endif()
+else()
+  set(RT_PLAT_C "runtime/platform/posix/rt_plat.c")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
+    set(RT_FIBER_ASM_C "runtime/platform/posix/aarch64/rt_fiber_asm.c")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+    set(RT_FIBER_ASM_C "runtime/platform/posix/x86_64/rt_fiber_asm.c")
+  else()
+    set(RT_FIBER_ASM_C "runtime/platform/unsupported/rt_fiber_asm.c")
+  endif()
+endif()
 set(RT_PLATFORM_SRCS
-  runtime/rt_plat_default.c
-  runtime/rt_fiber_asm.c)
+  ${RT_PLAT_C}
+  ${RT_FIBER_ASM_C})
 set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
 # Bitcode embeds must rebuild when any runtime header changes (the .c TUs
 # all include pli_rt.h -> pli_rt_state.h -> pli_rt_plat.h; without this a
@@ -200,7 +220,9 @@ set(RT_SRCS ${RT_PORTABLE_SRCS} ${RT_PLATFORM_SRCS})
 set(RT_HEADERS
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt.h
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt_state.h
-  ${CMAKE_SOURCE_DIR}/runtime/pli_rt_plat.h
+  ${CMAKE_SOURCE_DIR}/runtime/platform/pli_rt_plat.h
+  ${CMAKE_SOURCE_DIR}/runtime/platform/windows/pli_rt_plat.h
+  ${CMAKE_SOURCE_DIR}/runtime/platform/posix/pli_rt_plat.h
   ${CMAKE_SOURCE_DIR}/runtime/pli_rt_abi.def
   ${CMAKE_SOURCE_DIR}/runtime/rt_sync.h
   ${CMAKE_SOURCE_DIR}/runtime/rt_sched.h
@@ -874,7 +896,28 @@ foreach(target ${PLI_TARGETS})
   string(REPLACE "-" "_" target_suffix "_${target}")
   set(TARGET_BC_DIR ${CMAKE_BINARY_DIR}/bc/${target})
   set(TARGET_PLAT_BCS "")
-  foreach(src ${RT_PLATFORM_SRCS})
+  # Per-target platform TU selection (OS + arch).
+  set(TARGET_PLAT_SRCS "")
+  if(target MATCHES "windows")
+    list(APPEND TARGET_PLAT_SRCS "runtime/platform/windows/rt_plat.c")
+    if(target MATCHES "^x86_64")
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/windows/x86_64/rt_fiber_asm.c")
+    elseif(target MATCHES "^aarch64")
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/posix/aarch64/rt_fiber_asm.c")
+    else()
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/unsupported/rt_fiber_asm.c")
+    endif()
+  else()
+    list(APPEND TARGET_PLAT_SRCS "runtime/platform/posix/rt_plat.c")
+    if(target MATCHES "^aarch64")
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/posix/aarch64/rt_fiber_asm.c")
+    elseif(target MATCHES "^x86_64")
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/posix/x86_64/rt_fiber_asm.c")
+    else()
+      list(APPEND TARGET_PLAT_SRCS "runtime/platform/unsupported/rt_fiber_asm.c")
+    endif()
+  endif()
+  foreach(src ${TARGET_PLAT_SRCS})
     get_filename_component(base ${src} NAME_WE)
     add_custom_command(
       OUTPUT ${TARGET_BC_DIR}/${base}.bc
@@ -1189,7 +1232,7 @@ find_program(SCAN_BUILD_BIN NAMES scan-build scan-build-py
 set(ALL_C_SOURCES ${RT_SRCS})
 set(ALL_C_HEADERS
   runtime/pli_rt.h runtime/pli_rt_state.h runtime/pli_rt_abi.def
-  runtime/pli_rt_plat.h runtime/pli_wide128.h)
+  runtime/platform/pli_rt_plat.h runtime/pli_wide128.h)
 # clang-format scope: src/ only (ADR-042: src/ is clang-format-normalized).
 # The C runtime follows its own brace-less style; clang-tidy covers C++ only.
 set(ALL_FORMAT_SOURCES ${ALL_CPP_SOURCES} ${ALL_CPP_HEADERS})

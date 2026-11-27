@@ -17,7 +17,7 @@
 #ifndef PLI_RT_SYNC_H
 #define PLI_RT_SYNC_H
 
-#include "pli_rt_plat.h"
+#include "platform/pli_rt_plat.h"
 #include <stdatomic.h>
 
 /* The fiber is opaque here: this layer only holds pointers to fibers. */
