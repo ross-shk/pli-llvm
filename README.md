@@ -46,7 +46,8 @@ pli hello.pli -o hello
 # Output: Hello, Alice!
 ```
 
-For a complete tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are described in the [Built-ins reference](guides/builtins.md). Also see the examples.
+For a complete tour — arrays, structures, storage, conditions, concurrency — see the [Programming Guide](guides/programming.md). Supported built-ins are described in the [Built-ins reference](guides/builtins.md), also see the examples. 
+See the [Compiler Usage](guides/compiler-usage.md) guide for a detailed description on how to use the compiler.
 
 ## Benchmarks
 
