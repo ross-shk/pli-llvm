@@ -14811,3 +14811,31 @@ the linux runtime blob.
 **Consequences.** ELF link recipe uses `arch + "/..."` logical paths. All
 three sysroot sets travel inside pli(.exe). `--sysroot` replaces the
 embedded set entirely and validates directory existence and required files.
+
+
+## ADR-396 — Vendored Darwin runtime bitcode + lldMachO on Windows (macOS cross-output)
+
+**Context.** macOS cross-compilation (--triple arm64/x86_64-apple-macosx...) was
+unreachable from non-macOS hosts because the Darwin runtime blob was absent;
+PLI_CROSS_BITCODE cannot compile it for Apple without the SDK; IRGen forced
+rm64-apple-macosx15.0; ld64.lld rejects -arch aarch64; the embedded-blob
+selector could silently fall back to the host blob; lldMachO was omitted on
+Windows despite shipping in the pinned static LLVM.
+
+**Decision.** Vendor prebuilt Darwin blobs under
+platform/darwin-runtime/{arm64,x86_64}/ (built on macOS with the pinned LLVM
+23.1.3 + Xcode SDK, checked in as release data), embed them in every build like
+the sysroots (ADR-395), add a source-hash freshness gate (over 
+untime/
+sources, not .bc bytes) with an escape hatch (PLI_ALLOW_STALE_DARWIN_RUNTIME),
+enable lldMachO where the LLVM ships it (Windows included) without breaking
+builds that lack the Mach-O driver (PLI_HAVE_LLD_MACHO capability gate), preserve
+the user's Apple triple, normalize -arch aarch64 -> rm64, and make the blob
+selectors refuse to fall back to a host blob for Darwin.
+
+**Consequences.** macOS user programs link on any host with no Apple SDK; future
+
+untime/ changes require regenerating the Darwin blobs on macOS (gate enforces);
+builds whose LLVM ships the Mach-O driver link lldMachO (Windows included),
+builds that lack it keep today's state with a clearer diagnostic; binary size grows
+by the two Darwin blob pairs.

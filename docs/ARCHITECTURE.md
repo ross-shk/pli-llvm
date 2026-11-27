@@ -80,7 +80,7 @@ IRGen              builds an LLVM module with `llvm::IRBuilder`
 ```
 Self-containment (ADR-227, ADR-349): the link sysroot is embedded in the
 binary — `musl` (Linux, `-static`, needs only the kernel), `mingw` (Windows,
-MinGW driver, needs only OS DLLs), `sdk` (macOS stubs, ADR-226) — and
+MinGW driver, needs only OS DLLs), `sdk` (macOS stubs, ADR-226) and the vendored Darwin runtime bitcode (`darwin-runtime`, ADR-396) — and
 materializes to a temp dir at link time, so release archives hold only
 `pli`/`pli.exe`. There is no exe-relative sysroot override and no host
 fallback: a build whose embedded set is incomplete for its arch fails the

@@ -25,8 +25,11 @@
 // brew's lld ships only Common headers, so declare each driver's `link` entry
 // point with the public macro (no lld/ELF/Driver.h in the install).
 LLD_HAS_DRIVER(elf)
-#if !defined(_WIN32)
-// lldMachO is macOS-only; it does not exist on Windows.
+// The Mach-O driver (ADR-396) was assumed macOS-only and omitted on Windows,
+// but the pinned static LLVM ships lldMachO on every host. Gate it on the
+// build capability (defaults to 0 when undefined) so builds whose LLVM lacks
+// the driver keep working, and those that have it can cross-link macOS.
+#if PLI_HAVE_LLD_MACHO
 LLD_HAS_DRIVER(macho)
 #endif
 LLD_HAS_DRIVER(coff)
@@ -231,8 +234,10 @@ namespace {
 // "ld.lld": its `-m i386pep` makes the dispatcher pick the MinGW driver.
 const lld::DriverDef kLldDrivers[] = {
     {lld::Gnu, &lld::elf::link},
-#if !defined(_WIN32)
-    // Mach-O driver is macOS-only; not available on Windows.
+    // Mach-O driver (ADR-396): gate on the build capability, not _WIN32, so
+    // Windows builds with the pinned lldMachO can cross-link macOS and builds
+    // whose LLVM lacks the driver are unaffected.
+#if PLI_HAVE_LLD_MACHO
     {lld::Darwin, &lld::macho::link},
 #endif
     {lld::WinLink, &lld::coff::link},

@@ -31,6 +31,15 @@
 #include "embedded_rtplat_aarch64_pc_windows_gnu.inc"
 #include "embedded_runtime_aarch64_pc_windows_gnu.inc"
 #endif
+// Vendored Darwin runtime (ADR-396): prebuilt on macOS with the pinned LLVM 23
+// and the Apple SDK, embedded in every build so macOS cross-linking works with
+// no Apple SDK on the host. Guarded with #if (not #ifdef): the macro is always
+// defined to 0 or 1 by CMake, so #ifdef would wrongly include the missing
+// .inc files before the blobs are bootstrapped.
+#if PLI_HAVE_MACOS_ARM64_RUNTIME
+#include "embedded_rtplat_arm64_apple_macosx15_0.inc"
+#include "embedded_runtime_arm64_apple_macosx15_0.inc"
+#endif
 
 namespace pli {
 
@@ -73,6 +82,11 @@ std::vector<RuntimeBlob> getEmbeddedRuntimeBlobs() {
   addBlobIfDefined(blobs, pli_embedded_runtime_bc_aarch64_pc_windows_gnu,
                    pli_embedded_runtime_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
 #endif
+#if PLI_HAVE_MACOS_ARM64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_runtime_bc_arm64_apple_macosx15_0,
+                   pli_embedded_runtime_bc_arm64_apple_macosx15_0_len,
+                   "arm64-apple-macosx15.0");
+#endif
   return blobs;
 }
 
@@ -99,6 +113,10 @@ const RuntimeBlob* selectRuntimeForTarget(const llvm::Triple& t) {
       return &blob;
     }
   }
+  // A Darwin target must resolve to a Darwin blob (ADR-396): the host fallback
+  // below would silently merge a Linux/Windows runtime into an Apple binary.
+  if (tgtTriple.isOSDarwin())
+    return nullptr;
   // Fallback to default blob
   for (const auto& blob : blobs) {
     if (blob.target == PLI_TARGET_TRIPLE) {
@@ -130,6 +148,11 @@ std::vector<RuntimeBlob> getEmbeddedPlatformBlobs() {
   addBlobIfDefined(blobs, pli_embedded_rtplat_bc_aarch64_pc_windows_gnu,
                    pli_embedded_rtplat_bc_aarch64_pc_windows_gnu_len, "aarch64-pc-windows-gnu");
 #endif
+#if PLI_HAVE_MACOS_ARM64_RUNTIME
+  addBlobIfDefined(blobs, pli_embedded_rtplat_bc_arm64_apple_macosx15_0,
+                   pli_embedded_rtplat_bc_arm64_apple_macosx15_0_len,
+                   "arm64-apple-macosx15.0");
+#endif
   return blobs;
 }
 
@@ -153,6 +176,10 @@ const RuntimeBlob* selectPlatformForTarget(const llvm::Triple& t) {
       return &blob;
     }
   }
+  // A Darwin target must resolve to a Darwin blob (ADR-396): the host fallback
+  // below would silently merge a Linux/Windows platform into an Apple binary.
+  if (tgtTriple.isOSDarwin())
+    return nullptr;
   // Fallback to default blob
   for (const auto& blob : blobs) {
     if (blob.target == PLI_TARGET_TRIPLE) {

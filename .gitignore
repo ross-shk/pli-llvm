@@ -22,6 +22,8 @@ AI_*.md
 !platform/linux-musl/*.a
 !platform/windows-mingw/*.o
 !platform/windows-mingw/*.a
+# ADR-396: vendored Darwin runtime bitcode is release data too.
+!platform/darwin-runtime/**
 .DS_Store
 zapp.yaml
 docs/archive/

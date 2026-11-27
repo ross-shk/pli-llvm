@@ -167,7 +167,9 @@ static void usage() {
          "                   runtime/pli_rt_plat.h (default: none; the embedded\n"
          "                   pli_rtplat.bc is merged instead)\n"
          "  --flto=thin|full   whole-program optimization at link (in-process lld)\n"
-         "  --triple <t>     target triple (default: host triple, in-process)\n"
+         "  --triple <t>     target triple (default: host triple, in-process;\n"
+         "                   cross: linux-gnu, linux-musl, windows-gnu,\n"
+         "                   arm64-apple-macosx)\n"
          "  --target <t>     alias for --triple\n"
          "  -target <t>      alias for --triple\n"
          "  --sysroot <dir>  use a user-provided link sysroot (arch-prefixed layout)\n"
@@ -1141,7 +1143,12 @@ int main(int argc, char** argv) {
       if (isMachO) {
         // macOS: .tbd stubs passed as direct file args (no -syslibroot dir).
         argStore.push_back("-arch");
-        argStore.push_back(std::string(llt.getArchName()));
+        // ld64.lld spells the Apple-silicon arch "arm64", never "aarch64"
+        // (ADR-396); normalize both spellings onto the accepted one.
+        std::string machoArch = std::string(llt.getArchName());
+        if (machoArch == "aarch64")
+          machoArch = "arm64";
+        argStore.push_back(machoArch);
         for (const std::string& o : objs)
           argStore.push_back(o);
         // systemLibs: -lSystem, -lm -> direct .tbd file args.
@@ -1338,10 +1345,24 @@ int main(int argc, char** argv) {
       bool linkOk = false;
       std::string firstOut, firstErr;
       if (isMachO) {
+#if !PLI_HAVE_LLD_MACHO
+        // Value-based (not #ifdef): CMake always defines PLI_HAVE_LLD_MACHO to
+        // 0 or 1. A host whose LLVM lacks lldMachO gets this clean diagnostic
+        // instead of an opaque lld "could not open" error (ADR-396 capability
+        // gate, mirrors codegen.cpp).
+        std::cerr
+            << "pli: this LLVM has no Mach-O driver (lldMachO) — rebuild pli "
+               "against an LLVM that ships it to cross-link macOS (ADR-396)\n";
+        removeTempObjects();
+        if (ownsSysrootDir)
+          pli::cleanupMaterializedSysroot(emb.dir);
+        return 1;
+#else
         llvm::raw_string_ostream out(firstOut), err(firstErr);
         linkOk = pli::linkExecutable(argv, (int)llt.getObjectFormat(), linkErr, &out, &err);
         out.flush();
         err.flush();
+#endif
       } else if (isCOFF) {
         linkOk = pli::linkMinGWExecutable(argv, linkErr);
       } else {

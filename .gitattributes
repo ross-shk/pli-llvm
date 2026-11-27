@@ -14,3 +14,8 @@ platform/**/*.a binary
 
 # SDK stub tables are linker text; keep them LF like the driver scripts.
 *.tbd text eol=lf
+
+# Vendored Darwin runtime bitcode (ADR-396) is release data; never line-end
+# transform it — a Windows checkout with core.autocrlf=true would otherwise
+# corrupt the .bc.
+platform/darwin-runtime/** binary

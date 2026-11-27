@@ -139,3 +139,5 @@ Existing uppercase tests stay as they are — follow the style of the file you  
 - Reproduce before fixing: compile the failing program, read the diagnostic or the IR, state the root cause in one sentence, then change code.
 - Prefer `grep` for a symbol, then `read` with `offset`/`limit`; the large files are `src/parser.cpp`, `src/irgen.cpp`, `TR25.084-concrete-syntax.md`.
 - Report: what changed, which rules moved, test counts before/after, and any deviation introduced. Leave the tree building and tests green, staged not committed.
+
+- Changing `runtime/` now requires regenerating the vendored Darwin runtime blobs on macOS (`scripts/gen_darwin_runtime.py`) or the source-hash gate trips (ADR-396).

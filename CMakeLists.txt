@@ -261,20 +261,20 @@ find_library(LLD_COMMON_LIB NAMES lldCommon
 # ADR-225: in-process lld is the ONLY link — every lld driver library is a
 # hard requirement (the old soft gate + clang fallback are gone).
 # ADR-227 adds the MinGW driver (vendored-mingw sysroot links need it).
-# lldMachO (Mach-O linker) is macOS-only; it does not exist on Windows.
-foreach(_lld_lib LLD_ELF_LIB LLD_MACHO_LIB LLD_COFF_LIB LLD_MINGW_LIB LLD_COMMON_LIB)
+# ADR-396: the Mach-O driver was assumed macOS-only, but the pinned static LLVM
+# ships lldMachO on every host (Windows included). It is therefore a build
+# capability, not a per-OS constant: enable it where present so any host can
+# cross-link macOS, and keep working (without the driver) where absent.
+foreach(_lld_lib LLD_ELF_LIB LLD_COFF_LIB LLD_MINGW_LIB LLD_COMMON_LIB)
   if(NOT ${_lld_lib} OR "${${_lld_lib}}" MATCHES "-NOTFOUND$")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND "${_lld_lib}" STREQUAL "LLD_MACHO_LIB")
-      # Mach-O linker doesn't exist on Windows — skip.
-    else()
-      message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
-    endif()
+    message(FATAL_ERROR "in-process link requires ${_lld_lib} (install lld for your LLVM)")
   endif()
 endforeach()
 set(PLI_HAVE_LLD 1)
-# lldMachO is macOS-only; omit it from LLD_LIBRARIES on Windows.
 set(LLD_LIBRARIES ${LLD_ELF_LIB} ${LLD_COFF_LIB} ${LLD_MINGW_LIB} ${LLD_COMMON_LIB})
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+set(PLI_HAVE_LLD_MACHO 0)
+if(LLD_MACHO_LIB AND NOT "${LLD_MACHO_LIB}" MATCHES "-NOTFOUND$")
+  set(PLI_HAVE_LLD_MACHO 1)
   list(APPEND LLD_LIBRARIES ${LLD_MACHO_LIB})
 endif()
 message(STATUS "lld libraries: ${LLD_LIBRARIES}")
@@ -459,7 +459,8 @@ target_compile_definitions(pli PRIVATE
   PLI_HAVE_LINUX_X86_64_RUNTIME=1
   PLI_HAVE_LINUX_AARCH64_RUNTIME=1
   PLI_HAVE_WINDOWS_X86_64_RUNTIME=1
-  PLI_HAVE_WINDOWS_AARCH64_RUNTIME=1)
+  PLI_HAVE_WINDOWS_AARCH64_RUNTIME=1
+  PLI_HAVE_LLD_MACHO=${PLI_HAVE_LLD_MACHO})
 
 # P2: wire MLIR canary library into pli when MLIR is enabled.
 if(PLI_ENABLE_MLIR)
@@ -1131,6 +1132,63 @@ add_custom_target(embedded_sysroot_inc
 add_dependencies(pli embedded_sysroot_inc)
 target_sources(pli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/embedded_sysroot.cpp
                  ${PLI_SYSROOT_GEN_CPPS})
+
+# Vendored Darwin cross runtime (ADR-396): prebuilt on macOS with the pinned
+# LLVM 23 + Apple SDK (scripts/gen_darwin_runtime.py) and checked in under
+# platform/darwin-runtime — a Windows/Linux host cannot compile Apple-targeted
+# runtime because the SDK headers are absent. Embedded in EVERY build (like the
+# sysroots, ADR-395) so macOS cross-linking works with no Apple SDK on the host.
+# Skips gracefully when the blobs are absent (pre-bootstrap state): Darwin link
+# then fails with the "no embedded runtime" diagnostic via the strict selector.
+set(PLI_HAVE_MACOS_ARM64_RUNTIME 0)
+set(PLI_DARWIN_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/platform/darwin-runtime")
+foreach(_arch_triple IN ITEMS "arm64;arm64-apple-macosx15.0")
+  list(GET _arch_triple 0 _arch)
+  list(GET _arch_triple 1 _triple)
+  set(_rdir "${PLI_DARWIN_RUNTIME_DIR}/${_arch}")
+  if(EXISTS "${_rdir}/pli_runtime.bc" AND EXISTS "${_rdir}/pli_rtplat.bc")
+    string(REPLACE "-" "_" _suf "_${_triple}")
+    foreach(_kind runtime rtplat)
+      add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/embedded_${_kind}${_suf}.inc
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+                ${_rdir}/pli_${_kind}.bc ${CMAKE_BINARY_DIR}/embedded_${_kind}${_suf}.inc
+                pli_embedded_${_kind}_bc ${_suf}
+        DEPENDS ${_rdir}/pli_${_kind}.bc ${CMAKE_SOURCE_DIR}/scripts/gen_embed.py
+        COMMENT "embedding Darwin ${_kind} for ${_triple}")
+    endforeach()
+    add_custom_target(embedded_darwin_${_arch}
+      DEPENDS ${CMAKE_BINARY_DIR}/embedded_runtime${_suf}.inc
+              ${CMAKE_BINARY_DIR}/embedded_rtplat${_suf}.inc)
+    add_dependencies(pli embedded_darwin_${_arch})
+    set(PLI_HAVE_MACOS_ARM64_RUNTIME 1)
+  endif()
+endforeach()
+
+# Darwin blob source-hash gate (ADR-396): the checked-in .bc pairs must match
+# the runtime/ sources they were built from. The hash is over the SOURCES, not
+# the .bc bytes — bitcode is not byte-reproducible across LLVM patch versions,
+# so a byte hash would false-positive on any toolchain bump. regenerated on
+# macOS; PLI_ALLOW_STALE_DARWIN_RUNTIME=ON embeds possibly-stale blobs.
+if(NOT PLI_ALLOW_STALE_DARWIN_RUNTIME)
+  if(PLI_HAVE_MACOS_ARM64_RUNTIME)
+    execute_process(
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/runtime_source_hash.py ${CMAKE_SOURCE_DIR}/runtime
+      OUTPUT_VARIABLE PLI_DARWIN_RT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(EXISTS "${PLI_DARWIN_RUNTIME_DIR}/SHA256SUMS")
+      file(READ "${PLI_DARWIN_RUNTIME_DIR}/SHA256SUMS" PLI_DARWIN_RT_EXPECT)
+      string(STRIP "${PLI_DARWIN_RT_EXPECT}" PLI_DARWIN_RT_EXPECT)
+      if(NOT "${PLI_DARWIN_RT_HASH}" STREQUAL "${PLI_DARWIN_RT_EXPECT}")
+        message(FATAL_ERROR
+          "Darwin runtime blobs are stale: platform/darwin-runtime was built from an "
+          "older runtime/. Regenerate on macOS with scripts/gen_darwin_runtime.py "
+          "(or pass -DPLI_ALLOW_STALE_DARWIN_RUNTIME=ON to embed stale blobs).")
+      endif()
+    endif()
+  endif()
+endif()
+target_compile_definitions(pli PRIVATE
+  PLI_HAVE_MACOS_ARM64_RUNTIME=${PLI_HAVE_MACOS_ARM64_RUNTIME})
 
 # Generated rules table for --explain (see scripts/gen_rules.py); the spec and
 # the generator are the source of truth, so regenerate on every build.
